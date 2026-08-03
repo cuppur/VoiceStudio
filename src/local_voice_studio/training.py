@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import threading
 import hashlib
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Callable
 from uuid import uuid4
 
+from .models import utc_now
 from .paths import AppPaths
 
 
@@ -26,6 +28,20 @@ class TrainingPipeline:
                 subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True)
             else:
                 process.terminate()
+
+    @staticmethod
+    def preparation_paths(project: Path, profile_id: str, preparation_id: str) -> dict[str, Path]:
+        """Return paths owned by one immutable preparation run."""
+        run_root = project.resolve() / "processed" / profile_id / "runs" / preparation_id
+        working_root = project.resolve() / "datasets" / "working" / profile_id / preparation_id
+        return {
+            "run_root": run_root,
+            "normalized": run_root / "normalized",
+            "segments": run_root / "segments",
+            "working_root": working_root,
+            "asr": working_root / "asr",
+            "manifest": working_root / "preparation.json",
+        }
 
     def _run(self, command: list[str], env: dict[str, str], log: Callable[[str], None], cancel: threading.Event) -> None:
         process_env = {**os.environ, **env}
@@ -99,10 +115,12 @@ class TrainingPipeline:
                 return lists[0] if lists else output_dir
             return output_dir
         exp_name = payload["experiment_name"]
-        list_path = Path(payload["list_path"]).resolve()
-        wav_dir = Path(payload["wav_dir"]).resolve()
-        exp_dir = self.paths.data_root / "training" / exp_name
+        profile_id = str(payload["profile_id"]); snapshot_id = str(payload["dataset_snapshot_id"]); snapshot_sha256 = str(payload["snapshot_sha256"])
+        exp_dir = self.paths.data_root / "training" / profile_id / snapshot_sha256 / "features"
         exp_dir.mkdir(parents=True, exist_ok=True)
+        list_path = exp_dir / "runtime.list"
+        list_path.write_text("\n".join(f"{item['audio_path']}|speaker|{item.get('language', 'zh')}|{item.get('text', '')}" for item in payload["segments"]) + "\n", encoding="utf-8")
+        wav_dir = Path(payload["wav_dir"]).resolve()
         common = {
             "inp_text": str(list_path), "inp_wav_dir": str(wav_dir), "exp_name": exp_name,
             "opt_dir": str(exp_dir), "i_part": "0", "all_parts": "1",
@@ -124,25 +142,32 @@ class TrainingPipeline:
         for amount, title, script, extra in stages:
             progress(amount, title)
             self._run([str(python), "-s", script], {**common, **extra}, lambda line: progress(amount, line), cancel)
+        phoneme = exp_dir / "2-name2text.txt"; semantic = exp_dir / "6-name2semantic.tsv"
+        if not phoneme.is_file() or not phoneme.stat().st_size or not semantic.is_file() or not semantic.stat().st_size:
+            raise RuntimeError("训练特征生成不完整")
+        feature_manifest = exp_dir / "feature-manifest.json"
+        feature_manifest.write_text(json.dumps({"schema_version": 1, "profile_id": profile_id, "dataset_snapshot_id": snapshot_id, "snapshot_sha256": snapshot_sha256, "list_sha256": payload["list_sha256"], "prepared_at": utc_now(), "feature_files": {"phoneme": str(phoneme), "semantic": str(semantic)}}, ensure_ascii=False, indent=2), encoding="utf-8")
         progress(1.0, "数据集准备完成")
-        return exp_dir
+        return feature_manifest
 
     def train(self, payload: dict, progress: Callable[[float, str], None], cancel: threading.Event) -> list[Path]:
         """Run SoVITS then GPT with pinned upstream default recipes."""
         python = self.paths.private_python
         engine = self.paths.engine_root
-        exp_name = payload["experiment_name"]
-        exp_dir = self.paths.data_root / "training" / exp_name
-        checkpoint_root = Path(payload.get("checkpoint_dir") or (exp_dir / "weights")).resolve()
-        checkpoint_root.mkdir(parents=True, exist_ok=True)
-        if not (exp_dir / "2-name2text.txt").exists() or not (exp_dir / "6-name2semantic.tsv").exists():
-            raise RuntimeError("训练特征尚未准备完成")
-        # Every training invocation gets a new directory. Old or partially
-        # generated checkpoints can therefore never be mistaken for this run.
-        checkpoint_dir = checkpoint_root / f"run-{uuid4().hex}"
+        exp_name = payload["experiment_name"]; profile_id = str(payload["profile_id"]); snapshot_id = str(payload["dataset_snapshot_id"]); snapshot_sha256 = str(payload["snapshot_sha256"])
+        feature_dir = self.paths.data_root / "training" / profile_id / snapshot_sha256 / "features"
+        feature_manifest_path = feature_dir / "feature-manifest.json"
+        self._validate_feature_manifest(feature_manifest_path, payload)
+        training_run_id = str(payload.get("training_run_id") or uuid4().hex)
+        run_root = self.paths.data_root / "training" / profile_id / snapshot_sha256 / "runs" / training_run_id
+        if run_root.exists(): raise RuntimeError("训练运行 ID 已存在；开始新训练时禁止自动恢复旧运行")
+        run_exp = run_root / "sovits-exp"; temp = run_root / "configs"; gpt_log_dir = run_root / "gpt-logs"; sovits_log_dir = run_exp / "logs_s2_v2ProPlus"
+        self._materialize_feature_view(feature_dir, run_exp); temp.mkdir(parents=True, exist_ok=True)
+        checkpoint_dir = Path(payload.get("checkpoint_dir") or (run_root / "checkpoints")).resolve() / training_run_id
         checkpoint_dir.mkdir(parents=True, exist_ok=False)
-        temp = self.paths.data_root / "training" / "configs"
-        temp.mkdir(parents=True, exist_ok=True)
+        run_manifest = run_root / "training-run.json"
+        run_value = {"training_run_id": training_run_id, "profile_id": profile_id, "dataset_snapshot_id": snapshot_id, "snapshot_sha256": snapshot_sha256, "mode": "new", "status": "running", "started_at": utc_now(), "completed_at": "", "sovits_log_dir": str(sovits_log_dir), "gpt_log_dir": str(gpt_log_dir), "checkpoint_dir": str(checkpoint_dir), "candidate_gpt_checkpoint": "", "candidate_sovits_checkpoint": ""}
+        run_manifest.write_text(json.dumps(run_value, ensure_ascii=False, indent=2), encoding="utf-8")
         s2_source = engine / "GPT_SoVITS/configs/s2v2ProPlus.json"
         s2 = json.loads(s2_source.read_text(encoding="utf-8"))
         s2["train"].update({
@@ -153,7 +178,7 @@ class TrainingPipeline:
             "gpu_numbers": "0", "fp16_run": True,
         })
         s2["model"]["version"] = "v2ProPlus"
-        s2["data"]["exp_dir"] = s2["s2_ckpt_dir"] = str(exp_dir)
+        s2["data"]["exp_dir"] = str(run_exp); s2["s2_ckpt_dir"] = str(run_root / "sovits-tensorboard")
         s2["save_weight_dir"] = str(checkpoint_dir)
         s2["name"] = exp_name
         s2["version"] = "v2ProPlus"
@@ -174,9 +199,9 @@ class TrainingPipeline:
             "half_weights_save_dir": str(checkpoint_dir), "exp_name": exp_name,
         })
         s1["pretrained_s1"] = str(engine / "GPT_SoVITS/pretrained_models/s1v3.ckpt")
-        s1["train_semantic_path"] = str(exp_dir / "6-name2semantic.tsv")
-        s1["train_phoneme_path"] = str(exp_dir / "2-name2text.txt")
-        s1["output_dir"] = str(exp_dir / "logs_s1_v2ProPlus")
+        s1["train_semantic_path"] = str(run_exp / "6-name2semantic.tsv")
+        s1["train_phoneme_path"] = str(run_exp / "2-name2text.txt")
+        s1["output_dir"] = str(gpt_log_dir)
         s1_config = temp / f"{exp_name}-s1.yaml"
         s1_config.write_text(yaml.safe_dump(s1, allow_unicode=True), encoding="utf-8")
         progress(0.55, "开始 GPT 训练")
@@ -185,6 +210,7 @@ class TrainingPipeline:
         gpt = self._latest_checkpoint(checkpoint_dir, ".ckpt")
         if not sovits or not gpt:
             raise RuntimeError(f"本次训练没有同时生成新的 GPT 和 SoVITS 检查点：{checkpoint_dir}")
+        run_value.update({"status": "completed", "completed_at": utc_now(), "candidate_gpt_checkpoint": str(gpt), "candidate_sovits_checkpoint": str(sovits)}); run_manifest.write_text(json.dumps(run_value, ensure_ascii=False, indent=2), encoding="utf-8")
         progress(1.0, "训练完成")
         return [sovits, gpt]
 
@@ -193,18 +219,44 @@ class TrainingPipeline:
         candidates = [item for item in run_dir.rglob(f"*{suffix}") if item.is_file() and item.stat().st_size > 0]
         return max(candidates, key=lambda item: (item.stat().st_mtime_ns, item.name)) if candidates else None
 
+    @staticmethod
+    def _validate_feature_manifest(path: Path, payload: dict) -> dict:
+        if not path.is_file(): raise RuntimeError("当前训练特征属于其他数据集，请重新准备训练特征")
+        value = json.loads(path.read_text(encoding="utf-8"))
+        for key in ("profile_id", "dataset_snapshot_id", "snapshot_sha256", "list_sha256"):
+            if str(value.get(key, "")) != str(payload.get(key, "")): raise RuntimeError("当前训练特征属于其他数据集，请重新准备训练特征")
+        for file_path in value.get("feature_files", {}).values():
+            item = Path(file_path)
+            if not item.is_file() or not item.stat().st_size: raise RuntimeError("训练特征文件缺失或为空，请重新准备训练特征")
+        return value
+
+    @staticmethod
+    def _materialize_feature_view(source: Path, destination: Path) -> None:
+        destination.mkdir(parents=True, exist_ok=False)
+        for item in source.rglob("*"):
+            if item.name in {"feature-manifest.json", "runtime.list"}: continue
+            target = destination / item.relative_to(source)
+            if item.is_dir(): target.mkdir(parents=True, exist_ok=True); continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try: os.link(item, target)
+            except OSError: shutil.copy2(item, target)
+
     def _prepare_source_assets(self, payload: dict, progress: Callable[[float, str], None], cancel: threading.Event) -> Path:
         """Normalize selected SourceAssets, run the upstream slicer and local ASR."""
         profile_id = str(payload["profile_id"])
+        preparation_id = str(payload.get("preparation_id") or uuid4().hex)
         selected = set(payload.get("source_asset_ids") or [])
         assets = [item for item in payload.get("source_assets", []) if item.get("id") in selected and item.get("enabled", True) and not item.get("duplicate_of")]
         if not assets:
             raise ValueError("没有可处理的非重复素材")
         project = Path(payload["project_path"]).resolve()
-        processed = project / "processed" / profile_id / "normalized"
-        sliced = project / "processed" / profile_id / "segments"
-        asr_output = project / "datasets" / "working" / profile_id / "asr"
+        paths = self.preparation_paths(project, profile_id, preparation_id)
+        run_root = paths["run_root"]; processed = paths["normalized"]; sliced = paths["segments"]
+        working_root = paths["working_root"]; asr_output = paths["asr"]
         for folder in (processed, sliced, asr_output): folder.mkdir(parents=True, exist_ok=True)
+        options = dict(payload.get("processing_options", {}))
+        manifest = paths["manifest"]
+        manifest.write_text(json.dumps({"schema_version": 1, "preparation_id": preparation_id, "profile_id": profile_id, "source_asset_ids": sorted(selected), "processing_options": options, "created_at": utc_now(), "normalized_dir": str(processed), "segments_dir": str(sliced), "asr_list": "", "status": "running"}, ensure_ascii=False, indent=2), encoding="utf-8")
         candidates = [self.paths.data_root / "tools" / "ffmpeg.exe", self.paths.runtime_root / "env" / "Library" / "bin" / "ffmpeg.exe"]
         ffmpeg = next((item for item in candidates if item.is_file() and subprocess.run([str(item), "-version"], capture_output=True).returncode == 0), None)
         if not ffmpeg:
@@ -222,21 +274,20 @@ class TrainingPipeline:
             if completed.returncode or not target.is_file(): raise RuntimeError(f"音频标准化失败：{source.name}\n{completed.stderr[-500:]}")
             normalized.append(str(target)); progress(0.2 * index / len(assets), f"标准化 {index}/{len(assets)}：{source.name}")
         python = self.paths.private_python
-        options = payload.get("processing_options", {}); working = processed
+        working = processed
         if options.get("separate_vocals"):
-            separated = processed.parent / "separated"; separated.mkdir(parents=True, exist_ok=True)
+            separated = run_root / "separated"; separated.mkdir(parents=True, exist_ok=True)
             self._run([str(python), "-m", "local_voice_studio.uvr_cli", "--engine", str(self.paths.engine_root), "--input", str(working), "--output", str(separated)], {"_CUDA_VISIBLE_DEVICES": "0", "is_half": "True"}, lambda line: progress(0.24, line), cancel)
             working = separated / "vocal" if (separated / "vocal").is_dir() else separated
         if options.get("denoise"):
-            denoised = processed.parent / "denoised"; denoised.mkdir(parents=True, exist_ok=True)
+            denoised = run_root / "denoised"; denoised.mkdir(parents=True, exist_ok=True)
             self._run([str(python), "-s", "tools/cmd-denoise.py", "-i", str(working), "-o", str(denoised), "-p", "float16"], {"_CUDA_VISIBLE_DEVICES": "0", "is_half": "True"}, lambda line: progress(0.28, line), cancel)
             working = denoised
         self._run([str(python), "-s", "tools/slice_audio.py", str(working), str(sliced), "-34", "4000", "300", "10", "500", "0.9", "0.25", "0", "1"], {"_CUDA_VISIBLE_DEVICES": "0", "is_half": "True"}, lambda line: progress(0.35, line), cancel)
         self._run([str(python), "-X", "utf8", "-u", "-m", "local_voice_studio.asr_cli", "-i", str(sliced), "-o", str(asr_output), "-l", str(payload.get("processing_options", {}).get("language", "zh"))], {"_CUDA_VISIBLE_DEVICES": "0", "is_half": "True"}, lambda line: progress(0.75, line), cancel)
         lists = sorted(asr_output.glob("*.list"), key=lambda item: item.stat().st_mtime, reverse=True)
         if not lists: raise RuntimeError("ASR 完成但未生成转写列表")
-        result = {"schema_version": 2, "profile_id": profile_id, "source_asset_ids": sorted(selected), "normalized": normalized, "segments_dir": str(sliced), "asr_list": str(lists[0])}
-        manifest = asr_output.parent / "preparation.json"
+        result = {"schema_version": 1, "preparation_id": preparation_id, "profile_id": profile_id, "source_asset_ids": sorted(selected), "processing_options": options, "created_at": json.loads(manifest.read_text(encoding="utf-8"))["created_at"], "normalized_dir": str(processed), "normalized": normalized, "segments_dir": str(sliced), "asr_list": str(lists[0]), "status": "completed"}
         manifest.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         progress(1.0, "训练数据准备完成，请人工校对")
         return manifest

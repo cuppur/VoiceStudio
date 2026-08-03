@@ -5,6 +5,7 @@ import hashlib
 import re
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 from PySide6.QtCore import QThread, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices
@@ -69,7 +70,7 @@ class GeneratePage(QWidget):
         super().__init__()
         self.store, self.project, self.client = store, project, client
         self.profiles: list[VoiceProfile] = []
-        self.pending: dict[str, tuple[Job, dict]] = {}
+        self.pending: dict[str, dict] = {}
         self.active_job: Job | None = None
         self.preview_request = ""
         self.replacement_preview = ""
@@ -143,7 +144,9 @@ class GeneratePage(QWidget):
         if len(value) > 200: _show_error(self, "试听文字不能超过 200 个字符"); return
         if self.preview_request:
             self.replacement_preview = value; self.preview_status.setText("试听：正在替换旧任务……")
-            try: self.client.send("cancel")
+            try:
+                context = self.pending.get(self.preview_request, {})
+                if context.get("stage") == "synthesize": self.client.send("cancel")
             except Exception as exc: self.preview_status.setText("试听取消失败：" + str(exc))
             return
         self._start_synthesis(True, value)
@@ -176,7 +179,7 @@ class GeneratePage(QWidget):
         job = Job(JobKind.SYNTHESIZE, payload)
         self.store.save_job(job); self.job_created.emit(job)
         request = self.client.send("load_profile", profile.to_dict())
-        self.pending[request] = (job, payload)
+        self.pending[request] = {"stage": "load_profile", "job": job, "payload": payload}
         if preview: self.preview_request = request; self.preview_status.setText("试听：正在加载模型……")
         self.active_job = job
         self.generate.setEnabled(False); self.preview.setEnabled(False); self.cancel.setEnabled(True); self.progress.setValue(0)
@@ -187,25 +190,28 @@ class GeneratePage(QWidget):
         if not saved: self.resume.setEnabled(False); return
         profile = next((item for item in self.store.list_profiles(self.project) if item.id == saved.get("profile_id")), None)
         if not profile: _show_error(self, "原声音配置已不存在，无法恢复"); return
-        job = Job(JobKind.SYNTHESIZE, saved); self.store.save_job(job); self.job_created.emit(job); request = self.client.send("load_profile", profile.to_dict()); self.pending[request] = (job, saved); self.active_job = job; self.generate.setEnabled(False); self.resume.setEnabled(False); self.cancel.setEnabled(True); self.log.appendPlainText("正在恢复上次未完成的分段……")
+        job = Job(JobKind.SYNTHESIZE, saved); self.store.save_job(job); self.job_created.emit(job); request = self.client.send("load_profile", profile.to_dict()); self.pending[request] = {"stage": "load_profile", "job": job, "payload": saved}; self.active_job = job; self.generate.setEnabled(False); self.resume.setEnabled(False); self.cancel.setEnabled(True); self.log.appendPlainText("正在恢复上次未完成的分段……")
 
     def _on_event(self, request_id: str, event: str, payload: dict) -> None:
-        if request_id in self.pending and event == "result":
-            job, synthesis = self.pending.pop(request_id)
+        context = self.pending.get(request_id)
+        if not context: return
+        stage = context["stage"]; job: Job = context["job"]; synthesis: dict = context["payload"]
+        if stage == "load_profile" and event == "result":
+            self.pending.pop(request_id, None)
+            if synthesis.get("preview") and self.replacement_preview:
+                replacement = self.replacement_preview; self.replacement_preview = ""; self.preview_request = ""; job.status = JobStatus.CANCELLED; job.message = "试听已被新请求替换"; self.store.save_job(job); self._finish(); QTimer.singleShot(0, lambda value=replacement: self._start_synthesis(True, value)); return
             request = self.client.send("synthesize", synthesis)
-            self.pending[request] = (job, synthesis)
+            self.pending[request] = {"stage": "synthesize", "job": job, "payload": synthesis}
             if synthesis.get("preview"): self.preview_request = request
-            job.status = JobStatus.RUNNING; self.store.save_job(job)
-            return
-        if request_id not in self.pending:
-            return
-        job, _ = self.pending[request_id]
+            job.status = JobStatus.RUNNING; self.store.save_job(job); return
         if event == "progress":
+            if stage != "synthesize": return
             job.progress = float(payload.get("progress", 0)); job.message = str(payload.get("message", "")); job.status = JobStatus.RUNNING
             if payload.get("job_dir"):
                 job.payload["resume_dir"] = payload["job_dir"]; self.store.set_setting("last_incomplete_synthesis", job.payload); self.resume.setEnabled(True)
             self.progress.setValue(round(job.progress * 100)); self.log.appendPlainText(job.message); self.store.save_job(job)
         elif event == "result":
+            if stage != "synthesize": return
             self.pending.pop(request_id, None); job.progress = 1; job.status = JobStatus.COMPLETED; job.outputs = list(payload.get("outputs", [])); self.store.save_job(job)
             if payload.get("preview") and job.outputs:
                 preview_file = Path(job.outputs[0]); self.player.setSource(QUrl.fromLocalFile(str(preview_file))); self.player.play(); self.play_pause.setEnabled(True); self.stop_preview.setEnabled(True); self.preview_status.setText("试听：正在播放 " + preview_file.name); self.preview_request = ""
@@ -365,7 +371,7 @@ class TrainingPage(QWidget):
         tabs = QTabWidget(); layout.addWidget(tabs)
         sources = QWidget(); sources_layout = QVBoxLayout(sources)
         self.source_table = QTableWidget(0, 9); self.source_table.setHorizontalHeaderLabels(["使用", "文件名", "时长", "声道/采样率", "重复", "质量问题", "处理状态", "片段数", "已确认时长"]); self.source_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch); sources_layout.addWidget(self.source_table)
-        source_actions = QHBoxLayout(); self.separate_vocals = QCheckBox("人声分离"); self.noise_reduce = QCheckBox("降噪"); self.prepare_sources = QPushButton("使用所选音频准备训练数据"); self.prepare_sources.setObjectName("primaryButton"); self.prepare_sources.clicked.connect(self._prepare_sources); source_actions.addWidget(self.separate_vocals); source_actions.addWidget(self.noise_reduce); source_actions.addWidget(self.prepare_sources); source_actions.addStretch(); sources_layout.addLayout(source_actions)
+        source_actions = QHBoxLayout(); self.separate_vocals = QCheckBox("人声分离"); self.noise_reduce = QCheckBox("降噪"); self.prepare_sources = QPushButton("使用所选音频准备训练数据"); self.prepare_sources.setObjectName("primaryButton"); self.prepare_sources.clicked.connect(self._prepare_sources); clean_runs = QPushButton("清理旧准备运行"); clean_runs.clicked.connect(self._cleanup_preparation_runs); source_actions.addWidget(self.separate_vocals); source_actions.addWidget(self.noise_reduce); source_actions.addWidget(self.prepare_sources); source_actions.addWidget(clean_runs); source_actions.addStretch(); sources_layout.addLayout(source_actions)
         sources_layout.addWidget(QLabel("导入音频与录音使用同一数据链路；原始文件不会覆盖。完成 VAD 和 ASR 后请在下方校对表人工确认。")); tabs.addTab(sources, "使用声音库音频")
         record = QWidget(); record_layout = QVBoxLayout(record)
         self.microphone = QComboBox(); [self.microphone.addItem(device.description()) for device in Recorder.inputs()]
@@ -378,19 +384,23 @@ class TrainingPage(QWidget):
         edit_actions = QHBoxLayout(); play_all = QPushButton("连续播放"); play_all.clicked.connect(self._play_all); confirm_all = QPushButton("批量确认"); confirm_all.clicked.connect(self._confirm_all); exclude_bad = QPushButton("排除低质量片段"); exclude_bad.clicked.connect(self._exclude_bad); choose_ref = QPushButton("设为零样本参考"); choose_ref.clicked.connect(self._choose_reference); edit_actions.addWidget(play_all); edit_actions.addWidget(confirm_all); edit_actions.addWidget(exclude_bad); edit_actions.addWidget(choose_ref); edit_actions.addStretch(); dataset_layout.addLayout(edit_actions)
         self.dataset_table = QTableWidget(0, 10); self.dataset_table.setHorizontalHeaderLabels(["播放", "纳入", "人工确认", "起止时间", "音频片段", "ASR/校对文本", "语言", "置信度", "质量标记", "时长"]); self.dataset_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch); self.dataset_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch); dataset_layout.addWidget(self.dataset_table)
         self.duration = QLabel("已通过 0.0 秒；不足 60 秒不能训练，推荐 30–60 分钟。"); self.duration.setObjectName("hint"); dataset_layout.addWidget(self.duration); self.training_progress = QProgressBar(); dataset_layout.addWidget(self.training_progress); self.training_log = QPlainTextEdit(); self.training_log.setReadOnly(True); dataset_layout.addWidget(self.training_log); tabs.addTab(dataset, "数据集与微调")
-        ab = QGroupBox("训练结果 A/B 验收"); ab_layout = QHBoxLayout(ab); self.ab_profile = QComboBox(); self.ab_button = QPushButton("生成底模 / 微调后对比"); self.ab_button.setEnabled(False); self.ab_button.clicked.connect(self._start_ab); self.play_base = QPushButton("播放零样本"); self.play_base.setEnabled(False); self.play_base.clicked.connect(lambda: self._play_ab(False)); self.play_tuned = QPushButton("播放微调后"); self.play_tuned.setEnabled(False); self.play_tuned.clicked.connect(lambda: self._play_ab(True)); self.promote_button = QPushButton("确认并设为默认声音"); self.promote_button.setEnabled(False); self.promote_button.clicked.connect(self._promote); ab_layout.addWidget(QLabel("声音配置")); ab_layout.addWidget(self.ab_profile); ab_layout.addWidget(self.ab_button); ab_layout.addWidget(self.play_base); ab_layout.addWidget(self.play_tuned); ab_layout.addWidget(self.promote_button); ab_layout.addStretch(); layout.addWidget(ab)
+        ab = QGroupBox("训练结果 A/B 验收"); ab_layout = QVBoxLayout(ab); ab_controls = QHBoxLayout(); self.ab_profile = QComboBox(); self.ab_profile.currentIndexChanged.connect(self._restore_candidate_state); self.ab_button = QPushButton("生成底模 / 微调后对比"); self.ab_button.setEnabled(False); self.ab_button.clicked.connect(self._start_ab); self.play_base = QPushButton("播放零样本"); self.play_base.setEnabled(False); self.play_base.clicked.connect(lambda: self._play_ab(False)); self.play_tuned = QPushButton("播放微调后"); self.play_tuned.setEnabled(False); self.play_tuned.clicked.connect(lambda: self._play_ab(True)); self.promote_button = QPushButton("确认并设为默认声音"); self.promote_button.setEnabled(False); self.promote_button.clicked.connect(self._promote); self.reject_button = QPushButton("拒绝候选"); self.reject_button.setEnabled(False); self.reject_button.clicked.connect(self._reject_candidate); ab_controls.addWidget(QLabel("声音配置")); ab_controls.addWidget(self.ab_profile); ab_controls.addWidget(self.ab_button); ab_controls.addWidget(self.play_base); ab_controls.addWidget(self.play_tuned); ab_controls.addWidget(self.promote_button); ab_controls.addWidget(self.reject_button); ab_controls.addStretch(); ab_layout.addLayout(ab_controls); self.candidate_info = QLabel("没有待验收候选模型"); self.candidate_info.setObjectName("hint"); ab_layout.addWidget(self.candidate_info); layout.addWidget(ab)
 
     def _wire(self) -> None:
         self.recorder.level_changed.connect(lambda value: self.level.setValue(round(value * 100))); self.recorder.stopped.connect(self._recorded); self.recorder.error.connect(lambda message: _show_error(self, message)); self.review_player.mediaStatusChanged.connect(self._review_status); self.client.event.connect(self._on_event); self.dataset_table.itemChanged.connect(lambda *_: self._update_duration())
 
     def refresh_profiles(self) -> None:
-        selected = self.training_profile.currentData(); self.ab_profile.clear(); self.training_profile.blockSignals(True); self.training_profile.clear()
-        for profile in self.store.list_profiles(self.project):
+        selected = self.training_profile.currentData(); ab_selected = self.ab_profile.currentData(); profiles = self.store.list_profiles(self.project); self.ab_profile.blockSignals(True); self.ab_profile.clear(); self.training_profile.blockSignals(True); self.training_profile.clear()
+        for profile in profiles:
             assets = self.store.list_source_assets(self.project, profile.id); label = f"{profile.name}（{profile.status(assets)}）"; self.ab_profile.addItem(label, profile.id); self.training_profile.addItem(label, profile.id)
         if selected:
             index = self.training_profile.findData(selected)
             if index >= 0: self.training_profile.setCurrentIndex(index)
-        self.training_profile.blockSignals(False); self._load_profile_assets()
+        candidate_id = ab_selected or next((item.id for item in profiles if item.ab_status in {"awaiting_ab", "ab_generated"}), "")
+        candidate_index = self.ab_profile.findData(candidate_id)
+        if candidate_index >= 0: self.ab_profile.setCurrentIndex(candidate_index)
+        self.ab_profile.blockSignals(False); self.training_profile.blockSignals(False); self._load_profile_assets()
+        self._restore_candidate_state()
 
     def _load_profile_assets(self) -> None:
         profile_id = self.training_profile.currentData(); self.source_assets = self.store.list_source_assets(self.project, profile_id) if profile_id else []; self.source_table.setRowCount(len(self.source_assets))
@@ -402,12 +412,18 @@ class TrainingPage(QWidget):
     def _prepare_sources(self) -> None:
         profile_id = self.training_profile.currentData(); selected = [asset.id for row, asset in enumerate(self.source_assets) if self.source_table.item(row, 0).checkState() == Qt.Checked and not asset.duplicate_of]
         if not profile_id or not selected: _show_error(self, "请选择声音配置和至少一个非重复声音库素材"); return
-        payload = {"action": "pipeline", "profile_id": profile_id, "source_asset_ids": selected, "source_assets": [item.to_dict() for item in self.source_assets], "project_path": str(self.project), "processing_options": {"language": "zh", "separate_vocals": self.separate_vocals.isChecked(), "denoise": self.noise_reduce.isChecked()}}
+        preparation_id = uuid4().hex; payload = {"action": "pipeline", "preparation_id": preparation_id, "profile_id": profile_id, "source_asset_ids": selected, "source_assets": [item.to_dict() for item in self.source_assets], "project_path": str(self.project), "processing_options": {"language": "zh", "separate_vocals": self.separate_vocals.isChecked(), "denoise": self.noise_reduce.isChecked()}}
         job = Job(JobKind.PREPARE_DATASET, payload); self.store.save_job(job); self.job_created.emit(job)
         try: request = self.client.send("prepare_dataset", payload)
         except Exception as exc: _show_error(self, _friendly_error(str(exc))); return
-        self.active_requests[request] = job; self.prepare_sources.setEnabled(False)
+        self.active_requests[request] = job; self.prepare_sources.setEnabled(False); self.training_log.appendPlainText(f"本次选择 {len(selected)} 个素材；运行 ID：{preparation_id}")
         profile = next(item for item in self.store.list_profiles(self.project) if item.id == profile_id); profile.training_state = "preparing"; self.store.save_profile(self.project, profile); self.profiles_changed.emit()
+
+    def _cleanup_preparation_runs(self) -> None:
+        profile_id = self.training_profile.currentData()
+        if not profile_id: return
+        if QMessageBox.question(self, "本地声音工坊", "删除未被当前成功结果、参考片段或冻结快照引用的旧准备运行？") != QMessageBox.Yes: return
+        removed = self.store.cleanup_preparation_runs(self.project, profile_id); self.training_log.appendPlainText(f"已清理 {len(removed)} 个旧运行目录；受保护的数据未删除。")
 
     def _toggle_record(self) -> None:
         if self.recorder.source is None:
@@ -490,9 +506,9 @@ class TrainingPage(QWidget):
         dataset_dir = self.project / "datasets" / dataset.id; dataset_dir.mkdir(parents=True, exist_ok=True); wav_dir = dataset_dir / "audio"; wav_dir.mkdir(exist_ok=True)
         lines = []
         for index, item in enumerate(valid, 1):
-            source = Path(item["path"]); copied = copy_original(source, wav_dir); copied_sha256 = sha256_file(copied); lines.append(f"{copied}|speaker|{item['language']}|{item['text']}"); dataset.segments.append(DatasetSegment(copied_sha256, str(copied), 0, item["duration"], item["language"], item["text"], item["text"], None, [], True, True, True))
+            source = Path(item["path"]); copied = copy_original(source, wav_dir); copied_sha256 = sha256_file(copied); relative = copied.resolve().relative_to(self.project.resolve()).as_posix(); lines.append(f"{relative}|speaker|{item['language']}|{item['text']}"); dataset.segments.append(DatasetSegment(copied_sha256, str(copied), 0, item["duration"], item["language"], item["text"], item["text"], None, [], True, True, True, audio_relative_path=relative))
         list_path = dataset_dir / "dataset.list"; list_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        dataset.list_path = str(list_path); dataset.wav_dir = str(wav_dir); dataset.list_sha256 = sha256_file(list_path); dataset.snapshot_sha256 = dataset_snapshot_sha256(dataset); self.store.save_dataset_snapshot(self.project, dataset)
+        dataset.list_path = str(list_path); dataset.wav_dir = str(wav_dir); dataset.list_relative_path = list_path.relative_to(self.project.resolve()).as_posix(); dataset.list_sha256 = sha256_file(list_path); dataset.snapshot_sha256 = dataset_snapshot_sha256(dataset); self.store.save_dataset_snapshot(self.project, dataset)
         profile = next(item for item in self.store.list_profiles(self.project) if item.id == profile_id); profile.dataset_snapshot_id = dataset.id
         if not any(ref.approved and ref.transcript.strip() for ref in profile.reference_assets):
             candidate = next((segment for segment in dataset.segments if 5 <= segment.duration_seconds <= 10), None)
@@ -543,7 +559,7 @@ class TrainingPage(QWidget):
         if not profile.consent_confirmed: raise ValueError("训练前必须先在声音库确认声音授权")
         path = self.project / "datasets" / profile.dataset_snapshot_id / "manifest.json"
         if not path.exists(): raise ValueError("冻结的数据集快照不存在")
-        dataset = self.store.load_dataset_snapshot(self.project, profile.dataset_snapshot_id); return {**dataset.to_dict(), "approved_seconds": dataset.approved_seconds, "profile_id": profile_id, "dataset_snapshot_id": profile.dataset_snapshot_id, "consent_confirmed": profile.consent_confirmed, "consent_record": profile.consent_record, "experiment_name": f"{self.project.name}-{profile_id[:8]}", "checkpoint_dir": str(self.project / "checkpoints" / profile_id)}
+        dataset = self.store.load_dataset_snapshot(self.project, profile.dataset_snapshot_id); return {**dataset.to_dict(), "approved_seconds": dataset.approved_seconds, "project_path": str(self.project), "profile_id": profile_id, "dataset_snapshot_id": profile.dataset_snapshot_id, "consent_confirmed": profile.consent_confirmed, "consent_record": profile.consent_record, "experiment_name": f"{self.project.name}-{profile_id[:8]}-{dataset.snapshot_sha256[:12]}", "checkpoint_dir": str(self.project / "checkpoints" / profile_id)}
 
     def _prepare(self) -> None:
         try: payload = self._dataset_payload()
@@ -554,6 +570,7 @@ class TrainingPage(QWidget):
         try: payload = self._dataset_payload()
         except ValueError as exc: _show_error(self, str(exc)); return
         if float(payload.get("approved_seconds", 0)) < 60: _show_error(self, "已通过音频不足 60 秒"); return
+        payload.update({"training_run_id": uuid4().hex, "training_mode": "new"})
         job = Job(JobKind.TRAIN, payload); self.store.save_job(job); self.job_created.emit(job); request = self.client.send("train", payload); self.active_requests[request] = job; profile = next(item for item in self.store.list_profiles(self.project) if item.id == payload["profile_id"]); profile.training_state = "training"; self.store.save_profile(self.project, profile); self.profiles_changed.emit()
 
     def _on_event(self, request_id: str, event: str, payload: dict) -> None:
@@ -575,7 +592,8 @@ class TrainingPage(QWidget):
             if job.kind == JobKind.TRAIN:
                 profile = next(item for item in self.store.list_profiles(self.project) if item.id == job.payload["profile_id"]); profile.training_state = ""; self.store.save_profile(self.project, profile); self.profiles_changed.emit()
                 checkpoint_result = dict(payload.get("checkpoints") or {}); gpt = str(checkpoint_result.get("gpt") or next((item for item in job.outputs if item.lower().endswith(".ckpt")), "")); sovits = str(checkpoint_result.get("sovits") or next((item for item in job.outputs if item.lower().endswith(".pth")), ""))
-                if gpt and sovits: self.latest_checkpoints = {"gpt": gpt, "sovits": sovits}; self.ab_button.setEnabled(True); self.training_log.appendPlainText("训练检查点已就绪，请先生成 A/B 对比，确认后再设为默认。")
+                if gpt and sovits:
+                    self.latest_checkpoints = {"gpt": gpt, "sovits": sovits}; profile.candidate_gpt_checkpoint = gpt; profile.candidate_sovits_checkpoint = sovits; profile.candidate_training_run_id = job.payload["training_run_id"]; profile.candidate_dataset_snapshot_id = job.payload["dataset_snapshot_id"]; profile.candidate_snapshot_sha256 = job.payload["snapshot_sha256"]; profile.candidate_created_at = utc_now(); profile.ab_status = "awaiting_ab"; profile.ab_base_outputs = []; profile.ab_tuned_outputs = []; self.store.save_profile(self.project, profile); self.ab_button.setEnabled(True); self.reject_button.setEnabled(True); self.training_log.appendPlainText("训练检查点已持久化，请先生成 A/B 对比，确认后再设为默认。")
         elif event == "error":
             job.status = JobStatus.CANCELLED if payload.get("status") == "cancelled" else JobStatus.FAILED; job.error = str(payload.get("message", "")); self.store.save_job(job); self.active_requests.pop(request_id); self.prepare_sources.setEnabled(True)
             profile_id = job.payload.get("profile_id")
@@ -598,11 +616,22 @@ class TrainingPage(QWidget):
         for asset in assets:
             if asset.id in selected: asset.processing_status = "已切片并转写"; asset.segment_count = len(self.probes)
         self.store.save_source_assets(self.project, assets); self._load_profile_assets()
-        self.training_log.appendPlainText(f"已生成 {len(self.probes)} 个片段并填入 ASR 文本，请逐条试听、修改和人工确认。")
+        profile = next(item for item in self.store.list_profiles(self.project) if item.id == value["profile_id"]); profile.current_preparation_id = value.get("preparation_id", ""); profile.current_preparation_manifest = str(path); self.store.save_profile(self.project, profile); self.profiles_changed.emit()
+        self.training_log.appendPlainText(f"已生成 {len(self.probes)} 个片段并填入 ASR 文本；当前成功运行：{profile.current_preparation_id}。请逐条试听、修改和人工确认。")
 
     def _selected_ab_profile(self) -> VoiceProfile | None:
         profile_id = self.ab_profile.currentData()
         return next((item for item in self.store.list_profiles(self.project) if item.id == profile_id), None)
+
+    def _restore_candidate_state(self) -> None:
+        profile = self._selected_ab_profile() if hasattr(self, "ab_profile") else None
+        self.latest_checkpoints = {}; self.ab_outputs = []; available = bool(profile and profile.candidate_gpt_checkpoint and profile.candidate_sovits_checkpoint and Path(profile.candidate_gpt_checkpoint).is_file() and Path(profile.candidate_sovits_checkpoint).is_file())
+        if available:
+            self.latest_checkpoints = {"gpt": profile.candidate_gpt_checkpoint, "sovits": profile.candidate_sovits_checkpoint}; self.ab_outputs = list(profile.ab_base_outputs) + list(profile.ab_tuned_outputs)
+        self.ab_button.setEnabled(available and profile.ab_status in {"awaiting_ab", "ab_generated"}); self.reject_button.setEnabled(available and profile.ab_status in {"awaiting_ab", "ab_generated"}); generated = available and profile.ab_status == "ab_generated" and all(Path(item).is_file() for item in self.ab_outputs)
+        self.play_base.setEnabled(generated); self.play_tuned.setEnabled(generated); self.promote_button.setEnabled(generated)
+        if available: self.candidate_info.setText(f"候选运行：{profile.candidate_training_run_id}；快照：{profile.candidate_dataset_snapshot_id} / {profile.candidate_snapshot_sha256[:12]}；状态：{profile.ab_status}")
+        else: self.candidate_info.setText("候选模型不可用：检查点文件不存在。" if profile and (profile.candidate_gpt_checkpoint or profile.candidate_sovits_checkpoint) else "没有待验收候选模型")
 
     def _start_ab(self) -> None:
         profile = self._selected_ab_profile()
@@ -624,11 +653,11 @@ class TrainingPage(QWidget):
         if stage == "load_base":
             request = self.client.send("synthesize", synthesis); self.ab_requests[request] = ("synth_base", context)
         elif stage == "synth_base":
-            self.ab_outputs.extend(payload.get("outputs", [])); request = self.client.send("load_profile", context["tuned"]); self.ab_requests[request] = ("load_tuned", context); self.training_log.appendPlainText("底模样本完成，正在生成微调后样本……")
+            base_outputs = list(payload.get("outputs", [])); self.ab_outputs.extend(base_outputs); profile = self._selected_ab_profile(); profile.ab_base_outputs = base_outputs; self.store.save_profile(self.project, profile); request = self.client.send("load_profile", context["tuned"]); self.ab_requests[request] = ("load_tuned", context); self.training_log.appendPlainText("底模样本完成，正在生成微调后样本……")
         elif stage == "load_tuned":
             tuned_payload = {**synthesis, "output_dir": str(Path(context["root"]) / "tuned")}; request = self.client.send("synthesize", tuned_payload); self.ab_requests[request] = ("synth_tuned", context)
         elif stage == "synth_tuned":
-            self.ab_outputs.extend(payload.get("outputs", [])); self.play_base.setEnabled(True); self.play_tuned.setEnabled(True); self.promote_button.setEnabled(True); self.ab_button.setEnabled(True); self.training_log.appendPlainText("A/B 样本已完成：\n" + "\n".join(self.ab_outputs))
+            tuned_outputs = list(payload.get("outputs", [])); self.ab_outputs.extend(tuned_outputs); profile = self._selected_ab_profile(); profile.ab_tuned_outputs = tuned_outputs; profile.ab_status = "ab_generated"; self.store.save_profile(self.project, profile); self.play_base.setEnabled(True); self.play_tuned.setEnabled(True); self.promote_button.setEnabled(True); self.ab_button.setEnabled(True); self.reject_button.setEnabled(True); self.training_log.appendPlainText("A/B 样本已完成：\n" + "\n".join(self.ab_outputs))
 
     def _play_ab(self, tuned: bool) -> None:
         wavs = [item for item in self.ab_outputs if item.lower().endswith(".wav")]
@@ -638,7 +667,12 @@ class TrainingPage(QWidget):
     def _promote(self) -> None:
         profile = self._selected_ab_profile()
         if not profile or not self.latest_checkpoints or not self.ab_outputs: _show_error(self, "请先完成 A/B 对比"); return
-        profile.active_gpt_checkpoint = self.latest_checkpoints["gpt"]; profile.active_sovits_checkpoint = self.latest_checkpoints["sovits"]; profile.default_model_mode = "fine_tuned"; self.store.save_profile(self.project, profile); self.promote_button.setEnabled(False); self.profiles_changed.emit(); QMessageBox.information(self, "本地声音工坊", "微调模型已设为该声音的默认检查点")
+        profile.active_gpt_checkpoint = self.latest_checkpoints["gpt"]; profile.active_sovits_checkpoint = self.latest_checkpoints["sovits"]; profile.default_model_mode = "fine_tuned"; profile.ab_status = "accepted"; self.store.save_profile(self.project, profile); self.promote_button.setEnabled(False); self.reject_button.setEnabled(False); self.profiles_changed.emit(); QMessageBox.information(self, "本地声音工坊", "微调模型已设为该声音的默认检查点")
+
+    def _reject_candidate(self) -> None:
+        profile = self._selected_ab_profile()
+        if not profile: return
+        profile.ab_status = "rejected"; self.store.save_profile(self.project, profile); self.ab_button.setEnabled(False); self.promote_button.setEnabled(False); self.reject_button.setEnabled(False); self.training_log.appendPlainText("候选模型已拒绝；训练文件仍保留，默认模型未改变。")
 
 
 class HistoryPage(QWidget):

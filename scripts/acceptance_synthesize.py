@@ -6,6 +6,7 @@ import subprocess
 import sys
 import wave
 from pathlib import Path
+from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -42,7 +43,12 @@ def main() -> int:
     store = StudioStore(paths)
     project = Path(store.list_projects()[0]["path"])
     profile = store.list_profiles(project)[0]
-    preparation = project / "datasets" / "working" / profile.id / "preparation.json"
+    preparation = Path(profile.current_preparation_manifest) if profile.current_preparation_manifest else Path()
+    if not preparation.is_file():
+        candidates = sorted((project / "datasets" / "working" / profile.id).rglob("preparation.json"), key=lambda item: item.stat().st_mtime, reverse=True)
+        preparation = next((item for item in candidates if json.loads(item.read_text(encoding="utf-8")).get("status") in {None, "completed"}), Path())
+    if not preparation.is_file():
+        raise RuntimeError("没有可用于实机验收的成功数据准备运行")
     data = json.loads(preparation.read_text(encoding="utf-8"))
     lines = Path(data["asr_list"]).read_text(encoding="utf-8").splitlines()
     candidates = []
@@ -89,11 +95,13 @@ def main() -> int:
             "prompt_lang": "zh" if language.lower() in {"zh", "zh-cn"} else language.lower(),
             "seed": 20260803,
         }
-        send(process, {"id": "preview-real", "type": "synthesize", "payload": {**common, "preview": True}})
-        preview = wait_for(process, "preview-real")
+        preview_id = uuid4().hex
+        send(process, {"id": preview_id, "type": "synthesize", "payload": {**common, "preview": True}})
+        preview = wait_for(process, preview_id)
         export_dir = project / "exports" / "acceptance"
-        send(process, {"id": "export-real", "type": "synthesize", "payload": {**common, "preview": False, "output_dir": str(export_dir)}})
-        formal = wait_for(process, "export-real")
+        export_id = uuid4().hex
+        send(process, {"id": export_id, "type": "synthesize", "payload": {**common, "preview": False, "output_dir": str(export_dir)}})
+        formal = wait_for(process, export_id)
         print(json.dumps({"preview": preview["outputs"], "formal": formal["outputs"]}, ensure_ascii=False), flush=True)
         send(process, {"id": "stop", "type": "shutdown", "payload": {}})
         wait_for(process, "stop")

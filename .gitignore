@@ -5,6 +5,7 @@ __pycache__/
 build/
 dist/
 .venv/
+.venv*/
 runtime/
 models/
 logs/

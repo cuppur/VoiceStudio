@@ -12,8 +12,8 @@ from typing import Any
 
 from .engine import GptSovitsEngine
 from .audio import sha256_file
-from .models import DatasetManifest, dataset_snapshot_sha256
-from .paths import AppPaths
+from .models import DatasetManifest, dataset_snapshot_sha256, utc_now
+from .paths import AppPaths, ensure_within
 from .protocol import COMMANDS, Message
 from .text import split_text
 from .training import TrainingPipeline
@@ -127,7 +127,14 @@ class WorkerService:
             raise ValueError("请至少选择一个声音库素材")
         if payload.get("dataset_snapshot_id"):
             self._validate_dataset_snapshot(payload)
-        path = self.training.prepare(payload, lambda value, message: self.emit(request_id, "progress", {"progress": value, "message": message}), self.cancel_event)
+        try:
+            path = self.training.prepare(payload, lambda value, message: self.emit(request_id, "progress", {"progress": value, "message": message}), self.cancel_event)
+        except Exception as exc:
+            if payload.get("action") == "pipeline" and payload.get("preparation_id"):
+                manifest = Path(payload["project_path"]) / "datasets" / "working" / str(payload["profile_id"]) / str(payload["preparation_id"]) / "preparation.json"
+                if manifest.is_file():
+                    value = json.loads(manifest.read_text(encoding="utf-8")); value.update({"status": "cancelled" if self.cancel_event.is_set() else "failed", "error": str(exc)}); manifest.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+            raise
         self.emit(request_id, "result", {"progress": 1.0, "outputs": [str(path)]})
 
     @staticmethod
@@ -137,6 +144,9 @@ class WorkerService:
             raise ValueError("数据集不是有效的冻结快照，请重新冻结")
         if dataset.id != str(payload.get("dataset_snapshot_id", "")):
             raise ValueError("数据集快照 ID 不匹配")
+        project = Path(payload.get("project_path", "")).resolve()
+        snapshot_root = ensure_within(project / "datasets", project / "datasets" / dataset.id)
+        audio_root = ensure_within(snapshot_root, snapshot_root / "audio")
         seen: set[str] = set()
         expected_lines: list[str] = []
         for segment in dataset.segments:
@@ -144,7 +154,9 @@ class WorkerService:
                 raise ValueError("数据集中存在未经人工确认的片段")
             if not segment.text.strip():
                 raise ValueError("数据集中存在空文本")
-            audio = Path(segment.audio_path)
+            if not segment.audio_relative_path:
+                raise ValueError("快照仍使用旧绝对路径，请先重新加载项目完成迁移")
+            audio = ensure_within(audio_root, project / segment.audio_relative_path)
             if not audio.is_file() or audio.stat().st_size < 44:
                 raise ValueError(f"训练音频不存在或无效：{audio}")
             if not segment.source_sha256:
@@ -155,10 +167,12 @@ class WorkerService:
             if digest in seen:
                 raise ValueError(f"数据集包含重复片段：{audio.name}")
             seen.add(digest)
-            expected_lines.append(f"{audio}|speaker|{segment.language}|{segment.text}")
+            expected_lines.append(f"{segment.audio_relative_path}|speaker|{segment.language}|{segment.text}")
         if dataset_snapshot_sha256(dataset) != dataset.snapshot_sha256:
             raise ValueError("冻结数据集元数据或音频哈希已被修改，请重新冻结")
-        list_path = Path(dataset.list_path)
+        if not dataset.list_relative_path:
+            raise ValueError("冻结数据集缺少可迁移的相对清单路径")
+        list_path = ensure_within(snapshot_root, project / dataset.list_relative_path)
         if not dataset.list_sha256 or not list_path.is_file():
             raise ValueError("冻结数据集标注清单缺失，请重新冻结")
         if sha256_file(list_path) != dataset.list_sha256 or list_path.read_text(encoding="utf-8").splitlines() != expected_lines:
@@ -173,16 +187,24 @@ class WorkerService:
             raise ValueError("训练前必须确认声音属于本人或已取得明确授权")
         if not payload.get("dataset_snapshot_id"):
             raise ValueError("训练必须使用冻结后的 dataset_snapshot_id")
+        if payload.get("training_mode", "new") != "new":
+            raise ValueError("当前版本只允许明确开始新的微调，不会自动恢复旧训练")
         self._validate_dataset_snapshot(payload)
         readiness = self.engine.readiness()
         if not readiness.get("ready"): raise RuntimeError("GPT-SoVITS 配置或模型文件不完整，请先修复本地引擎")
         health = self.engine.gpu_health()
         if not health.get("compatible"): raise RuntimeError("；".join(health.get("actionable_errors") or ["GPU 工作进程不可用"]))
-        outputs = self.training.train(payload, lambda value, message: self.emit(request_id, "progress", {"progress": value, "message": message}), self.cancel_event)
+        try:
+            outputs = self.training.train(payload, lambda value, message: self.emit(request_id, "progress", {"progress": value, "message": message}), self.cancel_event)
+        except Exception as exc:
+            run_manifest = self.paths.data_root / "training" / str(payload["profile_id"]) / str(payload["snapshot_sha256"]) / "runs" / str(payload.get("training_run_id", "")) / "training-run.json"
+            if run_manifest.is_file():
+                value = json.loads(run_manifest.read_text(encoding="utf-8")); value.update({"status": "cancelled" if self.cancel_event.is_set() else "failed", "completed_at": utc_now(), "error": str(exc)}); run_manifest.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+            raise
         gpt = [str(path) for path in outputs if path.suffix.lower() == ".ckpt" and path.is_file() and path.stat().st_size > 0]
         sovits = [str(path) for path in outputs if path.suffix.lower() == ".pth" and path.is_file() and path.stat().st_size > 0]
         if not gpt or not sovits: raise RuntimeError("训练结束但没有找到真实 GPT 和 SoVITS 检查点")
-        self.emit(request_id, "result", {"progress": 1.0, "outputs": [str(path) for path in outputs], "checkpoints": {"gpt": gpt[0], "sovits": sovits[0]}})
+        self.emit(request_id, "result", {"progress": 1.0, "training_run_id": payload.get("training_run_id", ""), "outputs": [str(path) for path in outputs], "checkpoints": {"gpt": gpt[0], "sovits": sovits[0]}})
 
 
 def main() -> int:
@@ -201,6 +223,8 @@ def main() -> int:
             service.handle(Message.decode(line))
         except Exception as exc:
             service.emit("worker", "error", {"message": str(exc), "exception": type(exc).__name__})
+        if service.shutdown_event.is_set():
+            break
     return 0
 
 
