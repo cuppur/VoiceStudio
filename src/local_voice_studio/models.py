@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+import hashlib
+import json
 from typing import Any
 from uuid import uuid4
 
@@ -146,7 +148,21 @@ class DatasetManifest:
     id: str = field(default_factory=lambda: uuid4().hex)
     frozen: bool = False
     snapshot_sha256: str = ""
+    list_path: str = ""
+    wav_dir: str = ""
+    list_sha256: str = ""
     created_at: str = field(default_factory=utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "DatasetManifest":
+        value = dict(value)
+        segment_fields = DatasetSegment.__dataclass_fields__
+        segments = [DatasetSegment(**{key: item for key, item in segment.items() if key in segment_fields}) for segment in value.pop("segments", [])]
+        allowed = cls.__dataclass_fields__
+        return cls(segments=segments, **{key: item for key, item in value.items() if key in allowed})
 
     @property
     def approved_seconds(self) -> float:
@@ -160,6 +176,18 @@ class DatasetManifest:
         if any(s.approved and s.included and not s.text.strip() for s in self.segments):
             return False, "存在已通过但没有文本的片段"
         return True, "可以训练"
+
+
+def dataset_snapshot_sha256(dataset: DatasetManifest | dict[str, Any]) -> str:
+    """Hash immutable snapshot metadata, including every copied audio digest."""
+    value = dataset.to_dict() if isinstance(dataset, DatasetManifest) else DatasetManifest.from_dict(dataset).to_dict()
+    value.pop("snapshot_sha256", None)
+    # Storage locations can move with a project. Their content hashes and all
+    # semantic segment metadata remain part of the immutable identity.
+    value.pop("list_path", None)
+    value.pop("wav_dir", None)
+    canonical = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 @dataclass

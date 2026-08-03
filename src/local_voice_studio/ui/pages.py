@@ -16,8 +16,8 @@ from PySide6.QtWidgets import (
     QApplication, QTextBrowser, QVBoxLayout, QWidget,
 )
 
-from ..audio import AudioProbe, copy_original, scan_audio_files
-from ..models import DatasetManifest, DatasetSegment, Job, JobKind, JobStatus, ReferenceAsset, SourceAsset, VoiceProfile, utc_now
+from ..audio import AudioProbe, copy_original, scan_audio_files, sha256_file
+from ..models import DatasetManifest, DatasetSegment, Job, JobKind, JobStatus, ReferenceAsset, SourceAsset, VoiceProfile, dataset_snapshot_sha256, utc_now
 from ..paths import AppPaths
 from ..storage import StudioStore
 from ..text import split_text
@@ -490,10 +490,9 @@ class TrainingPage(QWidget):
         dataset_dir = self.project / "datasets" / dataset.id; dataset_dir.mkdir(parents=True, exist_ok=True); wav_dir = dataset_dir / "audio"; wav_dir.mkdir(exist_ok=True)
         lines = []
         for index, item in enumerate(valid, 1):
-            source = Path(item["path"]); copied = copy_original(source, wav_dir); lines.append(f"{copied}|speaker|{item['language']}|{item['text']}"); dataset.segments.append(DatasetSegment("", str(copied), 0, item["duration"], item["language"], item["text"], item["text"], None, [], True, True, True))
+            source = Path(item["path"]); copied = copy_original(source, wav_dir); copied_sha256 = sha256_file(copied); lines.append(f"{copied}|speaker|{item['language']}|{item['text']}"); dataset.segments.append(DatasetSegment(copied_sha256, str(copied), 0, item["duration"], item["language"], item["text"], item["text"], None, [], True, True, True))
         list_path = dataset_dir / "dataset.list"; list_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        canonical = json.dumps([item.__dict__ for item in dataset.segments], ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"); dataset.snapshot_sha256 = hashlib.sha256(canonical).hexdigest(); manifest_path = self.store.save_dataset_snapshot(self.project, dataset)
-        value = json.loads(manifest_path.read_text(encoding="utf-8")); value.update({"list_path": str(list_path), "wav_dir": str(wav_dir), "approved_seconds": dataset.approved_seconds}); manifest_path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+        dataset.list_path = str(list_path); dataset.wav_dir = str(wav_dir); dataset.list_sha256 = sha256_file(list_path); dataset.snapshot_sha256 = dataset_snapshot_sha256(dataset); self.store.save_dataset_snapshot(self.project, dataset)
         profile = next(item for item in self.store.list_profiles(self.project) if item.id == profile_id); profile.dataset_snapshot_id = dataset.id
         if not any(ref.approved and ref.transcript.strip() for ref in profile.reference_assets):
             candidate = next((segment for segment in dataset.segments if 5 <= segment.duration_seconds <= 10), None)
@@ -544,7 +543,7 @@ class TrainingPage(QWidget):
         if not profile.consent_confirmed: raise ValueError("训练前必须先在声音库确认声音授权")
         path = self.project / "datasets" / profile.dataset_snapshot_id / "manifest.json"
         if not path.exists(): raise ValueError("冻结的数据集快照不存在")
-        manifest = json.loads(path.read_text(encoding="utf-8")); return {**manifest, "profile_id": profile_id, "dataset_snapshot_id": profile.dataset_snapshot_id, "consent_confirmed": profile.consent_confirmed, "consent_record": profile.consent_record, "experiment_name": f"{self.project.name}-{profile_id[:8]}", "checkpoint_dir": str(self.project / "checkpoints" / profile_id)}
+        dataset = self.store.load_dataset_snapshot(self.project, profile.dataset_snapshot_id); return {**dataset.to_dict(), "approved_seconds": dataset.approved_seconds, "profile_id": profile_id, "dataset_snapshot_id": profile.dataset_snapshot_id, "consent_confirmed": profile.consent_confirmed, "consent_record": profile.consent_record, "experiment_name": f"{self.project.name}-{profile_id[:8]}", "checkpoint_dir": str(self.project / "checkpoints" / profile_id)}
 
     def _prepare(self) -> None:
         try: payload = self._dataset_payload()
@@ -575,7 +574,7 @@ class TrainingPage(QWidget):
                 self.training_log.appendPlainText("切分结果已替换表格，请执行自动转写并逐句校对。")
             if job.kind == JobKind.TRAIN:
                 profile = next(item for item in self.store.list_profiles(self.project) if item.id == job.payload["profile_id"]); profile.training_state = ""; self.store.save_profile(self.project, profile); self.profiles_changed.emit()
-                gpt = next((item for item in reversed(job.outputs) if item.lower().endswith(".ckpt")), ""); sovits = next((item for item in reversed(job.outputs) if item.lower().endswith(".pth")), "")
+                checkpoint_result = dict(payload.get("checkpoints") or {}); gpt = str(checkpoint_result.get("gpt") or next((item for item in job.outputs if item.lower().endswith(".ckpt")), "")); sovits = str(checkpoint_result.get("sovits") or next((item for item in job.outputs if item.lower().endswith(".pth")), ""))
                 if gpt and sovits: self.latest_checkpoints = {"gpt": gpt, "sovits": sovits}; self.ab_button.setEnabled(True); self.training_log.appendPlainText("训练检查点已就绪，请先生成 A/B 对比，确认后再设为默认。")
         elif event == "error":
             job.status = JobStatus.CANCELLED if payload.get("status") == "cancelled" else JobStatus.FAILED; job.error = str(payload.get("message", "")); self.store.save_job(job); self.active_requests.pop(request_id); self.prepare_sources.setEnabled(True)

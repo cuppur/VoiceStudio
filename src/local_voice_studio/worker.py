@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from .engine import GptSovitsEngine
+from .audio import sha256_file
+from .models import DatasetManifest, dataset_snapshot_sha256
 from .paths import AppPaths
 from .protocol import COMMANDS, Message
 from .text import split_text
@@ -123,27 +125,55 @@ class WorkerService:
             raise ValueError("prepare_dataset 缺少 profile_id")
         if payload.get("action") == "pipeline" and not payload.get("source_asset_ids"):
             raise ValueError("请至少选择一个声音库素材")
+        if payload.get("dataset_snapshot_id"):
+            self._validate_dataset_snapshot(payload)
         path = self.training.prepare(payload, lambda value, message: self.emit(request_id, "progress", {"progress": value, "message": message}), self.cancel_event)
         self.emit(request_id, "result", {"progress": 1.0, "outputs": [str(path)]})
+
+    @staticmethod
+    def _validate_dataset_snapshot(payload: dict[str, Any]) -> DatasetManifest:
+        dataset = DatasetManifest.from_dict(payload)
+        if not dataset.frozen or not dataset.snapshot_sha256:
+            raise ValueError("数据集不是有效的冻结快照，请重新冻结")
+        if dataset.id != str(payload.get("dataset_snapshot_id", "")):
+            raise ValueError("数据集快照 ID 不匹配")
+        seen: set[str] = set()
+        expected_lines: list[str] = []
+        for segment in dataset.segments:
+            if not segment.human_confirmed or not segment.approved or not segment.included:
+                raise ValueError("数据集中存在未经人工确认的片段")
+            if not segment.text.strip():
+                raise ValueError("数据集中存在空文本")
+            audio = Path(segment.audio_path)
+            if not audio.is_file() or audio.stat().st_size < 44:
+                raise ValueError(f"训练音频不存在或无效：{audio}")
+            if not segment.source_sha256:
+                raise ValueError(f"冻结片段缺少音频哈希，请重新冻结：{audio.name}")
+            digest = sha256_file(audio)
+            if digest != segment.source_sha256:
+                raise ValueError(f"冻结后的音频已被修改，请重新冻结数据集：{audio.name}")
+            if digest in seen:
+                raise ValueError(f"数据集包含重复片段：{audio.name}")
+            seen.add(digest)
+            expected_lines.append(f"{audio}|speaker|{segment.language}|{segment.text}")
+        if dataset_snapshot_sha256(dataset) != dataset.snapshot_sha256:
+            raise ValueError("冻结数据集元数据或音频哈希已被修改，请重新冻结")
+        list_path = Path(dataset.list_path)
+        if not dataset.list_sha256 or not list_path.is_file():
+            raise ValueError("冻结数据集标注清单缺失，请重新冻结")
+        if sha256_file(list_path) != dataset.list_sha256 or list_path.read_text(encoding="utf-8").splitlines() != expected_lines:
+            raise ValueError("冻结数据集标注清单已被修改，请重新冻结")
+        can_train, reason = dataset.can_train()
+        if not can_train:
+            raise ValueError(reason)
+        return dataset
 
     def _train(self, request_id: str, payload: dict[str, Any]) -> None:
         if not payload.get("consent_confirmed"):
             raise ValueError("训练前必须确认声音属于本人或已取得明确授权")
         if not payload.get("dataset_snapshot_id"):
             raise ValueError("训练必须使用冻结后的 dataset_snapshot_id")
-        if float(payload.get("approved_seconds", 0)) < 60:
-            raise ValueError("已校对并通过的训练音频不足 60 秒")
-        if not payload.get("frozen") or not payload.get("snapshot_sha256"):
-            raise ValueError("数据集不是有效的冻结快照")
-        seen: set[str] = set()
-        for segment in payload.get("segments", []):
-            if not segment.get("human_confirmed") or not segment.get("approved") or not segment.get("included", True): raise ValueError("数据集中存在未经人工确认的片段")
-            if not str(segment.get("text", "")).strip(): raise ValueError("数据集中存在空文本")
-            audio = Path(segment.get("audio_path", ""))
-            if not audio.is_file() or audio.stat().st_size < 44: raise ValueError(f"训练音频不存在或无效：{audio}")
-            digest = hashlib.sha256(audio.read_bytes()).hexdigest()
-            if digest in seen: raise ValueError(f"数据集包含重复片段：{audio.name}")
-            seen.add(digest)
+        self._validate_dataset_snapshot(payload)
         readiness = self.engine.readiness()
         if not readiness.get("ready"): raise RuntimeError("GPT-SoVITS 配置或模型文件不完整，请先修复本地引擎")
         health = self.engine.gpu_health()
@@ -152,7 +182,7 @@ class WorkerService:
         gpt = [str(path) for path in outputs if path.suffix.lower() == ".ckpt" and path.is_file() and path.stat().st_size > 0]
         sovits = [str(path) for path in outputs if path.suffix.lower() == ".pth" and path.is_file() and path.stat().st_size > 0]
         if not gpt or not sovits: raise RuntimeError("训练结束但没有找到真实 GPT 和 SoVITS 检查点")
-        self.emit(request_id, "result", {"progress": 1.0, "outputs": [str(path) for path in outputs]})
+        self.emit(request_id, "result", {"progress": 1.0, "outputs": [str(path) for path in outputs], "checkpoints": {"gpt": gpt[0], "sovits": sovits[0]}})
 
 
 def main() -> int:

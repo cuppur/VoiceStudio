@@ -10,12 +10,15 @@ import wave
 from pathlib import Path
 
 from local_voice_studio.audio import copy_original, scan_audio_files, sha256_file
-from local_voice_studio.models import DatasetManifest, DatasetSegment, Job, JobKind, JobStatus, ReferenceAsset, SourceAsset, VoiceProfile
+from local_voice_studio import __version__
+from local_voice_studio.models import DatasetManifest, DatasetSegment, Job, JobKind, JobStatus, ReferenceAsset, SourceAsset, VoiceProfile, dataset_snapshot_sha256
 from local_voice_studio.paths import AppPaths, ensure_within
 from local_voice_studio.protocol import Message
 from local_voice_studio.runtime import EngineRuntimeError, EngineRuntimeResolver
 from local_voice_studio.storage import StudioStore
 from local_voice_studio.text import split_text
+from local_voice_studio.training import TrainingPipeline
+from local_voice_studio.worker import WorkerService
 
 
 def write_wav(path: Path, seconds: float = 1.0, sample_rate: int = 16000) -> None:
@@ -67,6 +70,11 @@ class ModelTests(unittest.TestCase):
         bom = Message.decode('\ufeff{"id":"中文","type":"health","payload":{"路径":"声音库"}}')
         self.assertEqual(bom.id, "中文"); self.assertEqual(bom.payload["路径"], "声音库")
 
+    def test_package_version_matches_project_version(self):
+        pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertEqual(__version__, "0.2.0")
+        self.assertIn(f'version = "{__version__}"', pyproject)
+
 
 class StorageTests(unittest.TestCase):
     def test_project_profile_and_job_roundtrip(self):
@@ -91,7 +99,9 @@ class StorageTests(unittest.TestCase):
             profile = VoiceProfile("声音", True); source = root / "导入.wav"; write_wav(source, 61); asset = SourceAsset(profile.id, str(source), str(source), sha256_file(source), duration_seconds=61, sample_rate=16000, channels=1, codec="pcm"); profile.source_asset_ids = [asset.id]; store.save_source_assets(project, [asset]); store.save_profile(project, profile)
             self.assertEqual(store.list_source_assets(project, profile.id)[0].id, asset.id)
             dataset = DatasetManifest("快照", profile.id, [DatasetSegment(asset.sha256, str(source), 0, 61, text="确认文本", asr_text="确认文本", approved=True, included=True, human_confirmed=True)], frozen=True, snapshot_sha256="abc")
-            store.save_dataset_snapshot(project, dataset); self.assertTrue(store.load_dataset_snapshot(project, dataset.id).can_train()[0])
+            manifest_path = store.save_dataset_snapshot(project, dataset)
+            value = json.loads(manifest_path.read_text(encoding="utf-8")); value.update({"approved_seconds": 61, "future_extension": True}); manifest_path.write_text(json.dumps(value), encoding="utf-8")
+            self.assertTrue(store.load_dataset_snapshot(project, dataset.id).can_train()[0])
 
     def test_legacy_reference_migration(self):
         legacy = {"schema_version": 1, "voice_profiles": [{"id": "p", "name": "旧声音", "consent_confirmed": True, "reference_assets": [{"path": "旧.wav", "sha256": "h", "transcript": "你好", "approved": True}]}]}
@@ -119,6 +129,29 @@ class RuntimeResolverTests(unittest.TestCase):
 
 
 class WorkerIntegrationTests(unittest.TestCase):
+    def test_frozen_snapshot_rejects_modified_audio_and_list(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); audio = root / "frozen.wav"; write_wav(audio, 61); original_audio = audio.read_bytes(); list_path = root / "dataset.list"
+            segment = DatasetSegment(sha256_file(audio), str(audio), 0, 61, text="人工确认文本", asr_text="人工确认文本", approved=True, included=True, human_confirmed=True)
+            list_path.write_text(f"{audio}|speaker|zh|人工确认文本\n", encoding="utf-8")
+            dataset = DatasetManifest("快照", "voice", [segment], frozen=True, list_path=str(list_path), wav_dir=str(root), list_sha256=sha256_file(list_path))
+            dataset.snapshot_sha256 = dataset_snapshot_sha256(dataset)
+            payload = {**dataset.to_dict(), "dataset_snapshot_id": dataset.id}
+            WorkerService._validate_dataset_snapshot(payload)
+            audio.write_bytes(audio.read_bytes() + b"changed")
+            with self.assertRaisesRegex(ValueError, "音频已被修改"):
+                WorkerService._validate_dataset_snapshot(payload)
+            audio.write_bytes(original_audio); list_path.write_text(f"{audio}|speaker|zh|被篡改文本\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "标注清单已被修改"):
+                WorkerService._validate_dataset_snapshot(payload)
+
+    def test_checkpoint_selection_is_scoped_to_current_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); old = root / "old.ckpt"; old.write_bytes(b"old")
+            run = root / "run-new"; run.mkdir(); first = run / "epoch-1.ckpt"; latest = run / "epoch-2.ckpt"; first.write_bytes(b"first"); latest.write_bytes(b"latest")
+            os.utime(first, ns=(1_000_000_000, 1_000_000_000)); os.utime(latest, ns=(2_000_000_000, 2_000_000_000)); os.utime(old, ns=(3_000_000_000, 3_000_000_000))
+            self.assertEqual(TrainingPipeline._latest_checkpoint(run, ".ckpt"), latest)
+
     def test_worker_health_protocol(self):
         env = os.environ.copy(); source = str(Path(__file__).resolve().parents[1] / "src"); env["PYTHONPATH"] = source; env["LOCAL_VOICE_STUDIO_HOME"] = tempfile.mkdtemp(); env["LOCAL_VOICE_STUDIO_PROJECTS"] = tempfile.mkdtemp()
         process = subprocess.Popen([sys.executable, "-u", "-m", "local_voice_studio.worker"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", env=env)

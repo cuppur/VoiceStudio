@@ -7,7 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from .models import DatasetManifest, DatasetSegment, Job, JobKind, JobStatus, SourceAsset, VoiceProfile, utc_now
+from .models import DatasetManifest, Job, JobKind, JobStatus, SourceAsset, VoiceProfile, utc_now
 from .paths import AppPaths, ensure_within
 
 
@@ -189,8 +189,7 @@ class StudioStore:
         project = ensure_within(self.paths.projects_root, project)
         path = ensure_within(project / "datasets", project / "datasets" / snapshot_id / "manifest.json")
         value = json.loads(path.read_text(encoding="utf-8"))
-        segments = [DatasetSegment(**item) for item in value.pop("segments", [])]
-        return DatasetManifest(segments=segments, **value)
+        return DatasetManifest.from_dict(value)
 
     def save_job(self, job: Job) -> None:
         job.updated_at = utc_now()

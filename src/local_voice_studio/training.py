@@ -7,6 +7,7 @@ import threading
 import hashlib
 from pathlib import Path
 from typing import Callable
+from uuid import uuid4
 
 from .paths import AppPaths
 
@@ -132,10 +133,14 @@ class TrainingPipeline:
         engine = self.paths.engine_root
         exp_name = payload["experiment_name"]
         exp_dir = self.paths.data_root / "training" / exp_name
-        checkpoint_dir = Path(payload.get("checkpoint_dir") or (exp_dir / "weights")).resolve()
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        checkpoint_root = Path(payload.get("checkpoint_dir") or (exp_dir / "weights")).resolve()
+        checkpoint_root.mkdir(parents=True, exist_ok=True)
         if not (exp_dir / "2-name2text.txt").exists() or not (exp_dir / "6-name2semantic.tsv").exists():
             raise RuntimeError("训练特征尚未准备完成")
+        # Every training invocation gets a new directory. Old or partially
+        # generated checkpoints can therefore never be mistaken for this run.
+        checkpoint_dir = checkpoint_root / f"run-{uuid4().hex}"
+        checkpoint_dir.mkdir(parents=True, exist_ok=False)
         temp = self.paths.data_root / "training" / "configs"
         temp.mkdir(parents=True, exist_ok=True)
         s2_source = engine / "GPT_SoVITS/configs/s2v2ProPlus.json"
@@ -176,9 +181,17 @@ class TrainingPipeline:
         s1_config.write_text(yaml.safe_dump(s1, allow_unicode=True), encoding="utf-8")
         progress(0.55, "开始 GPT 训练")
         self._run([str(python), "-s", "GPT_SoVITS/s1_train.py", "--config_file", str(s1_config)], {"hz": "25hz", "_CUDA_VISIBLE_DEVICES": "0"}, lambda line: progress(0.85, line), cancel)
-        outputs = list(checkpoint_dir.glob("*.pth")) + list(checkpoint_dir.glob("*.ckpt"))
+        sovits = self._latest_checkpoint(checkpoint_dir, ".pth")
+        gpt = self._latest_checkpoint(checkpoint_dir, ".ckpt")
+        if not sovits or not gpt:
+            raise RuntimeError(f"本次训练没有同时生成新的 GPT 和 SoVITS 检查点：{checkpoint_dir}")
         progress(1.0, "训练完成")
-        return outputs
+        return [sovits, gpt]
+
+    @staticmethod
+    def _latest_checkpoint(run_dir: Path, suffix: str) -> Path | None:
+        candidates = [item for item in run_dir.rglob(f"*{suffix}") if item.is_file() and item.stat().st_size > 0]
+        return max(candidates, key=lambda item: (item.stat().st_mtime_ns, item.name)) if candidates else None
 
     def _prepare_source_assets(self, payload: dict, progress: Callable[[float, str], None], cancel: threading.Event) -> Path:
         """Normalize selected SourceAssets, run the upstream slicer and local ASR."""
