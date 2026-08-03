@@ -9,6 +9,8 @@
 - 声音配置可在尚无参考转写时保存；状态、素材、零样本参考、数据集快照及 GPT/SoVITS 检查点持久化，并同步刷新三个页面。
 - 中文/英文混合长文本安全分段、可恢复任务记录、WAV 分段和 WAV/320 kbps MP3 合并输出。
 - “数据与训练”默认直接使用声音库素材，经单声道标准化、可选人声分离/降噪、VAD、ASR、人工校对后冻结不可变快照；录音仅用于补充。
+- 每次数据准备使用独立 `preparation_id`，训练特征与冻结快照 ID/哈希强绑定；每次新训练使用独立运行、日志和检查点目录，不会静默恢复旧训练。
+- 候选 GPT/SoVITS 检查点及 A/B 状态写入项目；重启后可继续验收，只有用户接受后才成为默认模型。
 - 60 秒训练门槛只统计“已人工确认、文本非空、纳入训练且无质量问题”的切片，不统计原文件总时长。
 - 真实临时试听调用 GPT-SoVITS 并用 QMediaPlayer 自动播放，只写入 `%LOCALAPPDATA%\LocalVoiceStudio\cache\preview` 的 WAV，不生成 MP3。
 - stdin/stdout JSON Lines GPU 工作进程；`health`、`load_profile`、`synthesize`、`prepare_dataset`、`train`、`cancel`、`shutdown` 命令。
@@ -49,7 +51,18 @@ $env:PYTHONPATH = "src"
 5. 训练完成后生成零样本/微调后 A/B 样本，确认后才能设为默认检查点。
 6. 在“生成语音”可先“生成试听”，满意后再正式输出 WAV 与 320 kbps MP3。
 
-旧版 `project.json`、参考片段和遗留 `datasets/current/slice-input` 会在首次启动新版时迁移到 schema 2；缺失的授权记录不会被自动伪造。
+新版目录结构如下：
+
+```text
+processed/<profile_id>/runs/<preparation_id>/{normalized,separated,denoised,segments}
+datasets/working/<profile_id>/<preparation_id>/{asr,preparation.json}
+datasets/<snapshot_id>/{audio,dataset.list,manifest.json}
+%LOCALAPPDATA%/LocalVoiceStudio/training/<profile_id>/<snapshot_sha256>/features
+%LOCALAPPDATA%/LocalVoiceStudio/training/<profile_id>/<snapshot_sha256>/runs/<training_run_id>
+checkpoints/<profile_id>/<training_run_id>
+```
+
+旧版 `project.json`、参考片段和遗留 `datasets/current/slice-input` 会在首次启动新版时迁移到 schema 2；旧绝对路径快照会把仍可找到的音频复制进快照 `audio` 目录并改写为相对路径，缺失文件会明确报错。缺失的授权记录不会被自动伪造。
 
 > MP3 转成 WAV 不会恢复已经丢失的信息。带配乐、混响或他人声音的素材应先清理并逐段试听，训练数据优先使用无配乐的原始 WAV/FLAC。
 

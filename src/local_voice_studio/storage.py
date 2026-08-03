@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from .models import DatasetManifest, Job, JobKind, JobStatus, SourceAsset, VoiceProfile, utc_now
+from .audio import sha256_file
+from .models import DatasetManifest, Job, JobKind, JobStatus, SourceAsset, VoiceProfile, dataset_snapshot_sha256, utc_now
 from .paths import AppPaths, ensure_within
 
 
@@ -171,15 +173,44 @@ class StudioStore:
         assets = [SourceAsset.from_dict(item) for item in self.load_project(project).get("source_assets", [])]
         return [item for item in assets if not profile_id or item.profile_id == profile_id]
 
+    def cleanup_preparation_runs(self, project: Path, profile_id: str) -> list[str]:
+        project = ensure_within(self.paths.projects_root, project); protected: set[str] = set()
+        for profile in self.list_profiles(project):
+            if profile.id == profile_id and profile.current_preparation_id: protected.add(profile.current_preparation_id)
+            for reference in profile.reference_assets:
+                parts = Path(reference.path).parts
+                if "runs" in parts:
+                    index = parts.index("runs")
+                    if index + 1 < len(parts): protected.add(parts[index + 1])
+        for snapshot in self.load_project(project).get("dataset_snapshots", []):
+            stored = Path(snapshot.get("path", "")); manifest = stored if stored.is_absolute() else project / stored
+            if manifest.is_file():
+                for segment in json.loads(manifest.read_text(encoding="utf-8")).get("segments", []):
+                    parts = Path(segment.get("audio_path", "")).parts
+                    if "runs" in parts:
+                        index = parts.index("runs")
+                        if index + 1 < len(parts): protected.add(parts[index + 1])
+        removed: list[str] = []
+        roots = [project / "processed" / profile_id / "runs", project / "datasets" / "working" / profile_id]
+        for root in roots:
+            if not root.is_dir(): continue
+            for child in root.iterdir():
+                target = ensure_within(root, child)
+                if target.is_dir() and target.name not in protected:
+                    shutil.rmtree(target); removed.append(str(target))
+        return removed
+
     def save_dataset_snapshot(self, project: Path, dataset: DatasetManifest) -> Path:
         project = ensure_within(self.paths.projects_root, project)
         folder = ensure_within(project / "datasets", project / "datasets" / dataset.id)
         folder.mkdir(parents=True, exist_ok=True)
-        payload = asdict(dataset)
+        payload = dataset.to_dict()
+        payload["list_path"] = ""; payload["wav_dir"] = ""
+        for segment in payload["segments"]: segment["audio_path"] = ""
         self._atomic_json(folder / "manifest.json", payload)
         manifest = self.load_project(project)
         snapshots = manifest.setdefault("dataset_snapshots", [])
-        summary = {"id": dataset.id, "voice_profile_id": dataset.voice_profile_id, "path": str(folder / "manifest.json"), "snapshot_sha256": dataset.snapshot_sha256, "approved_seconds": dataset.approved_seconds, "created_at": dataset.created_at}
+        summary = {"id": dataset.id, "voice_profile_id": dataset.voice_profile_id, "path": (folder / "manifest.json").relative_to(project).as_posix(), "snapshot_sha256": dataset.snapshot_sha256, "approved_seconds": dataset.approved_seconds, "created_at": dataset.created_at}
         snapshots[:] = [item for item in snapshots if item.get("id") != dataset.id]
         snapshots.append(summary)
         self._atomic_json(project / "project.json", manifest)
@@ -189,7 +220,51 @@ class StudioStore:
         project = ensure_within(self.paths.projects_root, project)
         path = ensure_within(project / "datasets", project / "datasets" / snapshot_id / "manifest.json")
         value = json.loads(path.read_text(encoding="utf-8"))
-        return DatasetManifest.from_dict(value)
+        snapshot_root = path.parent.resolve(); audio_root = ensure_within(snapshot_root, snapshot_root / "audio"); legacy = int(value.get("schema_version", 1)) < 2
+        migrated = legacy
+        if legacy: audio_root.mkdir(parents=True, exist_ok=True)
+        for segment in value.get("segments", []):
+            relative = str(segment.get("audio_relative_path", "")).replace("\\", "/")
+            candidate = (project / relative).resolve() if relative else Path(segment.get("audio_path", "")).resolve()
+            if not candidate.is_file():
+                fallback = audio_root / Path(segment.get("audio_path") or relative).name
+                if legacy and fallback.is_file(): candidate = fallback.resolve(); migrated = True
+                else: raise FileNotFoundError(f"旧快照音频无法迁移或文件缺失：{candidate}")
+            if legacy:
+                try:
+                    ensure_within(audio_root, candidate)
+                except ValueError:
+                    digest = sha256_file(candidate)
+                    suffix = candidate.suffix.lower() or ".wav"
+                    copied = audio_root / f"{digest[:16]}{suffix}"
+                    if not copied.exists(): shutil.copy2(candidate, copied)
+                    candidate = copied.resolve(); migrated = True
+            ensure_within(audio_root, candidate)
+            actual_relative = candidate.relative_to(project.resolve()).as_posix()
+            if not legacy and relative != actual_relative:
+                raise ValueError(f"快照音频相对路径不一致：{candidate.name}")
+            if relative != actual_relative: migrated = True
+            segment["audio_relative_path"] = actual_relative; segment["audio_path"] = str(candidate)
+            digest = sha256_file(candidate)
+            if not segment.get("source_sha256") and legacy: segment["source_sha256"] = digest; migrated = True
+            elif not segment.get("source_sha256"): raise ValueError(f"快照缺少音频哈希：{candidate.name}")
+            elif segment["source_sha256"] != digest: raise ValueError(f"快照音频哈希不一致：{candidate.name}")
+        list_path = snapshot_root / "dataset.list"; list_relative = list_path.relative_to(project.resolve()).as_posix()
+        expected_lines = [f"{item['audio_relative_path']}|speaker|{item.get('language', 'zh')}|{item.get('text', '')}" for item in value.get("segments", [])]
+        current_lines = list_path.read_text(encoding="utf-8").splitlines() if list_path.is_file() else []
+        if current_lines != expected_lines:
+            if not legacy: raise ValueError("冻结快照的标注清单内容已被修改")
+            list_path.write_text("\n".join(expected_lines) + "\n", encoding="utf-8"); migrated = True
+        actual_list_sha = sha256_file(list_path)
+        if not legacy and value.get("list_sha256") != actual_list_sha:
+            raise ValueError("冻结快照的标注清单哈希不一致")
+        value.update({"schema_version": 2, "list_path": str(list_path), "wav_dir": str(audio_root), "list_relative_path": list_relative, "list_sha256": sha256_file(list_path)})
+        dataset = DatasetManifest.from_dict(value); dataset.snapshot_sha256 = dataset_snapshot_sha256(dataset)
+        if not legacy and value.get("snapshot_sha256") != dataset.snapshot_sha256:
+            raise ValueError("冻结快照清单哈希不一致")
+        if migrated:
+            self.save_dataset_snapshot(project, dataset)
+        return dataset
 
     def save_job(self, job: Job) -> None:
         job.updated_at = utc_now()

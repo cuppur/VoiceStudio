@@ -82,6 +82,17 @@ class VoiceProfile:
     active_sovits_checkpoint: str = ""
     default_model_mode: str = "zero_shot"
     training_state: str = ""
+    current_preparation_id: str = ""
+    current_preparation_manifest: str = ""
+    candidate_gpt_checkpoint: str = ""
+    candidate_sovits_checkpoint: str = ""
+    candidate_training_run_id: str = ""
+    candidate_dataset_snapshot_id: str = ""
+    candidate_snapshot_sha256: str = ""
+    candidate_created_at: str = ""
+    ab_status: str = "none"
+    ab_base_outputs: list[str] = field(default_factory=list)
+    ab_tuned_outputs: list[str] = field(default_factory=list)
     consent_record: str = ""
     consent_confirmed_at: str = ""
     created_at: str = field(default_factory=utc_now)
@@ -134,6 +145,7 @@ class DatasetSegment:
     included: bool = True
     human_confirmed: bool = False
     id: str = field(default_factory=lambda: uuid4().hex)
+    audio_relative_path: str = ""
 
     @property
     def duration_seconds(self) -> float:
@@ -151,6 +163,8 @@ class DatasetManifest:
     list_path: str = ""
     wav_dir: str = ""
     list_sha256: str = ""
+    list_relative_path: str = ""
+    schema_version: int = 2
     created_at: str = field(default_factory=utc_now)
 
     def to_dict(self) -> dict[str, Any]:
@@ -180,12 +194,32 @@ class DatasetManifest:
 
 def dataset_snapshot_sha256(dataset: DatasetManifest | dict[str, Any]) -> str:
     """Hash immutable snapshot metadata, including every copied audio digest."""
-    value = dataset.to_dict() if isinstance(dataset, DatasetManifest) else DatasetManifest.from_dict(dataset).to_dict()
-    value.pop("snapshot_sha256", None)
-    # Storage locations can move with a project. Their content hashes and all
-    # semantic segment metadata remain part of the immutable identity.
-    value.pop("list_path", None)
-    value.pop("wav_dir", None)
+    manifest = dataset if isinstance(dataset, DatasetManifest) else DatasetManifest.from_dict(dataset)
+    value = {
+        "schema_version": manifest.schema_version,
+        "id": manifest.id,
+        "name": manifest.name,
+        "voice_profile_id": manifest.voice_profile_id,
+        "frozen": manifest.frozen,
+        "list_sha256": manifest.list_sha256,
+        "list_relative_path": manifest.list_relative_path,
+        "created_at": manifest.created_at,
+        "segments": [{
+            "id": segment.id,
+            "source_sha256": segment.source_sha256,
+            "audio_relative_path": segment.audio_relative_path,
+            "start_seconds": segment.start_seconds,
+            "end_seconds": segment.end_seconds,
+            "language": segment.language,
+            "text": segment.text,
+            "asr_text": segment.asr_text,
+            "asr_confidence": segment.asr_confidence,
+            "quality_flags": segment.quality_flags,
+            "approved": segment.approved,
+            "included": segment.included,
+            "human_confirmed": segment.human_confirmed,
+        } for segment in manifest.segments],
+    }
     canonical = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
 
