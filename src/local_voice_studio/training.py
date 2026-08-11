@@ -43,6 +43,13 @@ class TrainingPipeline:
             "manifest": working_root / "preparation.json",
         }
 
+    @staticmethod
+    def training_run_root(data_root: Path, training_run_id: str) -> Path:
+        # Keep this deliberately short. Upstream feature names include the
+        # complete sliced-audio filename and otherwise exceed MAX_PATH on
+        # standard Windows installations.
+        return data_root.resolve() / "train-runs" / training_run_id
+
     def _run(self, command: list[str], env: dict[str, str], log: Callable[[str], None], cancel: threading.Event) -> None:
         process_env = {**os.environ, **env}
         # Upstream GPT-SoVITS helper scripts invoke ffmpeg by name and load DLLs
@@ -66,7 +73,11 @@ class TrainingPipeline:
         process_env.setdefault("TORCH_HOME", str(self.paths.models_root / "torch"))
         existing_pythonpath = process_env.get("PYTHONPATH", "")
         process_env["PYTHONPATH"] = os.pathsep.join(
-            [str(self.paths.engine_root), *( [existing_pythonpath] if existing_pythonpath else [] )]
+            [
+                str(self.paths.engine_root),
+                str(self.paths.engine_root / "GPT_SoVITS"),
+                *([existing_pythonpath] if existing_pythonpath else []),
+            ]
         )
         self.process = subprocess.Popen(
             command, cwd=self.paths.engine_root, env=process_env,
@@ -142,13 +153,32 @@ class TrainingPipeline:
         for amount, title, script, extra in stages:
             progress(amount, title)
             self._run([str(python), "-s", script], {**common, **extra}, lambda line: progress(amount, line), cancel)
-        phoneme = exp_dir / "2-name2text.txt"; semantic = exp_dir / "6-name2semantic.tsv"
+        # The upstream preparation scripts always suffix their shard number,
+        # even when all_parts=1.  Training consumes the merged names without
+        # that suffix, so materialize those canonical files explicitly.
+        phoneme = exp_dir / "2-name2text.txt"
+        semantic = exp_dir / "6-name2semantic.tsv"
+        self._merge_feature_shards(exp_dir, "2-name2text-*.txt", phoneme, has_header=False)
+        self._merge_feature_shards(exp_dir, "6-name2semantic-*.tsv", semantic, has_header=True)
         if not phoneme.is_file() or not phoneme.stat().st_size or not semantic.is_file() or not semantic.stat().st_size:
             raise RuntimeError("训练特征生成不完整")
         feature_manifest = exp_dir / "feature-manifest.json"
         feature_manifest.write_text(json.dumps({"schema_version": 1, "profile_id": profile_id, "dataset_snapshot_id": snapshot_id, "snapshot_sha256": snapshot_sha256, "list_sha256": payload["list_sha256"], "prepared_at": utc_now(), "feature_files": {"phoneme": str(phoneme), "semantic": str(semantic)}}, ensure_ascii=False, indent=2), encoding="utf-8")
         progress(1.0, "数据集准备完成")
         return feature_manifest
+
+    @staticmethod
+    def _merge_feature_shards(root: Path, pattern: str, destination: Path, has_header: bool) -> None:
+        shards = sorted(item for item in root.glob(pattern) if item.is_file() and item != destination)
+        if not shards:
+            return
+        merged: list[str] = []
+        for index, shard in enumerate(shards):
+            lines = shard.read_text(encoding="utf-8").splitlines()
+            if has_header and index and lines:
+                lines = lines[1:]
+            merged.extend(lines)
+        destination.write_text("\n".join(merged) + "\n", encoding="utf-8")
 
     def train(self, payload: dict, progress: Callable[[float, str], None], cancel: threading.Event) -> list[Path]:
         """Run SoVITS then GPT with pinned upstream default recipes."""
@@ -159,10 +189,11 @@ class TrainingPipeline:
         feature_manifest_path = feature_dir / "feature-manifest.json"
         self._validate_feature_manifest(feature_manifest_path, payload)
         training_run_id = str(payload.get("training_run_id") or uuid4().hex)
-        run_root = self.paths.data_root / "training" / profile_id / snapshot_sha256 / "runs" / training_run_id
+        run_root = self.training_run_root(self.paths.data_root, training_run_id)
         if run_root.exists(): raise RuntimeError("训练运行 ID 已存在；开始新训练时禁止自动恢复旧运行")
         run_exp = run_root / "sovits-exp"; temp = run_root / "configs"; gpt_log_dir = run_root / "gpt-logs"; sovits_log_dir = run_exp / "logs_s2_v2ProPlus"
         self._materialize_feature_view(feature_dir, run_exp); temp.mkdir(parents=True, exist_ok=True)
+        sovits_log_dir.mkdir(parents=True, exist_ok=True); gpt_log_dir.mkdir(parents=True, exist_ok=True)
         checkpoint_dir = Path(payload.get("checkpoint_dir") or (run_root / "checkpoints")).resolve() / training_run_id
         checkpoint_dir.mkdir(parents=True, exist_ok=False)
         run_manifest = run_root / "training-run.json"
@@ -171,7 +202,7 @@ class TrainingPipeline:
         s2_source = engine / "GPT_SoVITS/configs/s2v2ProPlus.json"
         s2 = json.loads(s2_source.read_text(encoding="utf-8"))
         s2["train"].update({
-            "batch_size": int(payload.get("sovits_batch_size", 8)), "epochs": int(payload.get("sovits_epochs", 8)),
+            "batch_size": int(payload.get("sovits_batch_size", 2)), "epochs": int(payload.get("sovits_epochs", 8)),
             "pretrained_s2G": str(engine / "GPT_SoVITS/pretrained_models/v2Pro/s2Gv2ProPlus.pth"),
             "pretrained_s2D": str(engine / "GPT_SoVITS/pretrained_models/v2Pro/s2Dv2ProPlus.pth"),
             "if_save_latest": True, "if_save_every_weights": True, "save_every_epoch": 4,
@@ -194,7 +225,7 @@ class TrainingPipeline:
         s1_source = engine / "GPT_SoVITS/configs/s1longer-v2.yaml"
         s1 = yaml.safe_load(s1_source.read_text(encoding="utf-8"))
         s1["train"].update({
-            "batch_size": int(payload.get("gpt_batch_size", 8)), "epochs": int(payload.get("gpt_epochs", 15)),
+            "batch_size": int(payload.get("gpt_batch_size", 2)), "epochs": int(payload.get("gpt_epochs", 15)),
             "save_every_n_epoch": 5, "if_save_every_weights": True, "if_save_latest": True,
             "half_weights_save_dir": str(checkpoint_dir), "exp_name": exp_name,
         })

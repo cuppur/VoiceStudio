@@ -60,14 +60,25 @@ class WorkerClient(QObject):
         self._diagnostic(f"starting program={str(launch.program)!r} args={launch.arguments!r} source={source_root!r}")
         self.process.start()
 
-    def send(self, command: str, payload: dict | None = None) -> str:
+    def send(self, command: str, payload: dict | None = None, request_id: str | None = None) -> str:
         if self.process.state() != QProcess.Running:
             self.start()
             if not self.process.waitForStarted(5000):
                 raise RuntimeError("无法启动本地工作进程。请进入“设置”安装或修复本地引擎。")
-        request_id = uuid4().hex
+        request_id = request_id or uuid4().hex
         line = json.dumps({"id": request_id, "type": command, "payload": payload or {}}, ensure_ascii=False) + "\n"
-        self.process.write(line.encode("utf-8"))
+        encoded = line.encode("utf-8")
+        accepted = self.process.write(encoded)
+        self._diagnostic(f"send id={request_id} command={command} bytes={len(encoded)} accepted={accepted}")
+        if accepted < 0:
+            raise RuntimeError("无法向本地工作进程发送任务")
+        deadline_ms = 5000
+        while self.process.bytesToWrite() and deadline_ms > 0:
+            if not self.process.waitForBytesWritten(min(250, deadline_ms)):
+                break
+            deadline_ms -= 250
+        if self.process.bytesToWrite():
+            self._diagnostic(f"send pending id={request_id} bytes={self.process.bytesToWrite()}")
         return request_id
 
     def shutdown(self) -> None:

@@ -27,19 +27,33 @@ class WorkerService:
         self.training = TrainingPipeline(self.paths)
         self.profile: dict[str, Any] | None = None
         self.current_thread: threading.Thread | None = None
+        self.current_request_id = ""
+        self._request_context: dict[str, Any] = {}
         self.cancel_event = threading.Event()
         self.write_lock = threading.Lock()
         self.shutdown_event = threading.Event()
 
     def emit(self, request_id: str, event: str, payload: dict[str, Any]) -> None:
+        if request_id == self.current_request_id and self._request_context:
+            payload = {**payload, **self._request_context}
         message = json.dumps({"id": request_id, "type": event, "payload": payload}, ensure_ascii=False)
+        terminal = request_id == self.current_request_id and event in {"result", "error"}
+        if terminal:
+            self.current_request_id = ""
+            self._request_context = {}
         with self.write_lock:
             sys.stdout.write(message + "\n")
             sys.stdout.flush()
+        # Once a terminal event is visible to the UI, the GPU operation has
+        # already returned.  Release the logical slot before the UI queues the
+        # next stage (for example train -> load candidate -> verify).
 
     def handle(self, message: Message) -> None:
         if message.type not in COMMANDS:
             self.emit(message.id, "error", {"message": f"未知命令: {message.type}"})
+            return
+        if message.type in {"health", "load_profile"} and self.current_request_id and self.current_thread and self.current_thread.is_alive():
+            self.emit(message.id, "error", {"message": "已有 GPU 任务正在运行，请等待完成或取消当前任务"})
             return
         if message.type == "health":
             health = self.engine.gpu_health()
@@ -52,10 +66,14 @@ class WorkerService:
             except Exception as exc:
                 self.emit(message.id, "error", {"message": str(exc), "exception": type(exc).__name__})
         elif message.type == "cancel":
+            target = str(message.payload.get("target_request_id", ""))
+            if target and target != self.current_request_id:
+                self.emit(message.id, "result", {"cancel_requested": False, "reason": "目标任务已结束或不是当前任务", "target_request_id": target})
+                return
             self.cancel_event.set()
             self.engine.stop()
             self.training.cancel()
-            self.emit(message.id, "result", {"cancel_requested": True})
+            self.emit(message.id, "result", {"cancel_requested": True, "target_request_id": self.current_request_id})
         elif message.type == "shutdown":
             self.cancel_event.set()
             self.engine.stop()
@@ -63,7 +81,7 @@ class WorkerService:
             self.shutdown_event.set()
             self.emit(message.id, "result", {"shutdown": True})
         else:
-            if self.current_thread and self.current_thread.is_alive():
+            if self.current_request_id and self.current_thread and self.current_thread.is_alive():
                 self.emit(message.id, "error", {"message": "已有 GPU 任务正在运行"})
                 return
             self.cancel_event.clear()
@@ -72,6 +90,8 @@ class WorkerService:
                 "prepare_dataset": self._prepare_dataset,
                 "train": self._train,
             }[message.type]
+            self.current_request_id = message.id
+            self._request_context = {key: message.payload[key] for key in ("workflow_id", "stage", "attempt", "overall_progress") if key in message.payload}
             self.current_thread = threading.Thread(target=self._run_guarded, args=(message.id, target, message.payload), daemon=True)
             self.current_thread.start()
 
@@ -82,6 +102,10 @@ class WorkerService:
             traceback.print_exc(file=sys.stderr)
             event = "cancelled" if self.cancel_event.is_set() else "failed"
             self.emit(request_id, "error", {"message": str(exc), "exception": type(exc).__name__, "status": event})
+        finally:
+            if self.current_request_id == request_id:
+                self.current_request_id = ""
+                self._request_context = {}
 
     def _synthesize(self, request_id: str, payload: dict[str, Any]) -> None:
         if not self.profile:
@@ -183,8 +207,15 @@ class WorkerService:
         return dataset
 
     def _train(self, request_id: str, payload: dict[str, Any]) -> None:
-        if not payload.get("consent_confirmed"):
+        project_manifest = Path(str(payload.get("project_path", ""))) / "project.json"
+        stored_profile: dict[str, Any] | None = None
+        if project_manifest.is_file():
+            project_value = json.loads(project_manifest.read_text(encoding="utf-8"))
+            stored_profile = next((item for item in project_value.get("voice_profiles", []) if str(item.get("id")) == str(payload.get("profile_id"))), None)
+        if not payload.get("consent_confirmed") or not stored_profile or not stored_profile.get("consent_confirmed"):
             raise ValueError("训练前必须确认声音属于本人或已取得明确授权")
+        if not stored_profile.get("consent_confirmed_at") or not stored_profile.get("consent_record"):
+            raise ValueError("授权记录不完整，请在声音配置中重新确认")
         if not payload.get("dataset_snapshot_id"):
             raise ValueError("训练必须使用冻结后的 dataset_snapshot_id")
         if payload.get("training_mode", "new") != "new":
@@ -197,7 +228,7 @@ class WorkerService:
         try:
             outputs = self.training.train(payload, lambda value, message: self.emit(request_id, "progress", {"progress": value, "message": message}), self.cancel_event)
         except Exception as exc:
-            run_manifest = self.paths.data_root / "training" / str(payload["profile_id"]) / str(payload["snapshot_sha256"]) / "runs" / str(payload.get("training_run_id", "")) / "training-run.json"
+            run_manifest = self.training.training_run_root(self.paths.data_root, str(payload.get("training_run_id", ""))) / "training-run.json"
             if run_manifest.is_file():
                 value = json.loads(run_manifest.read_text(encoding="utf-8")); value.update({"status": "cancelled" if self.cancel_event.is_set() else "failed", "completed_at": utc_now(), "error": str(exc)}); run_manifest.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
             raise

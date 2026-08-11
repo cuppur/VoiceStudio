@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .audio import sha256_file
-from .models import DatasetManifest, Job, JobKind, JobStatus, SourceAsset, VoiceProfile, dataset_snapshot_sha256, utc_now
+from .models import DatasetDraft, DatasetManifest, Job, JobKind, JobStatus, ModelVersion, SourceAsset, TrainingWorkflow, VoiceProfile, WorkflowStatus, dataset_snapshot_sha256, utc_now
 from .paths import AppPaths, ensure_within
 
 
@@ -59,7 +59,7 @@ class StudioStore:
             )
             db.execute(
                 "UPDATE jobs SET status = ?, message = ?, updated_at = ? WHERE status = ?",
-                (JobStatus.FAILED.value, "程序上次退出时任务仍在运行，可在生成页恢复", utc_now(), JobStatus.RUNNING.value),
+                (JobStatus.INTERRUPTED.value, "程序上次退出时任务中断，可从对应工作流继续", utc_now(), JobStatus.RUNNING.value),
             )
 
     def get_setting(self, key: str, default: Any = None) -> Any:
@@ -83,9 +83,9 @@ class StudioStore:
         while project.exists() and (project / "project.json").exists():
             project = ensure_within(self.paths.projects_root, self.paths.projects_root / f"{safe}-{index}")
             index += 1
-        for child in ("raw", "processed", "datasets", "checkpoints", "exports"):
+        for child in ("raw", "processed", "datasets", "checkpoints", "exports", "workflows", "drafts"):
             (project / child).mkdir(parents=True, exist_ok=True)
-        payload = {"schema_version": 2, "id": project.name, "name": name, "voice_profiles": [], "source_assets": [], "dataset_snapshots": [], "created_at": utc_now()}
+        payload = {"schema_version": 3, "id": project.name, "name": name, "voice_profiles": [], "source_assets": [], "dataset_snapshots": [], "workflows": [], "created_at": utc_now()}
         self._atomic_json(project / "project.json", payload)
         with self._connect() as db:
             db.execute(
@@ -141,6 +141,15 @@ class StudioStore:
                     profile.source_asset_ids = [item["id"] for item in migrated_assets]
                     result["voice_profiles"].append(profile.to_dict()); result["source_assets"].extend(migrated_assets)
             result["schema_version"] = 2
+        for profile in result.get("voice_profiles", []):
+            profile.setdefault("current_workflow_id", ""); profile.setdefault("last_workflow_id", ""); profile.setdefault("active_model_version_id", ""); profile.setdefault("model_versions", []); profile.setdefault("archived", False)
+            if profile.get("active_gpt_checkpoint") and profile.get("active_sovits_checkpoint") and not profile["model_versions"]:
+                version = ModelVersion(name="已迁移版本", gpt_checkpoint=profile["active_gpt_checkpoint"], sovits_checkpoint=profile["active_sovits_checkpoint"], status="active")
+                profile["model_versions"] = [version.to_dict()]; profile["active_model_version_id"] = version.id
+        result.setdefault("workflows", [])
+        result["schema_version"] = 3
+        if project:
+            for child in ("workflows", "drafts"): (project / child).mkdir(parents=True, exist_ok=True)
         return result
 
     def save_profile(self, project: Path, profile: VoiceProfile) -> None:
@@ -159,6 +168,20 @@ class StudioStore:
     def list_profiles(self, project: Path) -> list[VoiceProfile]:
         return [VoiceProfile.from_dict(dict(item)) for item in self.load_project(project).get("voice_profiles", [])]
 
+    def archive_profile(self, project: Path, profile_id: str) -> None:
+        profile = next((item for item in self.list_profiles(project) if item.id == profile_id), None)
+        if not profile: raise KeyError(profile_id)
+        profile.archived = True; self.save_profile(project, profile)
+
+    def activate_model_version(self, project: Path, profile_id: str, version_id: str) -> VoiceProfile:
+        profile = next((item for item in self.list_profiles(project) if item.id == profile_id), None)
+        if not profile: raise KeyError(profile_id)
+        version = next((item for item in profile.model_versions if item.id == version_id), None)
+        if not version or not Path(version.gpt_checkpoint).is_file() or not Path(version.sovits_checkpoint).is_file(): raise FileNotFoundError("所选声音版本不可用")
+        for item in profile.model_versions:
+            if item.status == "active": item.status = "available"
+        version.status = "active"; profile.active_model_version_id = version.id; profile.active_gpt_checkpoint = version.gpt_checkpoint; profile.active_sovits_checkpoint = version.sovits_checkpoint; profile.default_model_mode = "fine_tuned"; self.save_profile(project, profile); return profile
+
     def save_source_assets(self, project: Path, assets: list[SourceAsset]) -> None:
         project = ensure_within(self.paths.projects_root, project)
         manifest = self.load_project(project)
@@ -172,6 +195,61 @@ class StudioStore:
     def list_source_assets(self, project: Path, profile_id: str | None = None) -> list[SourceAsset]:
         assets = [SourceAsset.from_dict(item) for item in self.load_project(project).get("source_assets", [])]
         return [item for item in assets if not profile_id or item.profile_id == profile_id]
+
+    def remove_source_assets(self, project: Path, asset_ids: set[str], delete_project_copies: bool = True) -> list[SourceAsset]:
+        """Remove imported assets without ever touching their original files."""
+        project = ensure_within(self.paths.projects_root, project)
+        manifest = self.load_project(project)
+        removed = [SourceAsset.from_dict(item) for item in manifest.get("source_assets", []) if item.get("id") in asset_ids]
+        if not removed:
+            return []
+        manifest["source_assets"] = [item for item in manifest.get("source_assets", []) if item.get("id") not in asset_ids]
+        for profile in manifest.get("voice_profiles", []):
+            profile["source_asset_ids"] = [item for item in profile.get("source_asset_ids", []) if item not in asset_ids]
+        self._atomic_json(project / "project.json", manifest)
+        if delete_project_copies:
+            remaining_paths = {str(Path(item.get("project_path", "")).resolve()) for item in manifest["source_assets"] if item.get("project_path")}
+            reference_paths = {str(Path(item.get("path", "")).resolve()) for profile in manifest.get("voice_profiles", []) for item in profile.get("reference_assets", []) if item.get("path")}
+            for asset in removed:
+                try:
+                    copied = ensure_within(project / "raw", Path(asset.project_path))
+                    if str(copied.resolve()) not in remaining_paths | reference_paths and copied.is_file():
+                        copied.unlink()
+                except (OSError, ValueError):
+                    pass
+        return removed
+
+    def save_workflow(self, project: Path, workflow: TrainingWorkflow) -> Path:
+        project = ensure_within(self.paths.projects_root, project); workflow.updated_at = utc_now(); folder = ensure_within(project, project / "workflows"); folder.mkdir(parents=True, exist_ok=True); path = folder / f"{workflow.id}.json"; self._atomic_json(path, workflow.to_dict())
+        manifest = self.load_project(project); summaries = manifest.setdefault("workflows", []); summary = {"id": workflow.id, "voice_profile_id": workflow.voice_profile_id, "stage": workflow.stage.value, "status": workflow.status.value, "updated_at": workflow.updated_at, "path": path.relative_to(project).as_posix()}; summaries[:] = [item for item in summaries if item.get("id") != workflow.id]; summaries.append(summary); self._atomic_json(project / "project.json", manifest); return path
+
+    def load_workflow(self, project: Path, workflow_id: str) -> TrainingWorkflow:
+        project = ensure_within(self.paths.projects_root, project); path = ensure_within(project / "workflows", project / "workflows" / f"{workflow_id}.json"); return TrainingWorkflow.from_dict(json.loads(path.read_text(encoding="utf-8")))
+
+    def list_workflows(self, project: Path, profile_id: str | None = None) -> list[TrainingWorkflow]:
+        project = ensure_within(self.paths.projects_root, project); values = []
+        for path in (project / "workflows").glob("*.json"):
+            try:
+                workflow = TrainingWorkflow.from_dict(json.loads(path.read_text(encoding="utf-8")))
+                if not profile_id or workflow.voice_profile_id == profile_id: values.append(workflow)
+            except (OSError, ValueError, TypeError, json.JSONDecodeError): continue
+        return sorted(values, key=lambda item: item.updated_at, reverse=True)
+
+    def recover_workflows(self, project: Path) -> list[TrainingWorkflow]:
+        workflows = self.list_workflows(project); active_profiles: set[str] = set()
+        for workflow in workflows:
+            if workflow.status == WorkflowStatus.RUNNING:
+                workflow.status = WorkflowStatus.INTERRUPTED; workflow.message = "程序上次退出时流程尚未结束，可点击继续"; self.save_workflow(project, workflow)
+            if workflow.status in {WorkflowStatus.RUNNING, WorkflowStatus.INTERRUPTED, WorkflowStatus.WAITING}: active_profiles.add(workflow.voice_profile_id)
+        for profile in self.list_profiles(project):
+            if profile.training_state and profile.id not in active_profiles: profile.training_state = ""; self.save_profile(project, profile)
+        return workflows
+
+    def save_draft(self, project: Path, draft: DatasetDraft) -> Path:
+        project = ensure_within(self.paths.projects_root, project); draft.updated_at = utc_now(); folder = ensure_within(project, project / "drafts"); folder.mkdir(parents=True, exist_ok=True); path = folder / f"{draft.id}.json"; self._atomic_json(path, draft.to_dict()); return path
+
+    def load_draft(self, project: Path, draft_id: str) -> DatasetDraft:
+        project = ensure_within(self.paths.projects_root, project); path = ensure_within(project / "drafts", project / "drafts" / f"{draft_id}.json"); return DatasetDraft.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
     def cleanup_preparation_runs(self, project: Path, profile_id: str) -> list[str]:
         project = ensure_within(self.paths.projects_root, project); protected: set[str] = set()

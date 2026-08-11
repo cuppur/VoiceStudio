@@ -2,8 +2,15 @@ param([switch]$SkipInstaller)
 
 $ErrorActionPreference = "Stop"
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-$python = "C:\Users\cruelworld\AppData\Local\Programs\Python\Python310\python.exe"
-if (-not (Test-Path -LiteralPath $python)) { $python = (Get-Command python).Source }
+$python = @(
+    (Join-Path $repoRoot ".venv310\Scripts\python.exe"),
+    (Join-Path $repoRoot ".venv\Scripts\python.exe")
+) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+if (-not $python) {
+    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $pythonCommand) { throw "Python 3.10 or newer was not found" }
+    $python = $pythonCommand.Source
+}
 Push-Location $repoRoot
 try {
     & $python -m pip install -e ".[dev]"

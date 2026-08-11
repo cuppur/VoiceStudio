@@ -293,10 +293,44 @@ try {
         Set-Content -LiteralPath $dependenciesMarker -Value (Get-Date).ToString("o") -Encoding Ascii
         Complete-Step 4 "GPT-SoVITS 依赖已安装"
     }
+    # ModelScope itself can be present after a no-deps upstream install while
+    # the denoise pipeline is still unusable.  Validate the exact import used
+    # by cmd-denoise.py and repair only its missing runtime dependencies.
+    & $envPython -X utf8 -W ignore -c "import addict, datasets, simplejson, sortedcontainers; from modelscope.pipelines import pipeline"
+    if ($LASTEXITCODE -ne 0) {
+        & $envPython -m pip install "addict==2.4.0" "datasets>=2.16,<4" "simplejson>=3.19,<5" "sortedcontainers==2.4.0"
+        if ($LASTEXITCODE -ne 0) { throw "智能降噪依赖安装失败" }
+        & $envPython -X utf8 -W ignore -c "import simplejson, sortedcontainers; from modelscope.pipelines import pipeline"
+        if ($LASTEXITCODE -ne 0) { throw "智能降噪依赖导入验证失败" }
+    }
 
     Start-Step 5 "安装 FFmpeg 与预训练模型"
     $modelsMarker = Join-Path $runtimeRoot ".models-complete"
-    $modelsReady = (Test-Path -LiteralPath $modelsMarker) -and (Test-Path -LiteralPath (Join-Path $engineRoot "GPT_SoVITS\pretrained_models\sv")) -and (Test-Path -LiteralPath (Join-Path $engineRoot "GPT_SoVITS\text\G2PWModel"))
+    $coreModelsReady = (Test-Path -LiteralPath $modelsMarker) -and (Test-Path -LiteralPath (Join-Path $engineRoot "GPT_SoVITS\pretrained_models\sv")) -and (Test-Path -LiteralPath (Join-Path $engineRoot "GPT_SoVITS\text\G2PWModel"))
+    $uvrWeights = Join-Path $engineRoot "tools\uvr5\uvr5_weights"
+    $uvrReady = @(Get-ChildItem -LiteralPath $uvrWeights -File -Filter "*.pth" -ErrorAction SilentlyContinue).Count -gt 0
+    if ($coreModelsReady -and $DownloadUVR5 -and -not $uvrReady) {
+        Write-Host "[Download] 首次使用智能优化，正在按需安装 UVR5 人声分离模型"
+        $uvrUrls = @{
+            "HF" = "https://huggingface.co/XXXXRT/GPT-SoVITS-Pretrained/resolve/main/uvr5_weights.zip"
+            "HF-Mirror" = "https://hf-mirror.com/XXXXRT/GPT-SoVITS-Pretrained/resolve/main/uvr5_weights.zip"
+            "ModelScope" = "https://www.modelscope.cn/models/XXXXRT/GPT-SoVITS-Pretrained/resolve/master/uvr5_weights.zip"
+        }
+        $uvrArchive = Join-Path $cacheRoot "uvr5_weights.zip"
+        Invoke-RobustDownload -Uri $uvrUrls[$Source] -Destination $uvrArchive -Validator ${function:Test-ZipReadable}
+        $uvrExtract = Join-Path $cacheRoot ("uvr5-extract-" + [Guid]::NewGuid().ToString("N"))
+        New-Item -ItemType Directory -Force -Path $uvrExtract, $uvrWeights | Out-Null
+        try {
+            [IO.Compression.ZipFile]::ExtractToDirectory($uvrArchive, $uvrExtract)
+            $downloadedWeights = @(Get-ChildItem -LiteralPath $uvrExtract -Recurse -File -Filter "*.pth")
+            if ($downloadedWeights.Count -eq 0) { throw "UVR5 压缩包中没有模型权重" }
+            foreach ($weight in $downloadedWeights) { Copy-Item -LiteralPath $weight.FullName -Destination (Join-Path $uvrWeights $weight.Name) -Force }
+        } finally {
+            if (Test-Path -LiteralPath $uvrExtract) { Remove-Item -LiteralPath $uvrExtract -Recurse -Force }
+        }
+        $uvrReady = @(Get-ChildItem -LiteralPath $uvrWeights -File -Filter "*.pth").Count -gt 0
+    }
+    $modelsReady = $coreModelsReady -and (-not $DownloadUVR5 -or $uvrReady)
     if ($modelsReady) {
         Complete-Step 5 "FFmpeg 与预训练模型已存在，已跳过" -Skipped
     } else {

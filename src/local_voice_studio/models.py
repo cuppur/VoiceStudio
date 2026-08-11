@@ -23,9 +23,30 @@ class JobKind(str, Enum):
 class JobStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
+    INTERRUPTED = "interrupted"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+class WorkflowStage(str, Enum):
+    IMPORTING = "importing"
+    PREPROCESSING = "preprocessing"
+    REVIEW_REQUIRED = "review_required"
+    FREEZING = "freezing"
+    FEATURE_PREPARING = "feature_preparing"
+    TRAINING = "training"
+    VERIFYING = "verifying"
+    SAVED = "saved"
+
+
+class WorkflowStatus(str, Enum):
+    WAITING = "waiting"
+    RUNNING = "running"
+    INTERRUPTED = "interrupted"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    COMPLETED = "completed"
 
 
 @dataclass
@@ -70,6 +91,28 @@ class SourceAsset:
 
 
 @dataclass
+class ModelVersion:
+    name: str = "训练版本"
+    id: str = field(default_factory=lambda: uuid4().hex)
+    training_run_id: str = ""
+    dataset_snapshot_id: str = ""
+    snapshot_sha256: str = ""
+    gpt_checkpoint: str = ""
+    sovits_checkpoint: str = ""
+    preview_outputs: list[str] = field(default_factory=list)
+    status: str = "available"
+    created_at: str = field(default_factory=utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "ModelVersion":
+        allowed = cls.__dataclass_fields__
+        return cls(**{key: item for key, item in value.items() if key in allowed})
+
+
+@dataclass
 class VoiceProfile:
     name: str
     consent_confirmed: bool
@@ -93,6 +136,11 @@ class VoiceProfile:
     ab_status: str = "none"
     ab_base_outputs: list[str] = field(default_factory=list)
     ab_tuned_outputs: list[str] = field(default_factory=list)
+    current_workflow_id: str = ""
+    last_workflow_id: str = ""
+    active_model_version_id: str = ""
+    model_versions: list[ModelVersion] = field(default_factory=list)
+    archived: bool = False
     consent_record: str = ""
     consent_confirmed_at: str = ""
     created_at: str = field(default_factory=utc_now)
@@ -105,8 +153,9 @@ class VoiceProfile:
     def from_dict(cls, value: dict[str, Any]) -> "VoiceProfile":
         value = dict(value)
         refs = [ReferenceAsset(**item) for item in value.pop("reference_assets", [])]
+        versions = [ModelVersion.from_dict(item) for item in value.pop("model_versions", [])]
         allowed = cls.__dataclass_fields__
-        return cls(reference_assets=refs, **{key: item for key, item in value.items() if key in allowed})
+        return cls(reference_assets=refs, model_versions=versions, **{key: item for key, item in value.items() if key in allowed})
 
     def status(self, assets: list["SourceAsset"] | None = None) -> str:
         if not self.consent_confirmed: return "待确认授权"
@@ -190,6 +239,91 @@ class DatasetManifest:
         if any(s.approved and s.included and not s.text.strip() for s in self.segments):
             return False, "存在已通过但没有文本的片段"
         return True, "可以训练"
+
+
+@dataclass
+class DatasetDraftSegment:
+    audio_relative_path: str
+    start_seconds: float
+    end_seconds: float
+    language: str = "zh"
+    asr_text: str = ""
+    text: str = ""
+    quality_flags: list[str] = field(default_factory=list)
+    included: bool = True
+    human_confirmed: bool = False
+    id: str = field(default_factory=lambda: uuid4().hex)
+
+    @property
+    def duration_seconds(self) -> float:
+        return max(0.0, self.end_seconds - self.start_seconds)
+
+
+@dataclass
+class DatasetDraft:
+    workflow_id: str
+    voice_profile_id: str
+    preparation_id: str
+    segments: list[DatasetDraftSegment] = field(default_factory=list)
+    id: str = field(default_factory=lambda: uuid4().hex)
+    created_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
+
+    @property
+    def confirmed_seconds(self) -> float:
+        return sum(item.duration_seconds for item in self.segments if item.included and item.human_confirmed and item.text.strip() and not item.quality_flags)
+
+    @property
+    def eligible_seconds(self) -> float:
+        return sum(item.duration_seconds for item in self.segments if item.included and item.text.strip() and not item.quality_flags)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "DatasetDraft":
+        value = dict(value); fields = DatasetDraftSegment.__dataclass_fields__
+        segments = [DatasetDraftSegment(**{key: item for key, item in segment.items() if key in fields}) for segment in value.pop("segments", [])]
+        allowed = cls.__dataclass_fields__
+        return cls(segments=segments, **{key: item for key, item in value.items() if key in allowed})
+
+
+@dataclass
+class TrainingWorkflow:
+    voice_profile_id: str
+    voice_name: str
+    source_asset_ids: list[str] = field(default_factory=list)
+    id: str = field(default_factory=lambda: uuid4().hex)
+    stage: WorkflowStage = WorkflowStage.IMPORTING
+    status: WorkflowStatus = WorkflowStatus.WAITING
+    preparation_id: str = ""
+    draft_id: str = ""
+    dataset_snapshot_id: str = ""
+    snapshot_sha256: str = ""
+    feature_manifest: str = ""
+    training_run_id: str = ""
+    candidate_gpt_checkpoint: str = ""
+    candidate_sovits_checkpoint: str = ""
+    verification_outputs: list[str] = field(default_factory=list)
+    waiting_reason: str = ""
+    progress: float = 0.0
+    message: str = ""
+    error: str = ""
+    attempt: int = 0
+    processing_options: dict[str, Any] = field(default_factory=dict)
+    consent_record: str = ""
+    consent_confirmed_at: str = ""
+    created_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        value = asdict(self); value["stage"] = self.stage.value; value["status"] = self.status.value; return value
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "TrainingWorkflow":
+        value = dict(value); value["stage"] = WorkflowStage(value.get("stage", WorkflowStage.IMPORTING.value)); value["status"] = WorkflowStatus(value.get("status", WorkflowStatus.WAITING.value))
+        allowed = cls.__dataclass_fields__
+        return cls(**{key: item for key, item in value.items() if key in allowed})
 
 
 def dataset_snapshot_sha256(dataset: DatasetManifest | dict[str, Any]) -> str:

@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 
 from ..paths import AppPaths
 from ..storage import StudioStore
-from .pages import GeneratePage, HistoryPage, SettingsPage, TrainingPage, VoiceLibraryPage
+from .simple_pages import MyVoicesPage, OneClickGeneratePage, OneClickTrainingPage, SimpleSettingsPage, TaskCenterDialog
 from .worker_client import WorkerClient
 
 
@@ -89,21 +89,30 @@ class SetupDialog(QDialog):
 
 class MainWindow(QMainWindow):
     def __init__(self, paths: AppPaths, store: StudioStore):
-        super().__init__(); self.paths, self.store = paths, store; self.setWindowTitle("本地声音工坊"); self.resize(1180, 780); self.setMinimumSize(960, 640)
+        super().__init__(); self.paths, self.store = paths, store; self.setWindowTitle("VoiceStudio 本地声音工坊"); self.resize(1180, 780); self.setMinimumSize(900, 620)
         projects = store.list_projects(); self.project = Path(projects[0]["path"]) if projects else store.create_project("默认项目")
         self.client = WorkerClient(paths, self); self._build(); self.client.start(); self.statusBar().showMessage("本地工作进程正在启动……")
         self.client.state_changed.connect(self._state); self.client.event.connect(self._worker_event)
 
     def _build(self) -> None:
         central = QWidget(); root = QHBoxLayout(central); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0); self.setCentralWidget(central)
-        sidebar = QWidget(); sidebar.setObjectName("sidebar"); sidebar.setFixedWidth(190); side_layout = QVBoxLayout(sidebar); brand = QLabel("本地声音工坊"); brand.setObjectName("brand"); side_layout.addWidget(brand); project = QLabel(self.project.name); project.setObjectName("projectName"); side_layout.addWidget(project)
-        self.navigation = QListWidget(); self.navigation.setObjectName("navigation"); self.navigation.setFrameShape(QListWidget.NoFrame); side_layout.addWidget(self.navigation); version = QLabel("GPT-SoVITS V2ProPlus\n本机离线 · 无遥测"); version.setObjectName("sidebarFoot"); side_layout.addWidget(version); root.addWidget(sidebar)
+        sidebar = QWidget(); sidebar.setObjectName("sidebar"); sidebar.setFixedWidth(190); side_layout = QVBoxLayout(sidebar); brand = QLabel("VoiceStudio"); brand.setObjectName("brand"); side_layout.addWidget(brand); project = QLabel(self.project.name); project.setObjectName("projectName"); side_layout.addWidget(project)
+        self.navigation = QListWidget(); self.navigation.setObjectName("navigation"); self.navigation.setFrameShape(QListWidget.NoFrame); side_layout.addWidget(self.navigation); task_center = QPushButton("任务中心"); task_center.setObjectName("sidebarButton"); task_center.clicked.connect(self._open_task_center); side_layout.addWidget(task_center); version = QLabel("GPT-SoVITS V2ProPlus\n完全本地 · 无遥测"); version.setObjectName("sidebarFoot"); side_layout.addWidget(version); root.addWidget(sidebar)
         self.stack = QStackedWidget(); root.addWidget(self.stack, 1)
-        self.generate_page = GeneratePage(self.store, self.project, self.client); self.voice_page = VoiceLibraryPage(self.store, self.project, self.client); self.training_page = TrainingPage(self.store, self.project, self.client); self.history_page = HistoryPage(self.store); self.settings_page = SettingsPage(self.paths, self.client)
-        pages = [("生成语音", self.generate_page), ("声音库", self.voice_page), ("数据与训练", self.training_page), ("任务历史", self.history_page), ("设置", self.settings_page)]
+        self.training_page = OneClickTrainingPage(self.store, self.project, self.client); self.voice_page = MyVoicesPage(self.store, self.project); self.generate_page = OneClickGeneratePage(self.store, self.project, self.client); self.settings_page = SimpleSettingsPage(self.paths, self.store, self.project, self.client)
+        pages = [("一键训练", self.training_page), ("我的声音", self.voice_page), ("一键生成", self.generate_page), ("设置", self.settings_page)]
         for name, page in pages: self.navigation.addItem(QListWidgetItem(name)); self.stack.addWidget(page)
         self.navigation.currentRowChanged.connect(self.stack.setCurrentIndex); self.navigation.setCurrentRow(0)
-        self.voice_page.profiles_changed.connect(self.generate_page.refresh_profiles); self.voice_page.profiles_changed.connect(self.training_page.refresh_profiles); self.training_page.profiles_changed.connect(self.generate_page.refresh_profiles); self.training_page.profiles_changed.connect(self.voice_page.refresh_profiles); self.voice_page.open_training_requested.connect(lambda: self.navigation.setCurrentRow(2)); self.generate_page.job_created.connect(lambda _: self.history_page.refresh()); self.training_page.job_created.connect(lambda _: self.history_page.refresh()); self.settings_page.install_requested.connect(self._open_setup)
+        self.voice_page.profiles_changed.connect(self.generate_page.refresh_profiles); self.training_page.profiles_changed.connect(self.generate_page.refresh_profiles); self.training_page.profiles_changed.connect(self.voice_page.refresh); self.voice_page.generate_requested.connect(self._use_profile); self.voice_page.retrain_requested.connect(self._retrain_profile); self.generate_page.train_requested.connect(lambda: self.navigation.setCurrentRow(0)); self.settings_page.install_requested.connect(self._open_setup)
+
+    def _open_task_center(self) -> None:
+        TaskCenterDialog(self.store, self).exec()
+
+    def _use_profile(self, profile_id: str) -> None:
+        self.generate_page.select_profile(profile_id); self.navigation.setCurrentRow(2)
+
+    def _retrain_profile(self, profile_id: str) -> None:
+        self.training_page.reset_for_profile(profile_id); self.navigation.setCurrentRow(0)
 
     def _script_path(self) -> Path:
         if getattr(sys, "frozen", False):
@@ -132,12 +141,23 @@ QMainWindow, QStackedWidget { background: #f6f8fc; }
 #brand { color: white; font-size: 21px; font-weight: 700; padding: 20px 14px 4px 14px; }
 #projectName { color: #9fb0cc; padding: 0 14px 16px 14px; }
 #sidebarFoot { color: #8394b2; padding: 16px; font-size: 12px; }
+#sidebarButton { margin: 4px 12px; background: #23314d; color: #dbe7f8; border-color: #344563; }
 #navigation { background: transparent; color: #cbd6e8; outline: none; }
 #navigation::item { padding: 13px 18px; margin: 2px 8px; border-radius: 7px; }
 #navigation::item:selected { background: #2d6cdf; color: white; }
 QStackedWidget > QWidget { background: #f6f8fc; }
 #pageTitle { font-size: 26px; font-weight: 700; color: #111827; margin-bottom: 8px; }
 #hint { color: #667085; }
+#dropArea { background: #f8fbff; border: 2px dashed #9bb9e9; border-radius: 10px; }
+#dropTitle { color: #245fc8; font-size: 17px; font-weight: 600; }
+#voiceCard, #healthCard { background: white; border: 1px solid #d7deea; border-radius: 10px; }
+#cardTitle { font-size: 18px; font-weight: 700; color: #111827; }
+#statusChip { color: #166534; background: #dcfce7; border-radius: 9px; padding: 3px 9px; }
+#emptyState { color: #667085; font-size: 18px; padding: 32px; }
+#stepPending, #stepActive, #stepDone { border-radius: 8px; padding: 8px; }
+#stepPending { background: #e9edf4; color: #7b8494; }
+#stepActive { background: #dbeafe; color: #1d4ed8; font-weight: 700; }
+#stepDone { background: #dcfce7; color: #166534; }
 #recordPrompt { background: white; border: 1px solid #d7deea; border-radius: 8px; padding: 20px; font-size: 18px; }
 QLineEdit, QPlainTextEdit, QTextBrowser, QComboBox, QSpinBox, QDoubleSpinBox, QTableWidget { background: white; border: 1px solid #d7deea; border-radius: 6px; padding: 6px; selection-background-color: #2d6cdf; }
 QGroupBox { border: 1px solid #d7deea; border-radius: 8px; margin-top: 12px; padding: 12px; background: white; }

@@ -111,6 +111,17 @@ class StorageTests(unittest.TestCase):
             self.assertTrue(store.load_dataset_snapshot(project, dataset.id).can_train()[0])
             summary_path = store.load_project(project)["dataset_snapshots"][0]["path"]; self.assertFalse(Path(summary_path).is_absolute())
 
+    def test_remove_source_asset_deletes_only_project_copy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); paths = AppPaths(root / "data", root / "projects", root / "runtime", root / "engine", root / "models", root / "logs", root / "data/db.sqlite3"); store = StudioStore(paths); project = store.create_project("remove")
+            original = root / "original.wav"; write_wav(original)
+            copied = project / "raw" / "voice" / "copy.wav"; copied.parent.mkdir(parents=True); shutil.copy2(original, copied)
+            profile = VoiceProfile("voice", True, id="voice"); asset = SourceAsset(profile.id, str(original), str(copied), sha256_file(copied)); profile.source_asset_ids = [asset.id]
+            store.save_profile(project, profile); store.save_source_assets(project, [asset])
+            removed = store.remove_source_assets(project, {asset.id})
+            self.assertEqual([item.id for item in removed], [asset.id]); self.assertTrue(original.is_file()); self.assertFalse(copied.exists())
+            self.assertFalse(store.list_source_assets(project)); self.assertFalse(store.list_profiles(project)[0].source_asset_ids)
+
     def test_snapshot_survives_project_move_and_rejects_tampering(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); paths = AppPaths(root / "data", root / "projects-a", root / "runtime", root / "engine", root / "models", root / "logs", root / "data/db.sqlite3"); store = StudioStore(paths); project = store.create_project("可迁移")
@@ -136,7 +147,7 @@ class StorageTests(unittest.TestCase):
     def test_legacy_reference_migration(self):
         legacy = {"schema_version": 1, "voice_profiles": [{"id": "p", "name": "旧声音", "consent_confirmed": True, "reference_assets": [{"path": "旧.wav", "sha256": "h", "transcript": "你好", "approved": True}]}]}
         migrated = StudioStore._migrate_project(legacy)
-        self.assertEqual(migrated["schema_version"], 2); self.assertEqual(len(migrated["source_assets"]), 1); self.assertTrue(migrated["voice_profiles"][0]["source_asset_ids"])
+        self.assertEqual(migrated["schema_version"], 3); self.assertEqual(len(migrated["source_assets"]), 1); self.assertTrue(migrated["voice_profiles"][0]["source_asset_ids"]); self.assertIn("workflows", migrated)
 
 
 class RuntimeResolverTests(unittest.TestCase):
@@ -185,6 +196,19 @@ class WorkerIntegrationTests(unittest.TestCase):
             first = root / "runs" / "one" / "sovits-exp"; second = root / "runs" / "two" / "sovits-exp"; TrainingPipeline._materialize_feature_view(features, first); (first / "logs_s2_v2ProPlus").mkdir(); (first / "logs_s2_v2ProPlus" / "old.ckpt").write_bytes(b"old")
             TrainingPipeline._materialize_feature_view(features, second)
             self.assertTrue((second / "2-name2text.txt").is_file()); self.assertFalse((second / "logs_s2_v2ProPlus").exists()); self.assertFalse((second / "feature-manifest.json").exists())
+
+    def test_feature_shards_are_merged_to_training_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "2-name2text-0.txt").write_text("one\n", encoding="utf-8")
+            (root / "2-name2text-1.txt").write_text("two\n", encoding="utf-8")
+            TrainingPipeline._merge_feature_shards(root, "2-name2text-*.txt", root / "2-name2text.txt", False)
+            self.assertEqual((root / "2-name2text.txt").read_text(encoding="utf-8"), "one\ntwo\n")
+            (root / "6-name2semantic-0.tsv").write_text("name\tsemantic\na\t1\n", encoding="utf-8")
+            (root / "6-name2semantic-1.tsv").write_text("name\tsemantic\nb\t2\n", encoding="utf-8")
+            TrainingPipeline._merge_feature_shards(root, "6-name2semantic-*.tsv", root / "6-name2semantic.tsv", True)
+            self.assertEqual((root / "6-name2semantic.tsv").read_text(encoding="utf-8"), "name\tsemantic\na\t1\nb\t2\n")
+            self.assertEqual(TrainingPipeline.training_run_root(root, "run-id"), root.resolve() / "train-runs" / "run-id")
 
     def test_frozen_snapshot_rejects_modified_audio_and_list(self):
         with tempfile.TemporaryDirectory() as tmp:
