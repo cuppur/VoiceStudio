@@ -11,7 +11,7 @@ from typing import Callable
 from uuid import uuid4
 
 from .models import utc_now
-from .paths import AppPaths
+from .paths import AppPaths, ensure_within, validate_id, validate_sha256
 
 
 class TrainingPipeline:
@@ -32,8 +32,11 @@ class TrainingPipeline:
     @staticmethod
     def preparation_paths(project: Path, profile_id: str, preparation_id: str) -> dict[str, Path]:
         """Return paths owned by one immutable preparation run."""
-        run_root = project.resolve() / "processed" / profile_id / "runs" / preparation_id
-        working_root = project.resolve() / "datasets" / "working" / profile_id / preparation_id
+        project = project.resolve()
+        validate_id(profile_id, legacy=True, field="profile_id")
+        validate_id(preparation_id, legacy=True, field="preparation_id")
+        run_root = ensure_within(project, project / "processed" / profile_id / "runs" / preparation_id)
+        working_root = ensure_within(project, project / "datasets" / "working" / profile_id / preparation_id)
         return {
             "run_root": run_root,
             "normalized": run_root / "normalized",
@@ -48,7 +51,8 @@ class TrainingPipeline:
         # Keep this deliberately short. Upstream feature names include the
         # complete sliced-audio filename and otherwise exceed MAX_PATH on
         # standard Windows installations.
-        return data_root.resolve() / "train-runs" / training_run_id
+        validate_id(training_run_id, legacy=True, field="training_run_id")
+        return ensure_within(data_root.resolve(), data_root.resolve() / "train-runs" / training_run_id)
 
     def _run(self, command: list[str], env: dict[str, str], log: Callable[[str], None], cancel: threading.Event) -> None:
         process_env = {**os.environ, **env}
@@ -64,7 +68,6 @@ class TrainingPipeline:
         ]
         process_env["PATH"] = os.pathsep.join(
             [str(item) for item in path_entries if item.exists()]
-            + [process_env.get("PATH", "")]
         )
         process_env["PYTHONUTF8"] = "1"
         process_env["PYTHONIOENCODING"] = "utf-8"
@@ -126,7 +129,7 @@ class TrainingPipeline:
                 return lists[0] if lists else output_dir
             return output_dir
         exp_name = payload["experiment_name"]
-        profile_id = str(payload["profile_id"]); snapshot_id = str(payload["dataset_snapshot_id"]); snapshot_sha256 = str(payload["snapshot_sha256"])
+        profile_id = validate_id(str(payload["profile_id"]), legacy=True, field="profile_id"); snapshot_id = validate_id(str(payload["dataset_snapshot_id"]), legacy=True, field="dataset_snapshot_id"); snapshot_sha256 = validate_sha256(str(payload["snapshot_sha256"]), field="snapshot_sha256")
         exp_dir = self.paths.data_root / "training" / profile_id / snapshot_sha256 / "features"
         exp_dir.mkdir(parents=True, exist_ok=True)
         list_path = exp_dir / "runtime.list"
@@ -184,17 +187,18 @@ class TrainingPipeline:
         """Run SoVITS then GPT with pinned upstream default recipes."""
         python = self.paths.private_python
         engine = self.paths.engine_root
-        exp_name = payload["experiment_name"]; profile_id = str(payload["profile_id"]); snapshot_id = str(payload["dataset_snapshot_id"]); snapshot_sha256 = str(payload["snapshot_sha256"])
+        exp_name = payload["experiment_name"]; profile_id = validate_id(str(payload["profile_id"]), legacy=True, field="profile_id"); snapshot_id = validate_id(str(payload["dataset_snapshot_id"]), legacy=True, field="dataset_snapshot_id"); snapshot_sha256 = validate_sha256(str(payload["snapshot_sha256"]), field="snapshot_sha256")
         feature_dir = self.paths.data_root / "training" / profile_id / snapshot_sha256 / "features"
         feature_manifest_path = feature_dir / "feature-manifest.json"
         self._validate_feature_manifest(feature_manifest_path, payload)
-        training_run_id = str(payload.get("training_run_id") or uuid4().hex)
+        training_run_id = validate_id(str(payload.get("training_run_id") or uuid4().hex), legacy=True, field="training_run_id")
         run_root = self.training_run_root(self.paths.data_root, training_run_id)
         if run_root.exists(): raise RuntimeError("训练运行 ID 已存在；开始新训练时禁止自动恢复旧运行")
         run_exp = run_root / "sovits-exp"; temp = run_root / "configs"; gpt_log_dir = run_root / "gpt-logs"; sovits_log_dir = run_exp / "logs_s2_v2ProPlus"
         self._materialize_feature_view(feature_dir, run_exp); temp.mkdir(parents=True, exist_ok=True)
         sovits_log_dir.mkdir(parents=True, exist_ok=True); gpt_log_dir.mkdir(parents=True, exist_ok=True)
-        checkpoint_dir = Path(payload.get("checkpoint_dir") or (run_root / "checkpoints")).resolve() / training_run_id
+        project = ensure_within(self.paths.projects_root, Path(str(payload["project_path"])))
+        checkpoint_dir = ensure_within(project / "checkpoints", project / "checkpoints" / profile_id / training_run_id)
         checkpoint_dir.mkdir(parents=True, exist_ok=False)
         run_manifest = run_root / "training-run.json"
         run_value = {"training_run_id": training_run_id, "profile_id": profile_id, "dataset_snapshot_id": snapshot_id, "snapshot_sha256": snapshot_sha256, "mode": "new", "status": "running", "started_at": utc_now(), "completed_at": "", "sovits_log_dir": str(sovits_log_dir), "gpt_log_dir": str(gpt_log_dir), "checkpoint_dir": str(checkpoint_dir), "candidate_gpt_checkpoint": "", "candidate_sovits_checkpoint": ""}
@@ -274,13 +278,13 @@ class TrainingPipeline:
 
     def _prepare_source_assets(self, payload: dict, progress: Callable[[float, str], None], cancel: threading.Event) -> Path:
         """Normalize selected SourceAssets, run the upstream slicer and local ASR."""
-        profile_id = str(payload["profile_id"])
-        preparation_id = str(payload.get("preparation_id") or uuid4().hex)
+        profile_id = validate_id(str(payload["profile_id"]), legacy=True, field="profile_id")
+        preparation_id = validate_id(str(payload.get("preparation_id") or uuid4().hex), legacy=True, field="preparation_id")
         selected = set(payload.get("source_asset_ids") or [])
         assets = [item for item in payload.get("source_assets", []) if item.get("id") in selected and item.get("enabled", True) and not item.get("duplicate_of")]
         if not assets:
             raise ValueError("没有可处理的非重复素材")
-        project = Path(payload["project_path"]).resolve()
+        project = ensure_within(self.paths.projects_root, Path(payload["project_path"]))
         paths = self.preparation_paths(project, profile_id, preparation_id)
         run_root = paths["run_root"]; processed = paths["normalized"]; sliced = paths["segments"]
         working_root = paths["working_root"]; asr_output = paths["asr"]
@@ -297,7 +301,12 @@ class TrainingPipeline:
             if cancel.is_set(): raise RuntimeError("任务已取消")
             source = Path(asset.get("project_path") or asset.get("original_path", ""))
             if not source.is_file(): raise FileNotFoundError(f"素材不存在：{source}")
-            digest = hashlib.sha256(source.read_bytes()).hexdigest()
+            digest_state = hashlib.sha256()
+            with source.open("rb") as stream:
+                for block in iter(lambda: stream.read(1024 * 1024), b""):
+                    if cancel.is_set(): raise RuntimeError("任务已取消")
+                    digest_state.update(block)
+            digest = digest_state.hexdigest()
             if digest != asset.get("sha256"): raise ValueError(f"素材哈希不一致：{source.name}")
             target = processed / f"{asset['id']}.wav"
             command = [str(ffmpeg), "-y", "-i", str(source), "-vn", "-ac", "1", "-ar", "32000", "-c:a", "pcm_s16le", str(target)]

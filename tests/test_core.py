@@ -73,7 +73,7 @@ class ModelTests(unittest.TestCase):
 
     def test_package_version_matches_project_version(self):
         pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
-        self.assertEqual(__version__, "0.2.0")
+        self.assertEqual(__version__, "0.3.0")
         self.assertIn(f'version = "{__version__}"', pyproject)
 
 

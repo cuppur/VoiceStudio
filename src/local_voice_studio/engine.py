@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import io
 import os
 import shutil
 import subprocess
@@ -15,6 +17,34 @@ from .paths import AppPaths
 
 class EngineNotReady(RuntimeError):
     pass
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def safe_torch_load(source, *args, **kwargs):
+    """Restricted checkpoint loader, including the V2ProPlus two-byte ZIP header."""
+    import torch
+    loader = kwargs.pop("_loader", torch.load)
+    if kwargs.get("weights_only") is False:
+        raise ValueError("拒绝 weights_only=False 的不安全模型加载")
+    kwargs["weights_only"] = True
+    actual_source = source
+    if isinstance(source, (str, os.PathLike, Path)):
+        data = Path(source).read_bytes()
+        if len(data) >= 4 and data[:2] != b"PK" and data[2:4] == b"\x03\x04":
+            actual_source = io.BytesIO(b"PK" + data[2:])
+    try:
+        from utils import HParams
+    except (ImportError, AttributeError):
+        return loader(actual_source, *args, **kwargs)
+    with torch.serialization.safe_globals([HParams]):
+        return loader(actual_source, *args, **kwargs)
 
 
 class GptSovitsEngine:
@@ -103,6 +133,14 @@ class GptSovitsEngine:
         pretrained = self.paths.engine_root / "GPT_SoVITS" / "pretrained_models"
         gpt = profile.get("active_gpt_checkpoint") or str(pretrained / "s1v3.ckpt")
         sovits = profile.get("active_sovits_checkpoint") or str(pretrained / "v2Pro" / "s2Gv2ProPlus.pth")
+        if profile.get("active_gpt_checkpoint") or profile.get("active_sovits_checkpoint"):
+            expected_gpt = str(profile.get("active_gpt_sha256") or "")
+            expected_sovits = str(profile.get("active_sovits_sha256") or "")
+            trust = str(profile.get("active_model_trust_status") or "")
+            if len(expected_gpt) != 64 or len(expected_sovits) != 64 or trust not in {"verified", "trusted-local"}:
+                raise EngineNotReady("当前模型缺少可信哈希登记，已拒绝加载")
+            if _file_sha256(Path(gpt)) != expected_gpt or _file_sha256(Path(sovits)) != expected_sovits:
+                raise EngineNotReady("当前模型文件已被替换，已拒绝加载")
         device = "cpu" if force_cpu else "cuda"
         key = (gpt, sovits, device)
         if self._tts is not None and self._loaded_key == key:
@@ -115,19 +153,31 @@ class GptSovitsEngine:
             if str(item) not in sys.path:
                 sys.path.insert(0, str(item))
         with contextlib.redirect_stdout(sys.stderr):
-            from GPT_SoVITS.TTS_infer_pack.TTS import TTS, TTS_Config
-            config = {
-                "custom": {
-                    "device": device,
-                    "is_half": not force_cpu,
-                    "version": "v2ProPlus",
-                    "t2s_weights_path": gpt,
-                    "vits_weights_path": sovits,
-                    "bert_base_path": str(pretrained / "chinese-roberta-wwm-ext-large"),
-                    "cnhuhbert_base_path": str(pretrained / "chinese-hubert-base"),
+            import torch
+            original_torch_load = torch.load
+            def restricted_load(source, *args, **kwargs):
+                if kwargs.get("weights_only") is False:
+                    kwargs["weights_only"] = True
+                return safe_torch_load(source, *args, _loader=original_torch_load, **kwargs)
+            torch.load = restricted_load
+            try:
+                # Patch before importing upstream so both ``torch.load`` and
+                # any ``from torch import load`` bindings are restricted.
+                from GPT_SoVITS.TTS_infer_pack.TTS import TTS, TTS_Config
+                config = {
+                    "custom": {
+                        "device": device,
+                        "is_half": not force_cpu,
+                        "version": "v2ProPlus",
+                        "t2s_weights_path": gpt,
+                        "vits_weights_path": sovits,
+                        "bert_base_path": str(pretrained / "chinese-roberta-wwm-ext-large"),
+                        "cnhuhbert_base_path": str(pretrained / "chinese-hubert-base"),
+                    }
                 }
-            }
-            self._tts = TTS(TTS_Config(config))
+                self._tts = TTS(TTS_Config(config))
+            finally:
+                torch.load = original_torch_load
         self._loaded_key = key
 
     def stop(self) -> None:
@@ -178,9 +228,6 @@ class GptSovitsEngine:
             self.paths.runtime_root / "env" / "Library" / "bin" / "ffmpeg.exe",
             self.paths.engine_root / "ffmpeg.exe",
         ]
-        found = shutil.which("ffmpeg")
-        if found:
-            candidates.append(Path(found))
         for item in candidates:
             if not item.is_file(): continue
             try:

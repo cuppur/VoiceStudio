@@ -1,5 +1,5 @@
 #define MyAppName "本地声音工坊"
-#define MyAppVersion "0.2.0"
+#define MyAppVersion "0.3.0"
 #define MyAppPublisher "LocalVoiceStudio"
 #define MyAppExeName "LocalVoiceStudio.exe"
 
@@ -21,6 +21,10 @@ ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
 CloseApplications=yes
 RestartApplications=no
+#ifdef SignBuild
+SignTool=voicestudio
+SignedUninstaller=yes
+#endif
 
 [Files]
 Source: "..\dist\LocalVoiceStudio\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

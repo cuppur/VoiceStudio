@@ -16,3 +16,9 @@ output/
 *.egg-info/
 installer/Output/
 *.log
+
+# Personal voice material must never be committed to the public repository.
+参考声音/
+*.pfx
+*.p12
+release-metadata/

@@ -6,6 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 
+
 COMMANDS = {"health", "load_profile", "synthesize", "prepare_dataset", "train", "cancel", "shutdown"}
 EVENTS = {"ready", "progress", "result", "error"}
 
@@ -24,6 +25,8 @@ class Message:
         if isinstance(value, bytes):
             value = value.decode("utf-8-sig")
         item = json.loads(value.lstrip("\ufeff"))
+        if not isinstance(item, dict) or "type" not in item:
+            raise ValueError("消息必须是包含 type 的对象")
         if not isinstance(item.get("payload", {}), dict):
             raise ValueError("payload 必须是对象")
         return cls(id=str(item.get("id") or uuid4().hex), type=str(item["type"]), payload=item.get("payload", {}))

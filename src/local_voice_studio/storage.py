@@ -7,10 +7,11 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from .audio import sha256_file
-from .models import DatasetDraft, DatasetManifest, Job, JobKind, JobStatus, ModelVersion, SourceAsset, TrainingWorkflow, VoiceProfile, WorkflowStatus, dataset_snapshot_sha256, utc_now
-from .paths import AppPaths, ensure_within
+from .models import DatasetDraft, DatasetManifest, GenerationRecord, Job, JobKind, JobStatus, ModelVersion, SourceAsset, TrainingWorkflow, VoiceProfile, WorkflowStatus, dataset_snapshot_sha256, utc_now
+from .paths import AppPaths, ensure_within, validate_id, validate_sha256
 
 
 class StudioStore:
@@ -85,7 +86,7 @@ class StudioStore:
             index += 1
         for child in ("raw", "processed", "datasets", "checkpoints", "exports", "workflows", "drafts"):
             (project / child).mkdir(parents=True, exist_ok=True)
-        payload = {"schema_version": 3, "id": project.name, "name": name, "voice_profiles": [], "source_assets": [], "dataset_snapshots": [], "workflows": [], "created_at": utc_now()}
+        payload = {"schema_version": 4, "project_uid": uuid4().hex, "id": project.name, "name": name, "voice_profiles": [], "source_assets": [], "dataset_snapshots": [], "workflows": [], "generation_records": [], "created_at": utc_now()}
         self._atomic_json(project / "project.json", payload)
         with self._connect() as db:
             db.execute(
@@ -147,7 +148,39 @@ class StudioStore:
                 version = ModelVersion(name="已迁移版本", gpt_checkpoint=profile["active_gpt_checkpoint"], sovits_checkpoint=profile["active_sovits_checkpoint"], status="active")
                 profile["model_versions"] = [version.to_dict()]; profile["active_model_version_id"] = version.id
         result.setdefault("workflows", [])
-        result["schema_version"] = 3
+        # Keep the legacy pure-data helper compatible; real project loads pass
+        # a project path and always migrate atomically to schema v4.
+        if project is None:
+            result["schema_version"] = 3
+            return result
+        if int(result.get("schema_version", 1)) < 4:
+            result.setdefault("project_uid", uuid4().hex)
+            result.setdefault("generation_records", [])
+            for profile in result.get("voice_profiles", []):
+                for version in profile.get("model_versions", []):
+                    version.setdefault("gpt_sha256", "")
+                    version.setdefault("sovits_sha256", "")
+                    version.setdefault("origin", "legacy-local")
+                    version.setdefault("trust_status", "unverified")
+                    if project and not version["gpt_sha256"] and not version["sovits_sha256"]:
+                        try:
+                            checkpoint_root = ensure_within(project, project / "checkpoints")
+                            gpt = ensure_within(checkpoint_root, Path(version.get("gpt_checkpoint", "")))
+                            sovits = ensure_within(checkpoint_root, Path(version.get("sovits_checkpoint", "")))
+                            if not gpt.is_file() or not sovits.is_file(): raise FileNotFoundError
+                            version["gpt_sha256"] = sha256_file(gpt)
+                            version["sovits_sha256"] = sha256_file(sovits)
+                            # The GUI process intentionally does not ship
+                            # torch.  The private worker upgrades this state
+                            # only after restricted deserialization succeeds.
+                            version["trust_status"] = "legacy-pending"
+                            if profile.get("active_model_version_id") == version.get("id"):
+                                profile["active_gpt_sha256"] = version["gpt_sha256"]
+                                profile["active_sovits_sha256"] = version["sovits_sha256"]
+                                profile["active_model_trust_status"] = version["trust_status"]
+                        except Exception:
+                            version["trust_status"] = "legacy-pending"
+        result["schema_version"] = 4
         if project:
             for child in ("workflows", "drafts"): (project / child).mkdir(parents=True, exist_ok=True)
         return result
@@ -174,13 +207,31 @@ class StudioStore:
         profile.archived = True; self.save_profile(project, profile)
 
     def activate_model_version(self, project: Path, profile_id: str, version_id: str) -> VoiceProfile:
+        validate_id(profile_id, legacy=True, field="profile_id")
+        validate_id(version_id, legacy=True, field="version_id")
         profile = next((item for item in self.list_profiles(project) if item.id == profile_id), None)
         if not profile: raise KeyError(profile_id)
         version = next((item for item in profile.model_versions if item.id == version_id), None)
+        if version:
+            self.verify_model_version(project, version)
         if not version or not Path(version.gpt_checkpoint).is_file() or not Path(version.sovits_checkpoint).is_file(): raise FileNotFoundError("所选声音版本不可用")
         for item in profile.model_versions:
             if item.status == "active": item.status = "available"
-        version.status = "active"; profile.active_model_version_id = version.id; profile.active_gpt_checkpoint = version.gpt_checkpoint; profile.active_sovits_checkpoint = version.sovits_checkpoint; profile.default_model_mode = "fine_tuned"; self.save_profile(project, profile); return profile
+        version.status = "active"; profile.active_model_version_id = version.id; profile.active_gpt_checkpoint = version.gpt_checkpoint; profile.active_sovits_checkpoint = version.sovits_checkpoint; profile.active_gpt_sha256 = version.gpt_sha256; profile.active_sovits_sha256 = version.sovits_sha256; profile.active_model_trust_status = version.trust_status; profile.default_model_mode = "fine_tuned"; self.save_profile(project, profile); return profile
+
+    @staticmethod
+    def verify_model_version(project: Path, version: ModelVersion) -> None:
+        checkpoints = ensure_within(project, project / "checkpoints")
+        gpt = ensure_within(checkpoints, Path(version.gpt_checkpoint))
+        sovits = ensure_within(checkpoints, Path(version.sovits_checkpoint))
+        if not gpt.is_file() or not sovits.is_file():
+            raise FileNotFoundError("所选声音版本的模型文件缺失")
+        validate_sha256(version.gpt_sha256, field="gpt_sha256")
+        validate_sha256(version.sovits_sha256, field="sovits_sha256")
+        if sha256_file(gpt) != version.gpt_sha256 or sha256_file(sovits) != version.sovits_sha256:
+            raise ValueError("模型文件哈希不一致，已拒绝加载")
+        if version.trust_status not in {"verified", "trusted-local"}:
+            raise ValueError("模型版本尚未通过安全验证")
 
     def save_source_assets(self, project: Path, assets: list[SourceAsset]) -> None:
         project = ensure_within(self.paths.projects_root, project)
@@ -224,6 +275,7 @@ class StudioStore:
         manifest = self.load_project(project); summaries = manifest.setdefault("workflows", []); summary = {"id": workflow.id, "voice_profile_id": workflow.voice_profile_id, "stage": workflow.stage.value, "status": workflow.status.value, "updated_at": workflow.updated_at, "path": path.relative_to(project).as_posix()}; summaries[:] = [item for item in summaries if item.get("id") != workflow.id]; summaries.append(summary); self._atomic_json(project / "project.json", manifest); return path
 
     def load_workflow(self, project: Path, workflow_id: str) -> TrainingWorkflow:
+        validate_id(workflow_id, legacy=True, field="workflow_id")
         project = ensure_within(self.paths.projects_root, project); path = ensure_within(project / "workflows", project / "workflows" / f"{workflow_id}.json"); return TrainingWorkflow.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
     def list_workflows(self, project: Path, profile_id: str | None = None) -> list[TrainingWorkflow]:
@@ -249,6 +301,7 @@ class StudioStore:
         project = ensure_within(self.paths.projects_root, project); draft.updated_at = utc_now(); folder = ensure_within(project, project / "drafts"); folder.mkdir(parents=True, exist_ok=True); path = folder / f"{draft.id}.json"; self._atomic_json(path, draft.to_dict()); return path
 
     def load_draft(self, project: Path, draft_id: str) -> DatasetDraft:
+        validate_id(draft_id, legacy=True, field="draft_id")
         project = ensure_within(self.paths.projects_root, project); path = ensure_within(project / "drafts", project / "drafts" / f"{draft_id}.json"); return DatasetDraft.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
     def cleanup_preparation_runs(self, project: Path, profile_id: str) -> list[str]:
@@ -295,6 +348,7 @@ class StudioStore:
         return folder / "manifest.json"
 
     def load_dataset_snapshot(self, project: Path, snapshot_id: str) -> DatasetManifest:
+        validate_id(snapshot_id, legacy=True, field="snapshot_id")
         project = ensure_within(self.paths.projects_root, project)
         path = ensure_within(project / "datasets", project / "datasets" / snapshot_id / "manifest.json")
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -343,6 +397,23 @@ class StudioStore:
         if migrated:
             self.save_dataset_snapshot(project, dataset)
         return dataset
+
+    def save_generation_record(self, project: Path, record: GenerationRecord) -> None:
+        project = ensure_within(self.paths.projects_root, project)
+        manifest = self.load_project(project)
+        if record.project_uid != manifest.get("project_uid"):
+            raise ValueError("生成记录不属于当前项目")
+        validate_id(record.id, field="generation_record_id")
+        record.updated_at = utc_now()
+        records = manifest.setdefault("generation_records", [])
+        records[:] = [item for item in records if item.get("id") != record.id]
+        records.append(record.to_dict())
+        self._atomic_json(project / "project.json", manifest)
+
+    def list_generation_records(self, project: Path, limit: int = 200) -> list[GenerationRecord]:
+        values = self.load_project(project).get("generation_records", [])
+        records = [GenerationRecord.from_dict(item) for item in values]
+        return sorted(records, key=lambda item: item.updated_at, reverse=True)[:max(0, limit)]
 
     def save_job(self, job: Job) -> None:
         job.updated_at = utc_now()

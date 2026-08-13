@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 
 APP_DIR_NAME = "LocalVoiceStudio"
+UUID_HEX_RE = re.compile(r"^[0-9a-f]{32}$")
+LEGACY_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _local_app_data() -> Path:
@@ -67,3 +71,26 @@ def ensure_within(root: Path, candidate: Path) -> Path:
         raise ValueError(f"路径超出允许目录: {candidate}")
     return candidate
 
+
+def validate_id(value: str, *, legacy: bool = False, field: str = "id") -> str:
+    value = str(value)
+    pattern = LEGACY_ID_RE if legacy else UUID_HEX_RE
+    if not pattern.fullmatch(value):
+        expected = "安全的字母数字、点、下划线或连字符" if legacy else "32 位小写 UUID hex"
+        raise ValueError(f"{field} 必须是{expected}")
+    return value
+
+
+def validate_sha256(value: str, *, field: str = "sha256", allow_empty: bool = False) -> str:
+    value = str(value)
+    if allow_empty and not value:
+        return value
+    if not SHA256_RE.fullmatch(value):
+        raise ValueError(f"{field} 必须是 64 位小写 SHA-256")
+    return value
+
+
+def safe_child(root: Path, *parts: str, legacy_ids: bool = False) -> Path:
+    """Build an owned path from validated identifiers only."""
+    checked = [validate_id(part, legacy=legacy_ids, field="path id") for part in parts]
+    return ensure_within(root, root.joinpath(*checked))

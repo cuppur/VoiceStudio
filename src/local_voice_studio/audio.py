@@ -2,16 +2,23 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import wave
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 
 SUPPORTED_AUDIO = {".wav", ".flac", ".mp3", ".m4a", ".aac", ".ogg"}
+MAX_AUDIO_FILES = 2_000
+MAX_FILE_BYTES = 2 * 1024**3
+MAX_TOTAL_BYTES = 20 * 1024**3
+MAX_DURATION_SECONDS = 6 * 60 * 60
+FFPROBE_TIMEOUT_SECONDS = 30
+QUALITY_TIMEOUT_SECONDS = 180
 
 
 @dataclass
@@ -30,15 +37,25 @@ class AudioProbe:
         return asdict(self)
 
 
-def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
+def _cancelled(cancel) -> bool:
+    return bool(cancel and (cancel() if callable(cancel) else cancel.is_set()))
+
+
+def sha256_file(path: Path, chunk_size: int = 1024 * 1024, cancel=None) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         while chunk := stream.read(chunk_size):
+            if _cancelled(cancel):
+                raise RuntimeError("扫描已取消")
             digest.update(chunk)
     return digest.hexdigest()
 
 
-def scan_audio_files(paths: Iterable[Path], ffprobe: Path | None = None) -> list[AudioProbe]:
+def scan_audio_files(
+    paths: Iterable[Path], ffprobe: Path | None = None, *, progress: Callable[[float, str], None] | None = None,
+    cancel=None, max_files: int = MAX_AUDIO_FILES, max_file_bytes: int = MAX_FILE_BYTES,
+    max_total_bytes: int = MAX_TOTAL_BYTES, max_duration_seconds: float = MAX_DURATION_SECONDS,
+) -> list[AudioProbe]:
     files: list[Path] = []
     for path in paths:
         if path.is_dir():
@@ -46,21 +63,36 @@ def scan_audio_files(paths: Iterable[Path], ffprobe: Path | None = None) -> list
         elif path.is_file() and path.suffix.lower() in SUPPORTED_AUDIO:
             files.append(path)
 
+    files = sorted(set(files), key=lambda item: str(item).lower())
+    if len(files) > max_files:
+        raise ValueError(f"音频文件超过上限 {max_files}")
+    total_bytes = 0
+    for path in files:
+        size = path.stat().st_size
+        if size > max_file_bytes:
+            raise ValueError(f"单个音频超过 2 GiB 上限: {path.name}")
+        total_bytes += size
+        if total_bytes > max_total_bytes:
+            raise ValueError("导入音频总大小超过 20 GiB 上限")
     seen: dict[str, str] = {}
     result: list[AudioProbe] = []
-    for path in sorted(set(files), key=lambda item: str(item).lower()):
-        probe = probe_audio(path, ffprobe)
+    for index, path in enumerate(files, 1):
+        if _cancelled(cancel): raise RuntimeError("扫描已取消")
+        probe = probe_audio(path, ffprobe, cancel=cancel)
+        if probe.duration_seconds > max_duration_seconds:
+            raise ValueError(f"单个音频超过 6 小时上限: {path.name}")
         if probe.sha256 in seen:
             probe.duplicate_of = seen[probe.sha256]
             probe.quality_flags.append("duplicate")
         else:
             seen[probe.sha256] = str(path)
         result.append(probe)
+        if progress: progress(index / max(1, len(files)), f"检查素材 {index}/{len(files)}")
     return result
 
 
-def probe_audio(path: Path, ffprobe: Path | None = None) -> AudioProbe:
-    digest = sha256_file(path)
+def probe_audio(path: Path, ffprobe: Path | None = None, *, cancel=None) -> AudioProbe:
+    digest = sha256_file(path, cancel=cancel)
     resolved_ffprobe = ffprobe or _find_tool("ffprobe")
     if resolved_ffprobe:
         try:
@@ -78,16 +110,14 @@ def probe_audio(path: Path, ffprobe: Path | None = None) -> AudioProbe:
 
 
 def _find_tool(name: str) -> Path | None:
-    value = shutil.which(name)
-    candidates = [Path(value)] if value else []
-    local = Path(__file__).resolve()
-    app = Path.home() / "AppData" / "Local" / "LocalVoiceStudio"; executable = name + (".exe" if not name.endswith(".exe") else "")
-    candidates.extend([app / "runtime" / "env" / "Library" / "bin" / executable, app / "tools" / executable])
+    app = Path(os.environ.get("LOCAL_VOICE_STUDIO_HOME", Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "LocalVoiceStudio"))
+    executable = name + (".exe" if os.name == "nt" and not name.endswith(".exe") else "")
+    candidates = [app / "tools" / executable, app / "runtime" / "env" / "Library" / "bin" / executable, app / "engines" / "GPT-SoVITS" / executable]
     return next((item for item in candidates if item.is_file()), None)
 
 
 def _quality_with_ffmpeg(path: Path, ffmpeg: Path) -> list[str]:
-    completed = subprocess.run([str(ffmpeg), "-hide_banner", "-i", str(path), "-af", "volumedetect,silencedetect=noise=-40dB:d=2", "-f", "null", "NUL"], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    completed = subprocess.run([str(ffmpeg), "-hide_banner", "-i", str(path), "-af", "volumedetect,silencedetect=noise=-40dB:d=2", "-f", "null", os.devnull], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=QUALITY_TIMEOUT_SECONDS)
     report = completed.stderr; flags: list[str] = []
     maximum = re.search(r"max_volume:\s*(-?[\d.]+) dB", report); mean = re.search(r"mean_volume:\s*(-?[\d.]+) dB", report)
     if maximum and float(maximum.group(1)) >= -0.1: flags.append("clipping_risk")
@@ -102,7 +132,7 @@ def _probe_with_ffprobe(path: Path, ffprobe: Path, digest: str) -> AudioProbe:
         "format=duration,bit_rate:stream=codec_name,sample_rate,channels",
         "-select_streams", "a:0", "-of", "json", str(path),
     ]
-    completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
+    completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, timeout=FFPROBE_TIMEOUT_SECONDS)
     value = json.loads(completed.stdout)
     stream = (value.get("streams") or [{}])[0]
     fmt = value.get("format") or {}
@@ -142,42 +172,41 @@ _SAMPLE_RATES = {3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 
 
 def _probe_mp3(path: Path, digest: str) -> AudioProbe:
     """Parse MPEG Layer III frames sufficiently for duration and basic validation."""
-    data = path.read_bytes()
-    offset = _skip_id3v2(data)
+    file_size = path.stat().st_size
     frames = 0
     samples = 0
     total_bitrate = 0
     sample_rate = 0
     channel_mode = 0
     broken = False
-    while offset + 4 <= len(data):
-        header = int.from_bytes(data[offset : offset + 4], "big")
-        if header & 0xFFE00000 != 0xFFE00000:
-            offset += 1
-            if frames:
-                broken = True
-            continue
-        version_bits = (header >> 19) & 0x3
-        layer_bits = (header >> 17) & 0x3
-        bitrate_index = (header >> 12) & 0xF
-        rate_index = (header >> 10) & 0x3
-        padding = (header >> 9) & 0x1
-        if version_bits == 1 or layer_bits != 1 or bitrate_index in (0, 15) or rate_index == 3:
-            offset += 1
-            continue
-        version = 3 if version_bits == 3 else (2 if version_bits == 2 else 0)
-        table_version = 3 if version == 3 else 2
-        bitrate = _BITRATES[table_version][1][bitrate_index] * 1000
-        rate = _SAMPLE_RATES[version][rate_index]
-        frame_length = int((144 if version == 3 else 72) * bitrate / rate + padding)
-        if frame_length <= 4 or offset + frame_length > len(data):
-            break
-        frames += 1
-        samples += 1152 if version == 3 else 576
-        total_bitrate += bitrate
-        sample_rate = rate
-        channel_mode = (header >> 6) & 0x3
-        offset += frame_length
+    with path.open("rb") as stream:
+        prefix = stream.read(10)
+        offset = _skip_id3v2(prefix, file_size)
+        stream.seek(offset)
+        while offset + 4 <= file_size:
+            header_bytes = stream.read(4)
+            if len(header_bytes) < 4: break
+            header = int.from_bytes(header_bytes, "big")
+            if header & 0xFFE00000 != 0xFFE00000:
+                offset += 1; stream.seek(offset)
+                if frames: broken = True
+                continue
+            version_bits = (header >> 19) & 0x3
+            layer_bits = (header >> 17) & 0x3
+            bitrate_index = (header >> 12) & 0xF
+            rate_index = (header >> 10) & 0x3
+            padding = (header >> 9) & 0x1
+            if version_bits == 1 or layer_bits != 1 or bitrate_index in (0, 15) or rate_index == 3:
+                offset += 1; stream.seek(offset); continue
+            version = 3 if version_bits == 3 else (2 if version_bits == 2 else 0)
+            table_version = 3 if version == 3 else 2
+            bitrate = _BITRATES[table_version][1][bitrate_index] * 1000
+            rate = _SAMPLE_RATES[version][rate_index]
+            frame_length = int((144 if version == 3 else 72) * bitrate / rate + padding)
+            if frame_length <= 4 or offset + frame_length > file_size: break
+            frames += 1; samples += 1152 if version == 3 else 576; total_bitrate += bitrate
+            sample_rate = rate; channel_mode = (header >> 6) & 0x3
+            offset += frame_length; stream.seek(offset)
     flags: list[str] = ["lossy_source"]
     if broken:
         flags.append("frame_gaps_detected")
@@ -192,13 +221,13 @@ def _probe_mp3(path: Path, digest: str) -> AudioProbe:
     )
 
 
-def _skip_id3v2(data: bytes) -> int:
+def _skip_id3v2(data: bytes, file_size: int | None = None) -> int:
     if len(data) < 10 or data[:3] != b"ID3":
         return 0
     size = 0
     for byte in data[6:10]:
         size = (size << 7) | (byte & 0x7F)
-    return min(len(data), 10 + size)
+    return min(file_size if file_size is not None else len(data), 10 + size)
 
 
 def copy_original(source: Path, raw_dir: Path, digest: str | None = None) -> Path:

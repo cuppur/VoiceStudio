@@ -10,11 +10,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .engine import GptSovitsEngine
+from .engine import GptSovitsEngine, safe_torch_load
 from .audio import sha256_file
 from .models import DatasetManifest, dataset_snapshot_sha256, utc_now
-from .paths import AppPaths, ensure_within
+from .paths import AppPaths, ensure_within, validate_id, validate_sha256
 from .protocol import COMMANDS, Message
+from .runtime import EngineRuntimeResolver
 from .text import split_text
 from .training import TrainingPipeline
 
@@ -57,12 +58,17 @@ class WorkerService:
             return
         if message.type == "health":
             health = self.engine.gpu_health()
+            integrity = EngineRuntimeResolver(self.paths).verify_install_manifest()
+            health["runtime_integrity"] = integrity.valid
+            health["runtime_integrity_errors"] = list(integrity.errors)
+            health["compatible"] = bool(health.get("compatible") and integrity.valid)
             self.emit(message.id, "result", {**health, "worker_python": sys.executable, "pid": os.getpid(), "engine": self.engine.readiness(), "gpu": health})
         elif message.type == "load_profile":
             self.profile = message.payload
             try:
+                upgraded = self._upgrade_legacy_profile(self.profile)
                 self.engine.load(self.profile, bool(message.payload.get("force_cpu", False)))
-                self.emit(message.id, "result", {"loaded": True, "profile_id": self.profile.get("id", "")})
+                self.emit(message.id, "result", {"loaded": True, "profile_id": self.profile.get("id", ""), "profile": self.profile if upgraded else {}})
             except Exception as exc:
                 self.emit(message.id, "error", {"message": str(exc), "exception": type(exc).__name__})
         elif message.type == "cancel":
@@ -95,6 +101,50 @@ class WorkerService:
             self.current_thread = threading.Thread(target=self._run_guarded, args=(message.id, target, message.payload), daemon=True)
             self.current_thread.start()
 
+    def _upgrade_legacy_profile(self, profile: dict[str, Any]) -> bool:
+        if profile.get("active_model_trust_status") != "legacy-pending":
+            return False
+        configured = str(profile.get("project_path", ""))
+        project = ensure_within(self.paths.projects_root, Path(configured)) if configured else self._find_profile_project(str(profile.get("id", "")))
+        checkpoint_root = ensure_within(project, project / "checkpoints")
+        gpt = ensure_within(checkpoint_root, Path(str(profile.get("active_gpt_checkpoint", ""))))
+        sovits = ensure_within(checkpoint_root, Path(str(profile.get("active_sovits_checkpoint", ""))))
+        expected_gpt = validate_sha256(str(profile.get("active_gpt_sha256", "")), field="active_gpt_sha256")
+        expected_sovits = validate_sha256(str(profile.get("active_sovits_sha256", "")), field="active_sovits_sha256")
+        if sha256_file(gpt) != expected_gpt or sha256_file(sovits) != expected_sovits:
+            raise ValueError("旧模型文件哈希不一致，已拒绝升级信任")
+        safe_torch_load(gpt, map_location="cpu")
+        safe_torch_load(sovits, map_location="cpu")
+        profile["active_model_trust_status"] = "trusted-local"
+        manifest_path = project / "project.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        stored = next((item for item in manifest.get("voice_profiles", []) if item.get("id") == profile.get("id")), None)
+        if stored:
+            stored["active_gpt_sha256"] = expected_gpt
+            stored["active_sovits_sha256"] = expected_sovits
+            stored["active_model_trust_status"] = "trusted-local"
+            for version in stored.get("model_versions", []):
+                if version.get("id") == stored.get("active_model_version_id"):
+                    version["gpt_sha256"] = expected_gpt; version["sovits_sha256"] = expected_sovits; version["trust_status"] = "trusted-local"
+            temporary = manifest_path.with_suffix(".json.tmp")
+            temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+            temporary.replace(manifest_path)
+        return True
+
+    def _find_profile_project(self, profile_id: str) -> Path:
+        validate_id(profile_id, legacy=True, field="profile_id")
+        matches: list[Path] = []
+        for manifest_path in self.paths.projects_root.glob("*/project.json"):
+            try:
+                value = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if any(str(item.get("id")) == profile_id for item in value.get("voice_profiles", [])):
+                    matches.append(ensure_within(self.paths.projects_root, manifest_path.parent))
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                continue
+        if len(matches) != 1:
+            raise ValueError("无法唯一确定旧模型所属项目，请重新打开该项目")
+        return matches[0]
+
     def _run_guarded(self, request_id: str, target, payload: dict[str, Any]) -> None:
         try:
             target(request_id, payload)
@@ -118,7 +168,7 @@ class WorkerService:
         output_root = (self.paths.data_root / "cache" / "preview") if preview else Path(payload["output_dir"]).resolve()
         output_root.mkdir(parents=True, exist_ok=True)
         resume_dir = payload.get("resume_dir")
-        job_dir = Path(resume_dir).resolve() if resume_dir else output_root / ("preview-" + request_id[:12] if preview else datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + request_id[:8])
+        job_dir = ensure_within(output_root, Path(resume_dir)) if resume_dir else output_root / ("preview-" + request_id[:12] if preview else datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + request_id[:8])
         job_dir.mkdir(parents=True, exist_ok=bool(resume_dir))
         signature_value = {key: payload.get(key) for key in ("text", "text_lang", "ref_audio_path", "prompt_text", "prompt_lang", "speed_factor", "fragment_interval", "top_k", "top_p", "temperature", "seed")}
         signature = hashlib.sha256(json.dumps(signature_value, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
@@ -150,12 +200,14 @@ class WorkerService:
         if payload.get("action") == "pipeline" and not payload.get("source_asset_ids"):
             raise ValueError("请至少选择一个声音库素材")
         if payload.get("dataset_snapshot_id"):
+            ensure_within(self.paths.projects_root, Path(str(payload.get("project_path", ""))))
             self._validate_dataset_snapshot(payload)
         try:
             path = self.training.prepare(payload, lambda value, message: self.emit(request_id, "progress", {"progress": value, "message": message}), self.cancel_event)
         except Exception as exc:
             if payload.get("action") == "pipeline" and payload.get("preparation_id"):
-                manifest = Path(payload["project_path"]) / "datasets" / "working" / str(payload["profile_id"]) / str(payload["preparation_id"]) / "preparation.json"
+                project = ensure_within(self.paths.projects_root, Path(payload["project_path"]))
+                manifest = self.training.preparation_paths(project, str(payload["profile_id"]), str(payload["preparation_id"]))["manifest"]
                 if manifest.is_file():
                     value = json.loads(manifest.read_text(encoding="utf-8")); value.update({"status": "cancelled" if self.cancel_event.is_set() else "failed", "error": str(exc)}); manifest.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
             raise
@@ -169,6 +221,8 @@ class WorkerService:
         if dataset.id != str(payload.get("dataset_snapshot_id", "")):
             raise ValueError("数据集快照 ID 不匹配")
         project = Path(payload.get("project_path", "")).resolve()
+        validate_id(dataset.id, legacy=True, field="dataset_snapshot_id")
+        validate_sha256(dataset.snapshot_sha256, field="snapshot_sha256")
         snapshot_root = ensure_within(project / "datasets", project / "datasets" / dataset.id)
         audio_root = ensure_within(snapshot_root, snapshot_root / "audio")
         seen: set[str] = set()
@@ -207,7 +261,10 @@ class WorkerService:
         return dataset
 
     def _train(self, request_id: str, payload: dict[str, Any]) -> None:
-        project_manifest = Path(str(payload.get("project_path", ""))) / "project.json"
+        project = ensure_within(self.paths.projects_root, Path(str(payload.get("project_path", ""))))
+        validate_id(str(payload.get("profile_id", "")), legacy=True, field="profile_id")
+        validate_id(str(payload.get("training_run_id", "")), legacy=True, field="training_run_id")
+        project_manifest = project / "project.json"
         stored_profile: dict[str, Any] | None = None
         if project_manifest.is_file():
             project_value = json.loads(project_manifest.read_text(encoding="utf-8"))
@@ -235,7 +292,7 @@ class WorkerService:
         gpt = [str(path) for path in outputs if path.suffix.lower() == ".ckpt" and path.is_file() and path.stat().st_size > 0]
         sovits = [str(path) for path in outputs if path.suffix.lower() == ".pth" and path.is_file() and path.stat().st_size > 0]
         if not gpt or not sovits: raise RuntimeError("训练结束但没有找到真实 GPT 和 SoVITS 检查点")
-        self.emit(request_id, "result", {"progress": 1.0, "training_run_id": payload.get("training_run_id", ""), "outputs": [str(path) for path in outputs], "checkpoints": {"gpt": gpt[0], "sovits": sovits[0]}})
+        self.emit(request_id, "result", {"progress": 1.0, "training_run_id": payload.get("training_run_id", ""), "outputs": [str(path) for path in outputs], "checkpoints": {"gpt": gpt[0], "sovits": sovits[0], "gpt_sha256": sha256_file(Path(gpt[0])), "sovits_sha256": sha256_file(Path(sovits[0])), "origin": "trained-local", "trust_status": "verified"}})
 
 
 def main() -> int:

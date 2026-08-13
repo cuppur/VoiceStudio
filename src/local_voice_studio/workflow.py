@@ -11,8 +11,8 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from .audio import copy_original, scan_audio_files, sha256_file
 from .models import (
     DatasetDraft, DatasetDraftSegment, DatasetManifest, DatasetSegment, Job, JobKind,
-    JobStatus, ModelVersion, ReferenceAsset, TrainingWorkflow, VoiceProfile,
-    WorkflowStage, WorkflowStatus, dataset_snapshot_sha256, utc_now,
+    JobStatus, ModelVersion, ReferenceAsset, ReferenceSelector, TrainingWorkflow, VoiceProfile,
+    WorkflowStage, WorkflowStatus, dataset_snapshot_sha256, is_hard_quality_flag, utc_now,
 )
 from .paths import ensure_within
 from .storage import StudioStore
@@ -66,7 +66,7 @@ def draft_from_preparation(project: Path, workflow: TrainingWorkflow, manifest_p
 
 
 def freeze_draft(store: StudioStore, project: Path, profile: VoiceProfile, draft: DatasetDraft) -> DatasetManifest:
-    valid = [item for item in draft.segments if item.included and item.human_confirmed and item.text.strip() and not item.quality_flags]
+    valid = [item for item in draft.segments if item.human_confirmed and item.eligible]
     seconds = sum(item.duration_seconds for item in valid)
     if seconds < 60:
         raise ValueError(f"已确认的合格素材不足 60 秒，还差 {60 - seconds:.1f} 秒")
@@ -85,7 +85,8 @@ def freeze_draft(store: StudioStore, project: Path, profile: VoiceProfile, draft
             lines.append(f"{relative}|speaker|{item.language}|{item.text}")
             dataset.segments.append(DatasetSegment(
                 digest, str(project / relative), item.start_seconds, item.end_seconds,
-                item.language, item.text, item.asr_text, None, [], True, True, True,
+                item.language, item.text, item.asr_text, None,
+                [*item.quality_flags, *([f"manual_override:{item.override_reason.strip()}"] if item.quality_flags else [])], True, True, True,
                 item.id, relative,
             ))
         list_file = temporary / "dataset.list"
@@ -102,7 +103,7 @@ def freeze_draft(store: StudioStore, project: Path, profile: VoiceProfile, draft
         raise
     profile.dataset_snapshot_id = dataset.id
     if not any(item.approved and item.transcript.strip() and 5 <= item.duration_seconds <= 10 for item in profile.reference_assets):
-        reference = next((item for item in dataset.segments if 5 <= item.duration_seconds <= 10), None)
+        reference = ReferenceSelector.select(dataset.segments)
         if reference:
             profile.reference_assets = [ReferenceAsset(reference.audio_path, reference.source_sha256, reference.text, reference.language, reference.duration_seconds, True, [])]
     store.save_profile(project, profile)
@@ -152,13 +153,13 @@ class TrainingWorkflowController(QObject):
         profile = self._profile(workflow.voice_profile_id)
         if not profile.consent_confirmed: raise ValueError("授权记录已失效，请重新确认")
         for item in draft.segments:
-            item.human_confirmed = bool(item.included and item.text.strip() and not item.quality_flags)
+            item.human_confirmed = bool(item.eligible)
         self.store.save_draft(self.project, draft)
         if draft.confirmed_seconds < 60:
             workflow.stage = WorkflowStage.REVIEW_REQUIRED; workflow.status = WorkflowStatus.WAITING
             workflow.waiting_reason = f"还差 {60 - draft.confirmed_seconds:.1f} 秒合格素材"
             self._save(workflow); raise ValueError(workflow.waiting_reason)
-        if not any(5 <= item.duration_seconds <= 10 for item in draft.segments if item.included and item.human_confirmed and not item.quality_flags):
+        if not any(5 <= item.duration_seconds <= 10 for item in draft.segments if item.human_confirmed and item.eligible):
             workflow.stage = WorkflowStage.REVIEW_REQUIRED; workflow.status = WorkflowStatus.WAITING
             workflow.waiting_reason = "需要至少一个 5–10 秒的干净参考片段"
             self._save(workflow); raise ValueError(workflow.waiting_reason)
@@ -204,6 +205,9 @@ class TrainingWorkflowController(QObject):
         profile = self._profile(workflow.voice_profile_id); candidate = profile.to_dict()
         candidate["active_gpt_checkpoint"] = workflow.candidate_gpt_checkpoint
         candidate["active_sovits_checkpoint"] = workflow.candidate_sovits_checkpoint
+        candidate["active_gpt_sha256"] = sha256_file(Path(workflow.candidate_gpt_checkpoint))
+        candidate["active_sovits_sha256"] = sha256_file(Path(workflow.candidate_sovits_checkpoint))
+        candidate["active_model_trust_status"] = "verified"
         request = uuid4().hex
         self.requests[request] = (workflow.id, "verify_load", Job(JobKind.SYNTHESIZE, candidate))
         self.client.send("load_profile", self._context(workflow, candidate), request_id=request)
@@ -228,10 +232,13 @@ class TrainingWorkflowController(QObject):
             name=f"训练版本 {len(profile.model_versions) + 1}", training_run_id=workflow.training_run_id,
             dataset_snapshot_id=workflow.dataset_snapshot_id, snapshot_sha256=workflow.snapshot_sha256,
             gpt_checkpoint=workflow.candidate_gpt_checkpoint, sovits_checkpoint=workflow.candidate_sovits_checkpoint,
+            gpt_sha256=sha256_file(Path(workflow.candidate_gpt_checkpoint)), sovits_sha256=sha256_file(Path(workflow.candidate_sovits_checkpoint)),
+            origin="trained-local", trust_status="verified",
             preview_outputs=workflow.verification_outputs, status="active",
         )
         profile.model_versions.append(version); profile.active_model_version_id = version.id
         profile.active_gpt_checkpoint = version.gpt_checkpoint; profile.active_sovits_checkpoint = version.sovits_checkpoint
+        profile.active_gpt_sha256 = version.gpt_sha256; profile.active_sovits_sha256 = version.sovits_sha256; profile.active_model_trust_status = version.trust_status
         profile.default_model_mode = "fine_tuned"; profile.training_state = ""; profile.current_workflow_id = ""
         self.store.save_profile(self.project, profile)
         workflow.stage = WorkflowStage.SAVED; workflow.status = WorkflowStatus.COMPLETED; workflow.progress = 1; workflow.message = "新声音已验证并启用"; workflow.waiting_reason = ""; self._save(workflow); self.profile_changed.emit(profile.id)
@@ -284,6 +291,10 @@ class TrainingWorkflowController(QObject):
             raise
 
     def _save(self, workflow: TrainingWorkflow) -> None:
+        result = workflow.step_results.setdefault(workflow.stage.value, {"started_at": utc_now()})
+        result.update({"status": workflow.status.value, "progress": workflow.progress, "message": workflow.message, "error": workflow.error})
+        if workflow.status in {WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED} or workflow.stage == WorkflowStage.SAVED:
+            result.setdefault("completed_at", utc_now())
         self.store.save_workflow(self.project, workflow); self.workflow_changed.emit(workflow)
 
     def _profile(self, profile_id: str) -> VoiceProfile:
@@ -292,7 +303,7 @@ class TrainingWorkflowController(QObject):
         return profile
 
     def _context(self, workflow: TrainingWorkflow, payload: dict) -> dict:
-        return {**payload, "workflow_id": workflow.id, "stage": workflow.stage.value, "attempt": workflow.attempt, "overall_progress": workflow.progress}
+        return {**payload, "project_path": str(self.project), "workflow_id": workflow.id, "stage": workflow.stage.value, "attempt": workflow.attempt, "overall_progress": workflow.progress}
 
     def _dataset_payload(self, workflow: TrainingWorkflow, dataset: DatasetManifest) -> dict:
         profile = self._profile(workflow.voice_profile_id)

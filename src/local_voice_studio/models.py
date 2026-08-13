@@ -99,6 +99,10 @@ class ModelVersion:
     snapshot_sha256: str = ""
     gpt_checkpoint: str = ""
     sovits_checkpoint: str = ""
+    gpt_sha256: str = ""
+    sovits_sha256: str = ""
+    origin: str = "trained-local"
+    trust_status: str = "unverified"
     preview_outputs: list[str] = field(default_factory=list)
     status: str = "available"
     created_at: str = field(default_factory=utc_now)
@@ -123,6 +127,9 @@ class VoiceProfile:
     dataset_snapshot_id: str = ""
     active_gpt_checkpoint: str = ""
     active_sovits_checkpoint: str = ""
+    active_gpt_sha256: str = ""
+    active_sovits_sha256: str = ""
+    active_model_trust_status: str = ""
     default_model_mode: str = "zero_shot"
     training_state: str = ""
     current_preparation_id: str = ""
@@ -229,7 +236,7 @@ class DatasetManifest:
 
     @property
     def approved_seconds(self) -> float:
-        return sum(s.duration_seconds for s in self.segments if s.approved and s.included and s.human_confirmed and not s.quality_flags and s.text.strip())
+        return sum(s.duration_seconds for s in self.segments if s.approved and s.included and s.human_confirmed and snapshot_segment_eligible(s) and s.text.strip())
 
     def can_train(self) -> tuple[bool, str]:
         if not self.frozen:
@@ -252,11 +259,22 @@ class DatasetDraftSegment:
     quality_flags: list[str] = field(default_factory=list)
     included: bool = True
     human_confirmed: bool = False
+    override_reason: str = ""
     id: str = field(default_factory=lambda: uuid4().hex)
 
     @property
     def duration_seconds(self) -> float:
         return max(0.0, self.end_seconds - self.start_seconds)
+
+    @property
+    def hard_blocked(self) -> bool:
+        return any(is_hard_quality_flag(flag) for flag in self.quality_flags)
+
+    @property
+    def eligible(self) -> bool:
+        if self.hard_blocked or not self.included or not self.text.strip():
+            return False
+        return not self.quality_flags or bool(self.override_reason.strip())
 
 
 @dataclass
@@ -271,11 +289,11 @@ class DatasetDraft:
 
     @property
     def confirmed_seconds(self) -> float:
-        return sum(item.duration_seconds for item in self.segments if item.included and item.human_confirmed and item.text.strip() and not item.quality_flags)
+        return sum(item.duration_seconds for item in self.segments if item.human_confirmed and item.eligible)
 
     @property
     def eligible_seconds(self) -> float:
-        return sum(item.duration_seconds for item in self.segments if item.included and item.text.strip() and not item.quality_flags)
+        return sum(item.duration_seconds for item in self.segments if item.eligible)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -311,6 +329,7 @@ class TrainingWorkflow:
     error: str = ""
     attempt: int = 0
     processing_options: dict[str, Any] = field(default_factory=dict)
+    step_results: dict[str, dict[str, Any]] = field(default_factory=dict)
     consent_record: str = ""
     consent_confirmed_at: str = ""
     created_at: str = field(default_factory=utc_now)
@@ -324,6 +343,70 @@ class TrainingWorkflow:
         value = dict(value); value["stage"] = WorkflowStage(value.get("stage", WorkflowStage.IMPORTING.value)); value["status"] = WorkflowStatus(value.get("status", WorkflowStatus.WAITING.value))
         allowed = cls.__dataclass_fields__
         return cls(**{key: item for key, item in value.items() if key in allowed})
+
+
+@dataclass
+class GenerationRecord:
+    project_uid: str
+    voice_profile_id: str
+    text: str
+    parameters: dict[str, Any] = field(default_factory=dict)
+    wav_path: str = ""
+    mp3_path: str = ""
+    duration_seconds: float = 0.0
+    status: str = "queued"
+    error: str = ""
+    id: str = field(default_factory=lambda: uuid4().hex)
+    created_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "GenerationRecord":
+        allowed = cls.__dataclass_fields__
+        return cls(**{key: item for key, item in value.items() if key in allowed})
+
+
+_HARD_QUALITY_MARKERS = (
+    "corrupt", "damaged", "empty", "no audio", "decode", "invalid",
+    "损坏", "空音频", "无法解码", "无效音频",
+)
+
+
+def is_hard_quality_flag(flag: str) -> bool:
+    normalized = str(flag).strip().lower()
+    return any(marker in normalized for marker in _HARD_QUALITY_MARKERS)
+
+
+def snapshot_segment_eligible(segment: DatasetSegment) -> bool:
+    flags = list(segment.quality_flags)
+    if any(is_hard_quality_flag(flag) for flag in flags):
+        return False
+    warnings = [flag for flag in flags if not str(flag).startswith("manual_override:")]
+    return not warnings or any(str(flag).startswith("manual_override:") and str(flag).split(":", 1)[-1].strip() for flag in flags)
+
+
+class ReferenceSelector:
+    """Deterministically choose the cleanest reproducible 5-10 second reference."""
+
+    @staticmethod
+    def score(item: DatasetSegment) -> tuple[float, str]:
+        if not (5 <= item.duration_seconds <= 10) or not item.text.strip() or not item.source_sha256:
+            return (float("inf"), item.id)
+        flags = " ".join(item.quality_flags).lower()
+        penalty = 0.0
+        for marker, amount in (("bgm", 100), ("配乐", 100), ("clip", 60), ("削波", 60), ("silence", 40), ("静音", 40), ("loud", 20), ("响度", 20)):
+            if marker in flags: penalty += amount
+        penalty += abs(item.duration_seconds - 7.0) * 3
+        penalty += max(0, 8 - len("".join(item.text.split())))
+        return (penalty, item.id)
+
+    @classmethod
+    def select(cls, segments: list[DatasetSegment]) -> DatasetSegment | None:
+        candidates = [item for item in segments if cls.score(item)[0] != float("inf") and not any(is_hard_quality_flag(flag) for flag in item.quality_flags)]
+        return min(candidates, key=cls.score) if candidates else None
 
 
 def dataset_snapshot_sha256(dataset: DatasetManifest | dict[str, Any]) -> str:

@@ -22,6 +22,15 @@ def main() -> int:
     if not candidates:
         raise RuntimeError("找不到可用的 UVR5 人声分离模型")
     model = candidates[0]
+    data_root = engine.parent.parent
+    ffmpeg_candidates = [
+        data_root / "tools" / "ffmpeg.exe",
+        data_root / "runtime" / "env" / "Library" / "bin" / "ffmpeg.exe",
+        engine / "ffmpeg.exe",
+    ]
+    ffmpeg = next((item for item in ffmpeg_candidates if item.is_file()), None)
+    if not ffmpeg:
+        raise RuntimeError("找不到已验证的私有 FFmpeg")
     os.chdir(engine)
     for path in (engine, engine / "tools", engine / "tools" / "uvr5"):
         sys.path.insert(0, str(path))
@@ -36,7 +45,7 @@ def main() -> int:
             prepared = source
             with tempfile.TemporaryDirectory(prefix="voice-studio-uvr-") as tmp:
                 converted = Path(tmp) / (source.stem + ".wav")
-                subprocess.run(["ffmpeg", "-y", "-i", str(source), "-vn", "-acodec", "pcm_s16le", "-ac", "2", "-ar", "44100", str(converted)], capture_output=True, check=True)
+                subprocess.run([str(ffmpeg), "-y", "-i", str(source), "-vn", "-acodec", "pcm_s16le", "-ac", "2", "-ar", "44100", str(converted)], capture_output=True, check=True, timeout=180)
                 prepared = converted
                 pre._path_audio_(str(prepared), str(instrumental), str(vocal), "wav", False)
             print(f"{source.name}: 完成", flush=True)

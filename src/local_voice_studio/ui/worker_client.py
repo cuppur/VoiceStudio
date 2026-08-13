@@ -17,6 +17,9 @@ class WorkerClient(QObject):
     event = Signal(str, str, dict)
     stderr_line = Signal(str)
     state_changed = Signal(str)
+    ready_changed = Signal(bool)
+    request_started = Signal(str, str)
+    request_finished = Signal(str, str)
 
     def __init__(self, paths: AppPaths, parent: QObject | None = None):
         super().__init__(parent)
@@ -29,6 +32,8 @@ class WorkerClient(QObject):
         self.process.finished.connect(self._finished)
         self.process.errorOccurred.connect(self._process_error)
         self._buffer = b""
+        self.ready = False
+        self.pending: dict[str, str] = {}
 
     def _diagnostic(self, message: str) -> None:
         try:
@@ -53,7 +58,6 @@ class WorkerClient(QObject):
         env.insert("PYTHONPATH", source_root + (os.pathsep + old_pythonpath if old_pythonpath else ""))
         env.insert("PYTHONUTF8", "1")
         env.insert("PYTHONIOENCODING", "utf-8")
-        env.insert("PYTHONIOENCODING", "utf-8")
         self.process.setProcessEnvironment(env)
         self.process.setProgram(str(launch.program))
         self.process.setArguments(launch.arguments)
@@ -72,6 +76,8 @@ class WorkerClient(QObject):
         self._diagnostic(f"send id={request_id} command={command} bytes={len(encoded)} accepted={accepted}")
         if accepted < 0:
             raise RuntimeError("无法向本地工作进程发送任务")
+        self.pending[request_id] = command
+        self.request_started.emit(request_id, command)
         deadline_ms = 5000
         while self.process.bytesToWrite() and deadline_ms > 0:
             if not self.process.waitForBytesWritten(min(250, deadline_ms)):
@@ -80,6 +86,9 @@ class WorkerClient(QObject):
         if self.process.bytesToWrite():
             self._diagnostic(f"send pending id={request_id} bytes={self.process.bytesToWrite()}")
         return request_id
+
+    def restart(self) -> None:
+        self.shutdown(); self.start()
 
     def shutdown(self) -> None:
         if self.process.state() == QProcess.Running:
@@ -98,7 +107,12 @@ class WorkerClient(QObject):
                 continue
             try:
                 item = json.loads(line.decode("utf-8"))
-                self.event.emit(str(item.get("id", "")), str(item.get("type", "")), dict(item.get("payload") or {}))
+                request_id, event = str(item.get("id", "")), str(item.get("type", ""))
+                if request_id == "worker" and event == "ready":
+                    self.ready = True; self.ready_changed.emit(True)
+                if event in {"result", "error"} and request_id in self.pending:
+                    command = self.pending.pop(request_id); self.request_finished.emit(request_id, command)
+                self.event.emit(request_id, event, dict(item.get("payload") or {}))
             except Exception:
                 self.stderr_line.emit("无法解析工作进程消息: " + line.decode("utf-8", errors="replace"))
 
@@ -115,6 +129,7 @@ class WorkerClient(QObject):
 
     def _finished(self, *_args) -> None:
         self._diagnostic(f"finished code={self.process.exitCode()} status={self.process.exitStatus()}")
+        self.ready = False; self.pending.clear(); self.ready_changed.emit(False)
         self.state_changed.emit("stopped")
 
     def _process_error(self, *_args) -> None:

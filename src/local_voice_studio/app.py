@@ -6,7 +6,7 @@ import shutil
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication, Qt
+from PySide6.QtCore import QCoreApplication, QTimer, Qt
 from PySide6.QtWidgets import QApplication
 
 from .paths import AppPaths
@@ -24,6 +24,8 @@ def main() -> int:
     app.setStyleSheet(STYLE)
     paths = AppPaths.default(); paths.ensure(); _cleanup_preview_cache(paths.data_root / "cache" / "preview"); store = StudioStore(paths)
     window = MainWindow(paths, store); window.show()
+    if "--smoke-test" in sys.argv:
+        QTimer.singleShot(1500, app.quit)
     return app.exec()
 
 

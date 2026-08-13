@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "manifest_version": "2026.08.13.1",
+  "engine": {
+    "name": "GPT-SoVITS",
+    "commit": "d523079fc05d9a8028d6085bffe4a2757c32abb6",
+    "pretrained_revision": "0c47645e02a7bc3688d7b263b0042c81e3cd82cd"
+  },
+  "python": "3.11",
+  "pytorch": "2.7.1+cu128",
+  "torchaudio": "2.7.1+cu128",
+  "assets": [
+    {
+      "id": "miniforge-win-x64",
+      "version": "26.3.2-3",
+      "destination": "cache/Miniforge3-Windows-x86_64.exe",
+      "size": 78836352,
+      "sha256": "14a8635465b5190537ddad6286746ffebbc55a1ed2a7bb14a506595fe3191e1e",
+      "urls": [
+        "https://github.com/conda-forge/miniforge/releases/download/26.3.2-3/Miniforge3-Windows-x86_64.exe"
+      ],
+      "authenticode_publisher_contains": "NumFOCUS, Inc."
+    },
+    {
+      "id": "gpt-sovits-source",
+      "version": "d523079fc05d9a8028d6085bffe4a2757c32abb6",
+      "destination": "cache/d523079fc05d9a8028d6085bffe4a2757c32abb6.zip",
+      "size": 6621083,
+      "sha256": "de125730d7f08db9ddf756384e54780a4d34a24f719d79d943021f8068b98d5f",
+      "urls": [
+        "https://codeload.github.com/RVC-Boss/GPT-SoVITS/zip/d523079fc05d9a8028d6085bffe4a2757c32abb6"
+      ]
+    },
+    {
+      "id": "pretrained-models",
+      "version": "0c47645e02a7bc3688d7b263b0042c81e3cd82cd",
+      "destination": "cache/pretrained_models.zip",
+      "size": 4563188367,
+      "sha256": "66274394318cbf134b78d0d5aeeccb73e96f5d43cf6876ac43560a972cb1f3fc",
+      "urls": [
+        "https://huggingface.co/XXXXRT/GPT-SoVITS-Pretrained/resolve/0c47645e02a7bc3688d7b263b0042c81e3cd82cd/pretrained_models.zip",
+        "https://hf-mirror.com/XXXXRT/GPT-SoVITS-Pretrained/resolve/0c47645e02a7bc3688d7b263b0042c81e3cd82cd/pretrained_models.zip"
+      ]
+    },
+    {
+      "id": "g2pw-model",
+      "version": "0c47645e02a7bc3688d7b263b0042c81e3cd82cd",
+      "destination": "cache/G2PWModel.zip",
+      "size": 588856634,
+      "sha256": "46292be0374a49308069233cd5c147ae4c41806558e4781a2467a31a4d8099da",
+      "urls": [
+        "https://huggingface.co/XXXXRT/GPT-SoVITS-Pretrained/resolve/0c47645e02a7bc3688d7b263b0042c81e3cd82cd/G2PWModel.zip",
+        "https://hf-mirror.com/XXXXRT/GPT-SoVITS-Pretrained/resolve/0c47645e02a7bc3688d7b263b0042c81e3cd82cd/G2PWModel.zip"
+      ]
+    },
+    {
+      "id": "uvr5-weights",
+      "version": "0c47645e02a7bc3688d7b263b0042c81e3cd82cd",
+      "destination": "cache/uvr5_weights.zip",
+      "size": 522922580,
+      "sha256": "1317c4117aed4f08f1780df08d0e6c8d63b3c34b987f8d9bef4ef3bc1f290c21",
+      "urls": [
+        "https://huggingface.co/XXXXRT/GPT-SoVITS-Pretrained/resolve/0c47645e02a7bc3688d7b263b0042c81e3cd82cd/uvr5_weights.zip",
+        "https://hf-mirror.com/XXXXRT/GPT-SoVITS-Pretrained/resolve/0c47645e02a7bc3688d7b263b0042c81e3cd82cd/uvr5_weights.zip"
+      ]
+    },
+    {
+      "id": "nltk-data",
+      "version": "0c47645e02a7bc3688d7b263b0042c81e3cd82cd",
+      "destination": "cache/nltk_data.zip",
+      "size": 9924448,
+      "sha256": "eb3ec26ace3f9ccbb08a6d333e26f0941c47e230ece0717dc992bdb7e99808dd",
+      "urls": [
+        "https://huggingface.co/XXXXRT/GPT-SoVITS-Pretrained/resolve/0c47645e02a7bc3688d7b263b0042c81e3cd82cd/nltk_data.zip",
+        "https://hf-mirror.com/XXXXRT/GPT-SoVITS-Pretrained/resolve/0c47645e02a7bc3688d7b263b0042c81e3cd82cd/nltk_data.zip"
+      ]
+    },
+    {
+      "id": "open-jtalk-dictionary",
+      "version": "0c47645e02a7bc3688d7b263b0042c81e3cd82cd",
+      "destination": "cache/open_jtalk_dic_utf_8-1.11.tar.gz",
+      "size": 23646843,
+      "sha256": "fe6ba0e43542cef98339abdffd903e062008ea170b04e7e2a35da805902f382a",
+      "urls": [
+        "https://huggingface.co/XXXXRT/GPT-SoVITS-Pretrained/resolve/0c47645e02a7bc3688d7b263b0042c81e3cd82cd/open_jtalk_dic_utf_8-1.11.tar.gz",
+        "https://hf-mirror.com/XXXXRT/GPT-SoVITS-Pretrained/resolve/0c47645e02a7bc3688d7b263b0042c81e3cd82cd/open_jtalk_dic_utf_8-1.11.tar.gz"
+      ]
+    }
+  ],
+  "installed_file_pins": [
+    {
+      "path": "tools/ffmpeg.exe",
+      "size": 242496512,
+      "sha256": "ad8f211bc894755e0061c55ab280ae00e8d3d4f15a8cc4372b24cfa247b5942e"
+    },
+    {
+      "path": "tools/ffprobe.exe",
+      "size": 242291712,
+      "sha256": "9df3b0b5275e830961df6d94e1f7a71121a7abd5ff708e9fec8a0b6084a55015"
+    }
+  ]
+}

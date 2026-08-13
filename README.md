@@ -62,7 +62,7 @@ datasets/<snapshot_id>/{audio,dataset.list,manifest.json}
 checkpoints/<profile_id>/<training_run_id>
 ```
 
-旧版 `project.json` 会无损迁移到项目 schema 3；冻结快照仍保持 schema 2 和原有哈希算法。旧绝对路径快照会把仍可找到的音频复制进快照 `audio` 目录并改写为相对路径，缺失文件会明确报错。缺失的授权记录不会被自动伪造。
+旧版 `project.json` 会无损迁移到项目 schema 4，并增加稳定 `project_uid`、训练步骤结果和持久化生成记录；冻结快照仍保持 schema 2 和原有哈希算法。旧绝对路径快照会把仍可找到的音频复制进快照 `audio` 目录并改写为相对路径，缺失文件会明确报错。缺失的授权记录不会被自动伪造。
 
 > MP3 转成 WAV 不会恢复已经丢失的信息。带配乐、混响或他人声音的素材应先清理并逐段试听，训练数据优先使用无配乐的原始 WAV/FLAC。
 
@@ -81,5 +81,8 @@ python -m pytest
 - 声音配置必须确认说话人本人或明确授权。
 - 工作进程不监听端口，不提供局域网或公网 API。
 - 原始音频不覆盖，导入时复制到项目 `raw` 目录。
+- 公开源码仓库不包含真人声音；`参考声音/` 与常见私钥格式由预推送检查阻止提交。
+- 运行时资产、依赖和模型按版本化 SHA-256 清单验证；模型仅允许 PyTorch 受限反序列化，不回退到 `weights_only=False`。
+- 开发构建会明确标记为未签名；正式 Release 必须通过 Authenticode 签名校验，并生成 SHA256SUMS、CycloneDX SBOM 和构建证明。
 - 同一时间只运行一个 GPU 任务；取消训练会终止完整子进程树。
 - 第一版不提供实时变声、账号、云同步或移动端。

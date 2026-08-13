@@ -16,7 +16,62 @@ $env:PYTHONIOENCODING = "utf-8"
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $engineCommit = "d523079fc05d9a8028d6085bffe4a2757c32abb6"
+$pretrainedRevision = "0c47645e02a7bc3688d7b263b0042c81e3cd82cd"
+$assetManifestPath = Join-Path (Split-Path -Parent $PSScriptRoot) "manifests\runtime-assets-v1.json"
+if (-not (Test-Path -LiteralPath $assetManifestPath)) { throw "缺少运行时资产清单：$assetManifestPath" }
+$assetManifest = Get-Content -Raw -LiteralPath $assetManifestPath | ConvertFrom-Json
+if ($assetManifest.schema_version -ne 1) { throw "不支持的运行时资产清单版本" }
+if ($assetManifest.engine.commit -ne $engineCommit -or $assetManifest.engine.pretrained_revision -ne $pretrainedRevision) { throw "资产清单与固定引擎版本不一致" }
 $script:CurrentStep = 0
+
+function Get-PinnedAsset {
+    param([Parameter(Mandatory = $true)][string]$Id)
+    $entries = @($assetManifest.assets | Where-Object { $_.id -eq $Id })
+    if ($entries.Count -ne 1) { throw "资产未登记或重复登记：$Id" }
+    $asset = $entries[0]
+    if ($asset.size -le 0 -or $asset.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or @($asset.urls).Count -eq 0) { throw "资产清单条目不完整：$Id" }
+    foreach ($url in @($asset.urls)) { if (-not $url.StartsWith("https://", [StringComparison]::OrdinalIgnoreCase)) { throw "资产 URL 必须使用 HTTPS：$Id" } }
+    return $asset
+}
+
+function Test-PinnedFile {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)]$Asset)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "文件不存在：$Path" }
+    $length = (Get-Item -LiteralPath $Path).Length
+    if ($length -ne [Int64]$Asset.size) { throw "文件大小不符：$length != $($Asset.size)" }
+    $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne ([string]$Asset.sha256).ToLowerInvariant()) { throw "文件 SHA-256 不符：$($Asset.id)" }
+}
+
+function Test-MiniforgeSignature {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)]$Asset)
+    $signature = Get-AuthenticodeSignature -LiteralPath $Path
+    if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) { throw "Miniforge Authenticode 签名无效：$($signature.Status)" }
+    $publisher = [string]$signature.SignerCertificate.Subject
+    if ($publisher.IndexOf([string]$Asset.authenticode_publisher_contains, [StringComparison]::OrdinalIgnoreCase) -lt 0) { throw "Miniforge 发布者不可信：$publisher" }
+}
+
+function Invoke-PinnedAssetDownload {
+    param([Parameter(Mandatory = $true)][string]$Id, [Parameter(Mandatory = $true)][string]$Destination, [scriptblock]$Validator)
+    $asset = Get-PinnedAsset $Id
+    $lastError = $null
+    foreach ($url in @($asset.urls)) {
+        try {
+            $integrityValidator = {
+                param($Path)
+                Test-PinnedFile -Path $Path -Asset $asset
+                if ($Validator) { & $Validator $Path }
+            }.GetNewClosure()
+            Invoke-RobustDownload -Uri $url -Destination $Destination -Validator $integrityValidator -RequireHttps
+            return $asset
+        } catch {
+            $lastError = $_
+            Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath "$Destination.partial" -Force -ErrorAction SilentlyContinue
+        }
+    }
+    throw "所有已登记镜像均失败：$Id；$($lastError.Exception.Message)"
+}
 
 function Write-StepState {
     param([int]$Step, [ValidateSet("running", "completed", "retrying", "failed", "skipped")][string]$State, [string]$Message)
@@ -40,7 +95,8 @@ function Invoke-RobustDownload {
     param(
         [Parameter(Mandatory = $true)][string]$Uri,
         [Parameter(Mandatory = $true)][string]$Destination,
-        [scriptblock]$Validator
+        [scriptblock]$Validator,
+        [switch]$RequireHttps
     )
 
     $destinationPath = if ([System.IO.Path]::IsPathRooted($Destination)) {
@@ -73,7 +129,8 @@ function Invoke-RobustDownload {
 
         if (Test-Path -LiteralPath $curl) {
             if (Test-Path -LiteralPath $partial) {
-                & $curl -L --fail --show-error --retry 5 --retry-delay 2 --connect-timeout 30 -C - -o $partial $Uri
+                $protocolArgs = $(if ($RequireHttps) { @("--proto", "=https", "--proto-redir", "=https") } else { @() })
+                & $curl @protocolArgs -L --fail --show-error --retry 5 --retry-delay 2 --connect-timeout 30 -C - -o $partial $Uri
                 $downloadSucceeded = ($LASTEXITCODE -eq 0)
                 if (-not $downloadSucceeded) {
                     Write-Host "[Download] 服务端未接受续传，将自动重新完整下载。"
@@ -81,14 +138,15 @@ function Invoke-RobustDownload {
             }
             if (-not $downloadSucceeded) {
                 Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
-                & $curl -L --fail --show-error --retry 5 --retry-delay 2 --connect-timeout 30 -o $partial $Uri
+                & $curl @protocolArgs -L --fail --show-error --retry 5 --retry-delay 2 --connect-timeout 30 -o $partial $Uri
                 $downloadSucceeded = ($LASTEXITCODE -eq 0)
             }
         } else {
             Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
             for ($attempt = 1; $attempt -le 5; $attempt++) {
                 try {
-                    Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $partial -TimeoutSec 1800 -MaximumRedirection 10
+                    $response = Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $partial -TimeoutSec 1800 -MaximumRedirection 10 -PassThru
+                    if ($RequireHttps -and $response.BaseResponse.ResponseUri.Scheme -ne "https") { throw "下载被重定向到非 HTTPS 地址" }
                     $downloadSucceeded = $true
                     break
                 } catch {
@@ -143,7 +201,14 @@ function Test-ZipReadable {
     $archive = [System.IO.Compression.ZipFile]::OpenRead($Path)
     try {
         if ($archive.Entries.Count -eq 0) { throw "ZIP 中没有文件" }
+        $totalSize = [Int64]0
         foreach ($entry in $archive.Entries) {
+            $normalized = $entry.FullName.Replace("\", "/")
+            if ([IO.Path]::IsPathRooted($normalized) -or $normalized -match '(^|/)\.\.(/|$)' -or $normalized -match '^[A-Za-z]:') { throw "ZIP 包含不安全路径：$normalized" }
+            $unixMode = (($entry.ExternalAttributes -shr 16) -band 0xF000)
+            if ($unixMode -eq 0xA000) { throw "ZIP 包含禁止的符号链接：$normalized" }
+            $totalSize += [Int64]$entry.Length
+            if ($totalSize -gt 20GB) { throw "ZIP 解压后大小超过安全限制" }
             if ($entry.FullName.EndsWith("/")) { continue }
             $stream = $entry.Open()
             try { $stream.CopyTo([System.IO.Stream]::Null) } finally { $stream.Dispose() }
@@ -153,14 +218,35 @@ function Test-ZipReadable {
 
 function Test-TarReadable {
     param([Parameter(Mandatory = $true)][string]$Path)
-    & tar.exe -tf $Path | Select-Object -First 1 | Out-Null
+    $tar = Join-Path $env:SystemRoot "System32\tar.exe"
+    if (-not (Test-Path -LiteralPath $tar)) { throw "Windows 私有 TAR 工具不可用" }
+    & $tar -tf $Path | Select-Object -First 1 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "TAR.GZ 内容无效" }
+}
+
+function Test-ExistingInstallManifest {
+    param([Parameter(Mandatory = $true)][string]$RuntimeRoot, [Parameter(Mandatory = $true)][string]$DataRoot)
+    $path = Join-Path $RuntimeRoot ("install-" + "manifest.json")
+    if (-not (Test-Path -LiteralPath $path)) { return $false }
+    try {
+        $manifest = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json
+        if ($manifest.schema_version -ne 2 -or $manifest.engine_commit -ne $engineCommit -or $manifest.pretrained_revision -ne $pretrainedRevision) { return $false }
+        foreach ($item in @($manifest.verified_files)) {
+            $relative = ([string]$item.path).Replace("/", "\")
+            if ([IO.Path]::IsPathRooted($relative) -or $relative -match '(^|\\)\.\.(\\|$)') { return $false }
+            $target = [IO.Path]::GetFullPath((Join-Path $DataRoot $relative))
+            if (-not $target.StartsWith($DataRoot + "\", [StringComparison]::OrdinalIgnoreCase)) { return $false }
+            Test-PinnedFile -Path $target -Asset $item
+        }
+        return $true
+    } catch { return $false }
 }
 
 function Expand-ZipStaged {
     param([Parameter(Mandatory = $true)][string]$ZipPath, [Parameter(Mandatory = $true)][string]$Destination)
     $zipAbsolute = if ([IO.Path]::IsPathRooted($ZipPath)) { [IO.Path]::GetFullPath($ZipPath) } else { [IO.Path]::GetFullPath((Join-Path (Get-Location).ProviderPath $ZipPath)) }
     $destinationAbsolute = if ([IO.Path]::IsPathRooted($Destination)) { [IO.Path]::GetFullPath($Destination) } else { [IO.Path]::GetFullPath((Join-Path (Get-Location).ProviderPath $Destination)) }
+    Test-ZipReadable $zipAbsolute
     $staging = Join-Path (Split-Path -Parent $zipAbsolute) ("extract-" + [Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $staging | Out-Null
     try {
@@ -211,15 +297,15 @@ try {
     } else {
         if (-not (Test-Path -LiteralPath $condaExe)) {
             $installer = Join-Path $cacheRoot "Miniforge3-Windows-x86_64.exe"
-            Invoke-RobustDownload "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Windows-x86_64.exe" $installer
+            $miniforgeAsset = Invoke-PinnedAssetDownload -Id "miniforge-win-x64" -Destination $installer
+            Test-MiniforgeSignature -Path $installer -Asset $miniforgeAsset
             $install = Start-Process -FilePath $installer -ArgumentList @("/S", "/D=$miniforgeRoot") -Wait -PassThru -WindowStyle Hidden
             if ($install.ExitCode -ne 0) { throw "Miniforge 安装失败，退出码：$($install.ExitCode)" }
         }
-        if (Test-Path -LiteralPath $envPython) {
-            & $condaExe install -y -p $envRoot python=3.11 pip --json
-        } else {
-            & $condaExe create -y -p $envRoot python=3.11 pip --json
-        }
+        $condaLock = Join-Path (Split-Path -Parent $PSScriptRoot) "locks\conda-win-64.lock"
+        if (-not (Test-Path -LiteralPath $condaLock)) { throw "缺少 Conda 显式锁文件" }
+        if (Test-Path -LiteralPath $envPython) { throw "私有环境已损坏；请移走 runtime\env 后用显式锁重新安装" }
+        & $condaExe create -y -p $envRoot --file $condaLock --json
         if ($LASTEXITCODE -ne 0 -or -not (Test-PrivatePython $envPython)) { throw "私有 Python 3.11 环境创建或修复失败" }
         Complete-Step 1 "私有 Python 3.11 环境已就绪"
     }
@@ -231,7 +317,7 @@ try {
         Complete-Step 2 "固定提交 GPT-SoVITS 已存在，已跳过" -Skipped
     } else {
         $zip = Join-Path $cacheRoot "$engineCommit.zip"
-        Invoke-RobustDownload "https://codeload.github.com/RVC-Boss/GPT-SoVITS/zip/$engineCommit" $zip ${function:Test-GptSoVitsArchive}
+        Invoke-PinnedAssetDownload -Id "gpt-sovits-source" -Destination $zip -Validator ${function:Test-GptSoVitsArchive} | Out-Null
         $extractRoot = Join-Path $cacheRoot ("engine-extract-" + [Guid]::NewGuid().ToString("N"))
         New-Item -ItemType Directory -Path $extractRoot | Out-Null
         try {
@@ -251,12 +337,15 @@ try {
     }
 
     Start-Step 3 "安装 CUDA 12.8 对应的 PyTorch 2.7.1"
+    $pipLock = Join-Path (Split-Path -Parent $PSScriptRoot) "locks\requirements-win-cu128.lock"
+    $wheelDir = Join-Path (Split-Path -Parent $PSScriptRoot) "locks\wheels"
+    if (-not (Test-Path -LiteralPath $pipLock)) { throw "缺少 Python hash lock" }
+    if (-not (Test-Path -LiteralPath $wheelDir)) { throw "缺少已验证的本地 wheel 目录" }
     & $envPython -X utf8 -W ignore -c "import torch, torchaudio; assert torch.__version__ == '2.7.1+cu128'; assert torchaudio.__version__ == '2.7.1+cu128'"
     if ($LASTEXITCODE -eq 0) {
         Complete-Step 3 "PyTorch 2.7.1+cu128 已存在，已跳过" -Skipped
     } else {
-        & $envPython -m pip install --disable-pip-version-check --upgrade pip
-        & $envPython -m pip install "torch==2.7.1+cu128" "torchaudio==2.7.1+cu128" --index-url "https://download.pytorch.org/whl/cu128"
+        & $envPython -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: --find-links $wheelDir -r $pipLock
         if ($LASTEXITCODE -ne 0) { throw "PyTorch 2.7.1+cu128 安装失败" }
         Complete-Step 3 "PyTorch 2.7.1+cu128 已就绪"
     }
@@ -267,19 +356,7 @@ try {
     if ((Test-Path -LiteralPath $dependenciesMarker) -and $LASTEXITCODE -eq 0) {
         Complete-Step 4 "GPT-SoVITS 依赖已存在，已跳过" -Skipped
     } else {
-        $localRequirements = Join-Path $engineRoot "requirements-local-voice-studio.txt"
-        $requirements = Get-Content -LiteralPath (Join-Path $engineRoot "requirements.txt")
-        $requirements = @($requirements | ForEach-Object {
-            if ($_ -match '^--no-binary=opencc$') { '# opencc: using a Windows-compatible pure Python distribution' }
-            elseif ($_ -match '^pyopenjtalk(?:[<>=].*)?$') { 'pyopenjtalk-plus==0.4.1.post7' }
-            elseif ($_ -match '^jieba_fast(?:[<>=].*)?$') { '# jieba_fast: provided by the jieba compatibility shim below' }
-            elseif ($_ -match '^opencc(?:[<>=].*)?$') { 'opencc-python-reimplemented==0.1.7' }
-            else { $_ }
-        })
-        [System.IO.File]::WriteAllLines($localRequirements, $requirements, $Utf8)
-        & $envPython -m pip install -r (Join-Path $engineRoot "extra-req.txt") --no-deps
-        if ($LASTEXITCODE -ne 0) { throw "额外依赖安装失败" }
-        & $envPython -m pip install -r $localRequirements
+        & $envPython -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: --find-links $wheelDir -r $pipLock
         if ($LASTEXITCODE -ne 0) { throw "GPT-SoVITS 依赖安装失败" }
         $sitePackages = (& $envPython -X utf8 -c "import site; print(site.getsitepackages()[0])").Trim()
         $jiebaFastRoot = Join-Path $sitePackages "jieba_fast"
@@ -288,8 +365,6 @@ try {
         [System.IO.File]::WriteAllText((Join-Path $jiebaFastRoot "posseg.py"), "from jieba.posseg import *`n", $Utf8)
         & $envPython -X utf8 -c "import jieba_fast, jieba_fast.posseg, opencc, pyopenjtalk"
         if ($LASTEXITCODE -ne 0) { throw "Windows 兼容依赖导入验证失败" }
-        & $envPython -m pip install "torch==2.7.1+cu128" "torchaudio==2.7.1+cu128" --index-url "https://download.pytorch.org/whl/cu128"
-        if ($LASTEXITCODE -ne 0) { throw "固定 PyTorch 版本恢复失败" }
         Set-Content -LiteralPath $dependenciesMarker -Value (Get-Date).ToString("o") -Encoding Ascii
         Complete-Step 4 "GPT-SoVITS 依赖已安装"
     }
@@ -298,7 +373,7 @@ try {
     # by cmd-denoise.py and repair only its missing runtime dependencies.
     & $envPython -X utf8 -W ignore -c "import addict, datasets, simplejson, sortedcontainers; from modelscope.pipelines import pipeline"
     if ($LASTEXITCODE -ne 0) {
-        & $envPython -m pip install "addict==2.4.0" "datasets>=2.16,<4" "simplejson>=3.19,<5" "sortedcontainers==2.4.0"
+        & $envPython -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: --find-links $wheelDir -r $pipLock
         if ($LASTEXITCODE -ne 0) { throw "智能降噪依赖安装失败" }
         & $envPython -X utf8 -W ignore -c "import simplejson, sortedcontainers; from modelscope.pipelines import pipeline"
         if ($LASTEXITCODE -ne 0) { throw "智能降噪依赖导入验证失败" }
@@ -306,18 +381,13 @@ try {
 
     Start-Step 5 "安装 FFmpeg 与预训练模型"
     $modelsMarker = Join-Path $runtimeRoot ".models-complete"
-    $coreModelsReady = (Test-Path -LiteralPath $modelsMarker) -and (Test-Path -LiteralPath (Join-Path $engineRoot "GPT_SoVITS\pretrained_models\sv")) -and (Test-Path -LiteralPath (Join-Path $engineRoot "GPT_SoVITS\text\G2PWModel"))
+    $coreModelsReady = (Test-Path -LiteralPath $modelsMarker) -and (Test-ExistingInstallManifest -RuntimeRoot $runtimeRoot -DataRoot $resolvedDataRoot) -and (Test-Path -LiteralPath (Join-Path $engineRoot "GPT_SoVITS\pretrained_models\sv")) -and (Test-Path -LiteralPath (Join-Path $engineRoot "GPT_SoVITS\text\G2PWModel"))
     $uvrWeights = Join-Path $engineRoot "tools\uvr5\uvr5_weights"
     $uvrReady = @(Get-ChildItem -LiteralPath $uvrWeights -File -Filter "*.pth" -ErrorAction SilentlyContinue).Count -gt 0
     if ($coreModelsReady -and $DownloadUVR5 -and -not $uvrReady) {
         Write-Host "[Download] 首次使用智能优化，正在按需安装 UVR5 人声分离模型"
-        $uvrUrls = @{
-            "HF" = "https://huggingface.co/XXXXRT/GPT-SoVITS-Pretrained/resolve/main/uvr5_weights.zip"
-            "HF-Mirror" = "https://hf-mirror.com/XXXXRT/GPT-SoVITS-Pretrained/resolve/main/uvr5_weights.zip"
-            "ModelScope" = "https://www.modelscope.cn/models/XXXXRT/GPT-SoVITS-Pretrained/resolve/master/uvr5_weights.zip"
-        }
         $uvrArchive = Join-Path $cacheRoot "uvr5_weights.zip"
-        Invoke-RobustDownload -Uri $uvrUrls[$Source] -Destination $uvrArchive -Validator ${function:Test-ZipReadable}
+        Invoke-PinnedAssetDownload -Id "uvr5-weights" -Destination $uvrArchive -Validator ${function:Test-ZipReadable} | Out-Null
         $uvrExtract = Join-Path $cacheRoot ("uvr5-extract-" + [Guid]::NewGuid().ToString("N"))
         New-Item -ItemType Directory -Force -Path $uvrExtract, $uvrWeights | Out-Null
         try {
@@ -334,33 +404,12 @@ try {
     if ($modelsReady) {
         Complete-Step 5 "FFmpeg 与预训练模型已存在，已跳过" -Skipped
     } else {
-      & $condaExe install -y -p $envRoot -c conda-forge ffmpeg cmake --json
-      if ($LASTEXITCODE -ne 0) { throw "FFmpeg 安装失败" }
       $condaFfmpeg = Join-Path $envRoot "Library\bin\ffmpeg.exe"
       & $condaFfmpeg -version 2>$null | Out-Null
       if ($LASTEXITCODE -eq 0) {
           Copy-Item -LiteralPath $condaFfmpeg -Destination $toolsRoot -Force
           Copy-Item -LiteralPath (Join-Path $envRoot "Library\bin\ffprobe.exe") -Destination $toolsRoot -Force
-      } else {
-          $systemFfmpeg = Get-Command ffmpeg.exe -ErrorAction SilentlyContinue
-          $systemFfprobe = Get-Command ffprobe.exe -ErrorAction SilentlyContinue
-          if ($systemFfmpeg -and $systemFfprobe) {
-              Copy-Item -LiteralPath $systemFfmpeg.Source -Destination (Join-Path $toolsRoot "ffmpeg.exe") -Force
-              Copy-Item -LiteralPath $systemFfprobe.Source -Destination (Join-Path $toolsRoot "ffprobe.exe") -Force
-          } else {
-              $ffmpegArchive = Join-Path $cacheRoot "ffmpeg-release-essentials.zip"
-              Invoke-RobustDownload "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" $ffmpegArchive ${function:Test-ZipReadable}
-              $ffmpegExtract = Join-Path $cacheRoot ("ffmpeg-extract-" + [Guid]::NewGuid().ToString("N"))
-              [IO.Compression.ZipFile]::ExtractToDirectory($ffmpegArchive, $ffmpegExtract)
-              try {
-                  $staticFfmpeg = Get-ChildItem -LiteralPath $ffmpegExtract -Recurse -File -Filter "ffmpeg.exe" | Select-Object -First 1
-                  $staticFfprobe = Get-ChildItem -LiteralPath $ffmpegExtract -Recurse -File -Filter "ffprobe.exe" | Select-Object -First 1
-                  if (-not $staticFfmpeg -or -not $staticFfprobe) { throw "静态 FFmpeg 压缩包缺少可执行文件" }
-                  Copy-Item -LiteralPath $staticFfmpeg.FullName -Destination (Join-Path $toolsRoot "ffmpeg.exe") -Force
-                  Copy-Item -LiteralPath $staticFfprobe.FullName -Destination (Join-Path $toolsRoot "ffprobe.exe") -Force
-              } finally { if (Test-Path $ffmpegExtract) { Remove-Item -LiteralPath $ffmpegExtract -Recurse -Force } }
-          }
-      }
+      } else { throw "显式 Conda 锁环境缺少 FFmpeg；拒绝使用系统 PATH 或浮动下载" }
       & (Join-Path $toolsRoot "ffmpeg.exe") -version 2>$null | Out-Null
       if ($LASTEXITCODE -ne 0) { throw "FFmpeg 实际执行验证失败" }
       $originalPath = $env:Path
@@ -369,13 +418,14 @@ try {
         $installScript = Join-Path $engineRoot "install.ps1"
         $patchedScript = Join-Path $engineRoot "install-local-voice-studio.ps1"
         $content = Get-Content -Raw -LiteralPath $installScript
-        $content = $content.Replace('Invoke-Pip torch torchcodec --index-url "https://download.pytorch.org/whl/cu128"', 'Invoke-Pip torch==2.7.1+cu128 torchaudio==2.7.1+cu128 --index-url "https://download.pytorch.org/whl/cu128"')
-        $content = $content.Replace('Invoke-Pip -r requirements.txt', 'Invoke-Pip -r requirements-local-voice-studio.txt')
+        $content = $content.Replace('Invoke-Pip torch torchcodec --index-url "https://download.pytorch.org/whl/cu128"', 'Write-Info "Pinned PyTorch already installed by VoiceStudio hash lock"')
+        $content = $content.Replace('Invoke-Pip -r extra-req.txt --no-deps', 'Write-Info "Pinned extra dependencies already installed by VoiceStudio hash lock"')
+        $content = $content.Replace('Invoke-Pip -r requirements.txt', 'Write-Info "Pinned dependencies already installed by VoiceStudio hash lock"')
         $content = $content.Replace('Write-Info "Downloading NLTK Data..."', '$nltkRoot = (python -c "import sys; print(sys.prefix)").Trim(); if (-not (Test-Path (Join-Path $nltkRoot "nltk_data\corpora\cmudict"))) { Write-Info "Downloading NLTK Data..."')
         $content = $content.Replace('Invoke-Unzip "nltk_data.zip" (python -c "import sys; print(sys.prefix)").Trim()', 'Invoke-Unzip "nltk_data.zip" $nltkRoot } else { Write-Info "NLTK Data Exists; Skip Downloading" }')
         $content = $content.Replace('Write-Info "Downloading Open JTalk Dict..."', '$openJtalkPackage = (python -c "import os, pyopenjtalk; print(os.path.dirname(pyopenjtalk.__file__))").Trim(); if (-not (Test-Path (Join-Path $openJtalkPackage "dictionary"))) { Write-Info "Downloading Open JTalk Dict..."')
         $content = $content.Replace('Write-Success "Open JTalk Dic Downloaded"', 'Write-Success "Open JTalk Dic Downloaded" } else { Write-Info "Open JTalk dictionary bundled with pyopenjtalk-plus; Skip Downloading" }')
-        $content = $content.Replace('$null = Invoke-WebRequest @params -ErrorAction Stop', '$validator = if ($OutFile -like "*.zip") { ${function:Test-ZipReadable} } elseif ($OutFile -like "*.tar.gz") { ${function:Test-TarReadable} } else { $null }; Invoke-RobustDownload -Uri $Uri -Destination $OutFile -Validator $validator')
+        $content = $content.Replace('$null = Invoke-WebRequest @params -ErrorAction Stop', '$validator = if ($OutFile -like "*.zip") { ${function:Test-ZipReadable} } elseif ($OutFile -like "*.tar.gz") { ${function:Test-TarReadable} } else { $null }; $assetId = switch ([IO.Path]::GetFileName($OutFile)) { "pretrained_models.zip" { "pretrained-models" } "G2PWModel.zip" { "g2pw-model" } "uvr5_weights.zip" { "uvr5-weights" } "nltk_data.zip" { "nltk-data" } "open_jtalk_dic_utf_8-1.11.tar.gz" { "open-jtalk-dictionary" } default { throw "上游脚本请求了未登记资产：$OutFile" } }; Invoke-PinnedAssetDownload -Id $assetId -Destination $OutFile -Validator $validator | Out-Null')
         $safeUnzip = '$extractTemp = Join-Path ([IO.Path]::GetTempPath()) ("lvs-unzip-" + [Guid]::NewGuid().ToString("N")); New-Item -ItemType Directory -Path $extractTemp | Out-Null; try { [IO.Compression.ZipFile]::ExtractToDirectory((Resolve-Path $ZipPath).Path, $extractTemp); New-Item -ItemType Directory -Force -Path $DestPath | Out-Null; Get-ChildItem -LiteralPath $extractTemp -Force | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $DestPath -Recurse -Force } } finally { if (Test-Path -LiteralPath $extractTemp) { Remove-Item -LiteralPath $extractTemp -Recurse -Force } }'
         $content = $content.Replace('Expand-Archive -Path $ZipPath -DestinationPath $DestPath -Force', $safeUnzip)
         $content = $content.Replace('Expand-Archive -Path $ZipPath -DestinationPath $DestPath -Force', 'Expand-ZipStaged -ZipPath $ZipPath -Destination $DestPath')
@@ -399,9 +449,57 @@ try {
     Complete-Step 6 "Torch、CUDA、模型与 GPT-SoVITS 加载验证通过"
 
     Start-Step 7 "写入安装清单"
-    $manifest = @{ schema_version = 1; engine_commit = $engineCommit; engine_version = "v2ProPlus"; python = (& $envPython -c "import sys; print(sys.version.split()[0])"); python_executable = (& $envPython -c "import sys; print(sys.executable)"); torch = (& $envPython -c "import torch; print(torch.__version__)"); installed_at = (Get-Date).ToString("o") }
-    $manifestJson = $manifest | ConvertTo-Json
-    [System.IO.File]::WriteAllText((Join-Path $runtimeRoot "install-manifest.json"), $manifestJson, $Utf8)
+    $verifiedFiles = [System.Collections.Generic.List[object]]::new()
+    foreach ($pin in @($assetManifest.installed_file_pins)) {
+        $target = Join-Path $resolvedDataRoot ([string]$pin.path).Replace("/", "\")
+        Test-PinnedFile -Path $target -Asset $pin
+        $verifiedFiles.Add(@{ path = [string]$pin.path; size = [Int64]$pin.size; sha256 = ([string]$pin.sha256).ToLowerInvariant(); kind = "tool" })
+    }
+    $modelRoots = @(
+        (Join-Path $engineRoot "GPT_SoVITS\pretrained_models"),
+        (Join-Path $engineRoot "GPT_SoVITS\text\G2PWModel")
+    )
+    foreach ($modelRoot in $modelRoots) {
+        if (-not (Test-Path -LiteralPath $modelRoot)) { throw "模型目录缺失：$modelRoot" }
+        foreach ($file in Get-ChildItem -LiteralPath $modelRoot -Recurse -File | Sort-Object FullName) {
+            if (-not $file.FullName.StartsWith($resolvedDataRoot + "\", [StringComparison]::OrdinalIgnoreCase)) { throw "模型文件越界：$($file.FullName)" }
+            $relative = $file.FullName.Substring($resolvedDataRoot.Length + 1).Replace("\", "/")
+            $verifiedFiles.Add(@{ path = $relative; size = [Int64]$file.Length; sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); kind = "model" })
+        }
+    }
+    $assetRecords = [System.Collections.Generic.List[object]]::new()
+    foreach ($asset in @($assetManifest.assets)) {
+        $assetPath = Join-Path $resolvedDataRoot ([string]$asset.destination).Replace("/", "\")
+        if (Test-Path -LiteralPath $assetPath -PathType Leaf) {
+            Test-PinnedFile -Path $assetPath -Asset $asset
+            $assetRecords.Add(@{ id = $asset.id; version = $asset.version; size = [Int64]$asset.size; sha256 = ([string]$asset.sha256).ToLowerInvariant(); source = @($asset.urls)[0] })
+        }
+    }
+    $condaLock = Join-Path (Split-Path -Parent $PSScriptRoot) "locks\conda-win-64.lock"
+    $pipLock = Join-Path (Split-Path -Parent $PSScriptRoot) "locks\requirements-win-cu128.lock"
+    $manifest = @{
+        schema_version = 2
+        asset_manifest_version = $assetManifest.manifest_version
+        asset_manifest_sha256 = (Get-FileHash -LiteralPath $assetManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        engine_commit = $engineCommit
+        pretrained_revision = $pretrainedRevision
+        engine_version = "v2ProPlus"
+        python = (& $envPython -c "import sys; print(sys.version.split()[0])")
+        python_executable = (& $envPython -c "import sys; print(sys.executable)")
+        torch = (& $envPython -c "import torch; print(torch.__version__)")
+        lockfiles = @{
+            conda = @{ path = "locks/conda-win-64.lock"; sha256 = (Get-FileHash -LiteralPath $condaLock -Algorithm SHA256).Hash.ToLowerInvariant() }
+            pip = @{ path = "locks/requirements-win-cu128.lock"; sha256 = $(if (Test-Path -LiteralPath $pipLock) { (Get-FileHash -LiteralPath $pipLock -Algorithm SHA256).Hash.ToLowerInvariant() } else { "not-installed" }) }
+        }
+        assets = $assetRecords
+        verified_files = $verifiedFiles
+        installed_at = (Get-Date).ToString("o")
+    }
+    $manifestJson = $manifest | ConvertTo-Json -Depth 8
+    $manifestPath = Join-Path $runtimeRoot "install-manifest.json"
+    $manifestTemp = "$manifestPath.tmp"
+    [System.IO.File]::WriteAllText($manifestTemp, $manifestJson, $Utf8)
+    Move-Item -LiteralPath $manifestTemp -Destination $manifestPath -Force
     Complete-Step 7 "安装清单已写入，安装完成"
     Write-Host "安装完成。现在可以离线执行合成与训练。"
 } catch {

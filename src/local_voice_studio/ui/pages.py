@@ -178,7 +178,8 @@ class GeneratePage(QWidget):
         }
         job = Job(JobKind.SYNTHESIZE, payload)
         self.store.save_job(job); self.job_created.emit(job)
-        request = self.client.send("load_profile", profile.to_dict())
+        profile_payload = profile.to_dict(); profile_payload["project_path"] = str(self.project)
+        request = self.client.send("load_profile", profile_payload)
         self.pending[request] = {"stage": "load_profile", "job": job, "payload": payload}
         if preview: self.preview_request = request; self.preview_status.setText("试听：正在加载模型……")
         self.active_job = job
@@ -190,7 +191,7 @@ class GeneratePage(QWidget):
         if not saved: self.resume.setEnabled(False); return
         profile = next((item for item in self.store.list_profiles(self.project) if item.id == saved.get("profile_id")), None)
         if not profile: _show_error(self, "原声音配置已不存在，无法恢复"); return
-        job = Job(JobKind.SYNTHESIZE, saved); self.store.save_job(job); self.job_created.emit(job); request = self.client.send("load_profile", profile.to_dict()); self.pending[request] = {"stage": "load_profile", "job": job, "payload": saved}; self.active_job = job; self.generate.setEnabled(False); self.resume.setEnabled(False); self.cancel.setEnabled(True); self.log.appendPlainText("正在恢复上次未完成的分段……")
+        job = Job(JobKind.SYNTHESIZE, saved); self.store.save_job(job); self.job_created.emit(job); profile_payload = profile.to_dict(); profile_payload["project_path"] = str(self.project); request = self.client.send("load_profile", profile_payload); self.pending[request] = {"stage": "load_profile", "job": job, "payload": saved}; self.active_job = job; self.generate.setEnabled(False); self.resume.setEnabled(False); self.cancel.setEnabled(True); self.log.appendPlainText("正在恢复上次未完成的分段……")
 
     def _on_event(self, request_id: str, event: str, payload: dict) -> None:
         context = self.pending.get(request_id)
