@@ -160,6 +160,13 @@ class BootstrapContracts(unittest.TestCase):
         self.assertIn("NumFOCUS", ASSET_MANIFEST.read_text(encoding="utf-8"))
         self.assertIn("schema_version = 2", source)
 
+    def test_legacy_manifest_upgrade_reuses_verified_private_tools(self):
+        source = BOOTSTRAP.read_text(encoding="utf-8-sig")
+        self.assertIn("function Test-InstalledFilePins", source)
+        self.assertIn("$privateToolsReady = Test-InstalledFilePins", source)
+        core_models_line = next(line for line in source.splitlines() if "$coreModelsReady =" in line)
+        self.assertNotIn("Test-ExistingInstallManifest", core_models_line)
+
     def test_dependency_locks_are_strict_and_nonempty(self):
         conda = (ROOT / "locks" / "conda-win-64.lock").read_text(encoding="utf-8")
         pip = (ROOT / "locks" / "requirements-win-cu128.lock").read_text(encoding="utf-8")

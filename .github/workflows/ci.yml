@@ -51,6 +51,14 @@ jobs:
         shell: pwsh
         run: |
           if (-not (Test-Path dist/LocalVoiceStudio/LocalVoiceStudio.exe)) { throw "Packaged EXE missing" }
+          $required = @(
+            'dist/LocalVoiceStudio/_internal/scripts/bootstrap_runtime.ps1',
+            'dist/LocalVoiceStudio/_internal/manifests/runtime-assets-v1.json',
+            'dist/LocalVoiceStudio/_internal/locks/conda-win-64.lock',
+            'dist/LocalVoiceStudio/_internal/locks/requirements-win-cu128.lock'
+          )
+          foreach ($item in $required) { if (-not (Test-Path $item)) { throw "Packaged runtime resource missing: $item" } }
+          ./dist/LocalVoiceStudio/_internal/scripts/bootstrap_runtime.ps1 -DataRoot (Join-Path $env:RUNNER_TEMP 'bootstrap-probe') -FunctionsOnly
           $env:QT_QPA_PLATFORM = 'offscreen'
           $env:LOCAL_VOICE_STUDIO_HOME = Join-Path $env:RUNNER_TEMP 'voice-studio-home'
           $env:LOCAL_VOICE_STUDIO_PROJECTS = Join-Path $env:RUNNER_TEMP 'voice-studio-projects'

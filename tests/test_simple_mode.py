@@ -70,13 +70,16 @@ def test_freeze_requires_confirmation_and_hashes_audio():
         assert store.load_dataset_snapshot(project, dataset.id).snapshot_sha256 == dataset.snapshot_sha256
 
 
-def test_main_navigation_has_exactly_four_beginner_entries():
+def test_main_navigation_exposes_cover_studio_and_legacy_pages():
     app = QApplication.instance() or QApplication([])
     with tempfile.TemporaryDirectory() as tmp:
         store = StudioStore(paths_for(Path(tmp))); store.create_project("界面")
         with patch.object(WorkerClient, "start", lambda self: None), patch.object(WorkerClient, "shutdown", lambda self: None), patch.object(WorkerClient, "send", lambda self, command, payload=None: f"fake-{command}"):
             window = MainWindow(store.paths, store)
-            assert [window.navigation.item(i).text() for i in range(window.navigation.count())] == ["一键训练", "我的声音", "一键生成", "设置"]
-            assert window.minimumWidth() <= 900 and window.minimumHeight() <= 620
+            labels = [window.navigation.item(i).text() for i in range(window.navigation.count())]
+            assert [label.split()[-1] for label in labels] == ["翻唱", "文字生成", "我的声音", "训练声音", "设置"]
+            assert window.stack.currentWidget() is window.cover_page
+            assert window.cover_page.import_button.text() == "导入歌曲"
+            assert window.minimumWidth() <= 1280 and window.minimumHeight() <= 720
             window.close()
     app.processEvents()

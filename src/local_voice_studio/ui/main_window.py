@@ -16,6 +16,8 @@ from ..paths import AppPaths
 from ..storage import StudioStore
 from .project_session import ProjectSession
 from .simple_pages import MyVoicesPage, OneClickGeneratePage, OneClickTrainingPage, SimpleSettingsPage, TaskCenterDialog
+from .cover_page import CoverPage
+from .theme import load_theme
 from .worker_client import WorkerClient
 
 
@@ -90,17 +92,17 @@ class SetupDialog(QDialog):
 
 class MainWindow(QMainWindow):
     def __init__(self, paths: AppPaths, store: StudioStore):
-        super().__init__(); self.paths, self.store = paths, store; self.setWindowTitle("VoiceStudio 本地声音工坊"); self.resize(1180, 780); self.setMinimumSize(900, 620)
+        super().__init__(); self.paths, self.store = paths, store; self.setWindowTitle("VoiceStudio · 本地 AI 声音创作工作室"); self.resize(1440, 900); self.setMinimumSize(1180, 700)
         self.session = ProjectSession(store, self); self.project = self.session.current
         self.client = WorkerClient(paths, self); self._build(); self.session.project_changed.connect(self._switch_project); self.client.start(); self.statusBar().showMessage("本地工作进程正在启动……")
         self.client.state_changed.connect(self._state); self.client.event.connect(self._worker_event)
 
     def _build(self) -> None:
         central = QWidget(); root = QHBoxLayout(central); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0); self.setCentralWidget(central)
-        sidebar = QWidget(); sidebar.setObjectName("sidebar"); sidebar.setFixedWidth(210); side_layout = QVBoxLayout(sidebar); brand = QLabel("VoiceStudio"); brand.setObjectName("brand"); side_layout.addWidget(brand); self.project_button = QToolButton(); self.project_button.setObjectName("projectPicker"); self.project_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon); self.project_button.setPopupMode(QToolButton.InstantPopup); self.project_menu = QMenu(self.project_button); self.project_menu.aboutToShow.connect(self._refresh_project_menu); self.project_button.setMenu(self.project_menu); side_layout.addWidget(self.project_button)
+        sidebar = QWidget(); sidebar.setObjectName("sidebar"); sidebar.setFixedWidth(204); side_layout = QVBoxLayout(sidebar); side_layout.setContentsMargins(0, 0, 0, 0); brand = QLabel("VoiceStudio"); brand.setObjectName("brand"); side_layout.addWidget(brand); brand_sub = QLabel("LOCAL AI AUDIO STUDIO"); brand_sub.setObjectName("brandSub"); side_layout.addWidget(brand_sub); self.project_button = QToolButton(); self.project_button.setObjectName("projectPicker"); self.project_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon); self.project_button.setPopupMode(QToolButton.InstantPopup); self.project_menu = QMenu(self.project_button); self.project_menu.aboutToShow.connect(self._refresh_project_menu); self.project_button.setMenu(self.project_menu); side_layout.addWidget(self.project_button)
         self.navigation = QListWidget(); self.navigation.setObjectName("navigation"); self.navigation.setFrameShape(QListWidget.NoFrame); side_layout.addWidget(self.navigation); task_center = QPushButton("任务中心"); task_center.setObjectName("sidebarButton"); task_center.clicked.connect(self._open_task_center); side_layout.addWidget(task_center); version = QLabel("GPT-SoVITS V2ProPlus\n完全本地 · 无遥测"); version.setObjectName("sidebarFoot"); side_layout.addWidget(version); root.addWidget(sidebar)
         self.stack = QStackedWidget(); root.addWidget(self.stack, 1)
-        for name in ("一键训练", "我的声音", "一键生成", "设置"): self.navigation.addItem(QListWidgetItem(name))
+        for name in ("♫  AI 翻唱", "▤  文字生成", "●  我的声音", "＋  训练声音", "⚙  设置"): self.navigation.addItem(QListWidgetItem(name))
         self.navigation.currentRowChanged.connect(self.stack.setCurrentIndex); self.navigation.setCurrentRow(0)
         self._build_project_pages(); self._update_project_button()
 
@@ -110,10 +112,10 @@ class MainWindow(QMainWindow):
             page = self.stack.widget(0)
             if hasattr(page, "release_resources"): page.release_resources()
             self.stack.removeWidget(page); page.deleteLater()
-        self.training_page = OneClickTrainingPage(self.store, self.project, self.client); self.voice_page = MyVoicesPage(self.store, self.project); self.generate_page = OneClickGeneratePage(self.store, self.project, self.client); self.settings_page = SimpleSettingsPage(self.paths, self.store, self.project, self.client)
-        for page in (self.training_page, self.voice_page, self.generate_page, self.settings_page): self.stack.addWidget(page)
+        self.cover_page = CoverPage(self.paths, self.store, self.project); self.generate_page = OneClickGeneratePage(self.store, self.project, self.client); self.voice_page = MyVoicesPage(self.store, self.project); self.training_page = OneClickTrainingPage(self.store, self.project, self.client); self.settings_page = SimpleSettingsPage(self.paths, self.store, self.project, self.client)
+        for page in (self.cover_page, self.generate_page, self.voice_page, self.training_page, self.settings_page): self.stack.addWidget(page)
         self.stack.setCurrentIndex(row)
-        self.voice_page.profiles_changed.connect(self.generate_page.refresh_profiles); self.training_page.profiles_changed.connect(self.generate_page.refresh_profiles); self.training_page.profiles_changed.connect(self.voice_page.refresh); self.voice_page.generate_requested.connect(self._use_profile); self.voice_page.retrain_requested.connect(self._retrain_profile); self.generate_page.train_requested.connect(lambda: self.navigation.setCurrentRow(0)); self.settings_page.install_requested.connect(self._open_setup)
+        self.voice_page.profiles_changed.connect(self.generate_page.refresh_profiles); self.voice_page.profiles_changed.connect(self.cover_page.refresh_profiles); self.training_page.profiles_changed.connect(self.generate_page.refresh_profiles); self.training_page.profiles_changed.connect(self.cover_page.refresh_profiles); self.training_page.profiles_changed.connect(self.voice_page.refresh); self.voice_page.generate_requested.connect(self._use_profile); self.voice_page.retrain_requested.connect(self._retrain_profile); self.generate_page.train_requested.connect(lambda: self.navigation.setCurrentRow(3)); self.settings_page.install_requested.connect(self._open_setup)
 
     def _update_project_button(self) -> None:
         self.project_button.setText(self.session.display_name(self.project) + "  ▾")
@@ -147,10 +149,10 @@ class MainWindow(QMainWindow):
         TaskCenterDialog(self.store, self).exec()
 
     def _use_profile(self, profile_id: str) -> None:
-        self.generate_page.select_profile(profile_id); self.navigation.setCurrentRow(2)
+        self.generate_page.select_profile(profile_id); self.navigation.setCurrentRow(1)
 
     def _retrain_profile(self, profile_id: str) -> None:
-        self.training_page.reset_for_profile(profile_id); self.navigation.setCurrentRow(0)
+        self.training_page.reset_for_profile(profile_id); self.navigation.setCurrentRow(3)
 
     def _script_path(self) -> Path:
         if getattr(sys, "frozen", False):
@@ -175,7 +177,7 @@ class MainWindow(QMainWindow):
         self.client.shutdown(); super().closeEvent(event)
 
 
-STYLE = """
+LEGACY_STYLE = """
 QWidget { font-family: "Microsoft YaHei UI"; font-size: 14px; color: #172033; }
 QMainWindow, QStackedWidget { background: #f6f8fc; }
 #sidebar { background: #18233a; }
@@ -218,3 +220,5 @@ QPushButton:disabled { color: #99a2b1; background: #eef0f4; }
 QProgressBar { border: 1px solid #d7deea; border-radius: 5px; text-align: center; background: white; }
 QProgressBar::chunk { background: #2d6cdf; border-radius: 4px; }
 """
+
+STYLE = load_theme()

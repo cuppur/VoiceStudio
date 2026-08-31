@@ -105,6 +105,17 @@ class InstallerSourceContractTests(unittest.TestCase):
         self.assertIn('env.insert("PYTHONIOENCODING", "utf-8")', source)
         self.assertIn('self.process.setArguments(arguments)', source)
 
+    def test_packaged_repair_includes_and_probes_security_resources(self):
+        build = (ROOT / "scripts/build.ps1").read_text(encoding="utf-8-sig")
+        for relative in (
+            "manifests\\runtime-assets-v1.json",
+            "locks\\conda-win-64.lock",
+            "locks\\requirements-win-cu128.lock",
+        ):
+            self.assertIn(relative, build)
+        self.assertIn("Packaged runtime resource missing", build)
+        self.assertIn("-FunctionsOnly", build)
+
 
 if __name__ == "__main__":
     unittest.main()

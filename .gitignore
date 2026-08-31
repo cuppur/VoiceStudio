@@ -22,3 +22,4 @@ installer/Output/
 *.pfx
 *.p12
 release-metadata/
+VoiceStudio-一键启动.exe

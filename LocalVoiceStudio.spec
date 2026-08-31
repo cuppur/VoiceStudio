@@ -22,6 +22,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name='LocalVoiceStudio',
+    icon=['assets\\voicestudio.ico'],
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

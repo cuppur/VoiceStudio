@@ -43,6 +43,23 @@ function Test-PinnedFile {
     if ($actual -ne ([string]$Asset.sha256).ToLowerInvariant()) { throw "文件 SHA-256 不符：$($Asset.id)" }
 }
 
+function Test-InstalledFilePins {
+    param(
+        [Parameter(Mandatory = $true)][string]$DataRoot,
+        [Parameter(Mandatory = $true)]$Manifest
+    )
+    try {
+        foreach ($pin in @($Manifest.installed_file_pins)) {
+            $target = Join-Path $DataRoot ([string]$pin.path).Replace("/", "\")
+            Test-PinnedFile -Path $target -Asset $pin
+        }
+        return $true
+    } catch {
+        Write-Host "[Repair] 已安装的私有媒体工具需要恢复：$($_.Exception.Message)"
+        return $false
+    }
+}
+
 function Test-MiniforgeSignature {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)]$Asset)
     $signature = Get-AuthenticodeSignature -LiteralPath $Path
@@ -381,7 +398,11 @@ try {
 
     Start-Step 5 "安装 FFmpeg 与预训练模型"
     $modelsMarker = Join-Path $runtimeRoot ".models-complete"
-    $coreModelsReady = (Test-Path -LiteralPath $modelsMarker) -and (Test-ExistingInstallManifest -RuntimeRoot $runtimeRoot -DataRoot $resolvedDataRoot) -and (Test-Path -LiteralPath (Join-Path $engineRoot "GPT_SoVITS\pretrained_models\sv")) -and (Test-Path -LiteralPath (Join-Path $engineRoot "GPT_SoVITS\text\G2PWModel"))
+    # A schema-v1 manifest is an upgrade signal, not proof that already-installed
+    # models or private tools are missing.  Verify the actual artifacts first;
+    # step 6 performs a real model load and step 7 atomically records their v2 hashes.
+    $coreModelsReady = (Test-Path -LiteralPath $modelsMarker) -and (Test-Path -LiteralPath (Join-Path $engineRoot "GPT_SoVITS\pretrained_models\sv")) -and (Test-Path -LiteralPath (Join-Path $engineRoot "GPT_SoVITS\text\G2PWModel"))
+    $privateToolsReady = Test-InstalledFilePins -DataRoot $resolvedDataRoot -Manifest $assetManifest
     $uvrWeights = Join-Path $engineRoot "tools\uvr5\uvr5_weights"
     $uvrReady = @(Get-ChildItem -LiteralPath $uvrWeights -File -Filter "*.pth" -ErrorAction SilentlyContinue).Count -gt 0
     if ($coreModelsReady -and $DownloadUVR5 -and -not $uvrReady) {
@@ -400,7 +421,7 @@ try {
         }
         $uvrReady = @(Get-ChildItem -LiteralPath $uvrWeights -File -Filter "*.pth").Count -gt 0
     }
-    $modelsReady = $coreModelsReady -and (-not $DownloadUVR5 -or $uvrReady)
+    $modelsReady = $coreModelsReady -and $privateToolsReady -and (-not $DownloadUVR5 -or $uvrReady)
     if ($modelsReady) {
         Complete-Step 5 "FFmpeg 与预训练模型已存在，已跳过" -Skipped
     } else {

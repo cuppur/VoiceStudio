@@ -30,9 +30,26 @@ try {
         if (-not $cachePath.StartsWith($sourceRoot, [System.StringComparison]::OrdinalIgnoreCase)) { throw "Unsafe cache path: $cachePath" }
         Remove-Item -LiteralPath $cachePath -Recurse -Force
     }
-    & $python -m PyInstaller --noconfirm --clean --onedir --windowed --name LocalVoiceStudio --paths src --add-data "scripts;scripts" --add-data "manifests;manifests" --add-data "locks;locks" --add-data "src/local_voice_studio;worker_source/local_voice_studio" --exclude-module torch --exclude-module torchaudio --exclude-module torchvision --exclude-module numpy launcher.py
+    $appIcon = Join-Path $repoRoot "assets\voicestudio.ico"
+    if (-not (Test-Path -LiteralPath $appIcon -PathType Leaf)) { throw "Application icon is missing: $appIcon" }
+    & $python -m PyInstaller --noconfirm --clean --onedir --windowed --name LocalVoiceStudio --icon $appIcon --paths src --add-data "scripts;scripts" --add-data "manifests;manifests" --add-data "locks;locks" --add-data "src/local_voice_studio;worker_source/local_voice_studio" --exclude-module torch --exclude-module torchaudio --exclude-module torchvision --exclude-module numpy launcher.py
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed" }
+    $packagedRoot = Join-Path $repoRoot "dist\LocalVoiceStudio\_internal"
+    $requiredPackagedFiles = @(
+        (Join-Path $packagedRoot "scripts\bootstrap_runtime.ps1"),
+        (Join-Path $packagedRoot "manifests\runtime-assets-v1.json"),
+        (Join-Path $packagedRoot "locks\conda-win-64.lock"),
+        (Join-Path $packagedRoot "locks\requirements-win-cu128.lock")
+    )
+    foreach ($requiredFile in $requiredPackagedFiles) {
+        if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) { throw "Packaged runtime resource missing: $requiredFile" }
+    }
+    $probeRoot = Join-Path $env:TEMP "VoiceStudio-packaged-bootstrap-probe"
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $requiredPackagedFiles[0] -DataRoot $probeRoot -FunctionsOnly
+    if ($LASTEXITCODE -ne 0) { throw "Packaged bootstrap resource probe failed" }
     Copy-Item -LiteralPath "THIRD_PARTY_NOTICES.md" -Destination "dist\LocalVoiceStudio" -Force
+    & (Join-Path $PSScriptRoot "build_quick_launcher.ps1")
+    if ($LASTEXITCODE -ne 0) { throw "Quick launcher build failed" }
     if ($Release) {
         & (Join-Path $PSScriptRoot "sign_release.ps1") -Path "dist\LocalVoiceStudio\LocalVoiceStudio.exe" -CertificateThumbprint $CertificateThumbprint -TimestampUrl $TimestampUrl
         if ($LASTEXITCODE -ne 0) { throw "Executable signing failed" }
