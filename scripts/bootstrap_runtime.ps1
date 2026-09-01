@@ -396,6 +396,24 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "智能降噪依赖导入验证失败" }
     }
 
+    Write-Host "[Runtime] 准备隔离 RVC Python 3.12 环境"
+    $rvcEnvRoot = Join-Path $runtimeRoot "rvc-env"
+    $rvcPython = Join-Path $rvcEnvRoot "python.exe"
+    if (-not (Test-Path -LiteralPath $rvcPython)) {
+        & $condaExe create -y -p $rvcEnvRoot python=3.12 pip
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $rvcPython)) { throw "RVC 隔离 Python 创建失败" }
+    }
+    & $rvcPython -m pip install --disable-pip-version-check --no-input torch==2.7.1+cu128 torchaudio==2.7.1+cu128 --index-url https://download.pytorch.org/whl/cu128 --extra-index-url https://pypi.org/simple
+    if ($LASTEXITCODE -ne 0) { throw "RVC CUDA PyTorch 安装失败" }
+    $rvcRequirements = Join-Path $resolvedDataRoot "engines\RVC\requirments_cu128_py312.txt"
+    if (Test-Path -LiteralPath $rvcRequirements) {
+        & $rvcPython -m pip install --disable-pip-version-check --no-input -r $rvcRequirements
+        if ($LASTEXITCODE -ne 0) { throw "RVC 依赖安装失败" }
+    }
+    & $rvcPython -c "import torch; assert torch.__version__ == '2.7.1+cu128'; assert torch.cuda.is_available()"
+    if ($LASTEXITCODE -ne 0) { throw "RVC CUDA 运行时验证失败" }
+    Write-Host "[Runtime] 隔离 RVC 环境已就绪"
+
     Start-Step 5 "安装 FFmpeg 与预训练模型"
     $modelsMarker = Join-Path $runtimeRoot ".models-complete"
     # A schema-v1 manifest is an upgrade signal, not proof that already-installed
@@ -419,7 +437,31 @@ try {
         } finally {
             if (Test-Path -LiteralPath $uvrExtract) { Remove-Item -LiteralPath $uvrExtract -Recurse -Force }
         }
-        $uvrReady = @(Get-ChildItem -LiteralPath $uvrWeights -File -Filter "*.pth").Count -gt 0
+    $uvrReady = @(Get-ChildItem -LiteralPath $uvrWeights -File -Filter "*.pth").Count -gt 0
+    # Phase 3 singing runtime is installed through the same pinned-asset path.
+    # It lives beside GPT-SoVITS and never shares its Python environment.
+    $rvcRoot = Join-Path $resolvedDataRoot "engines\RVC"
+    $rvcMarker = Join-Path $rvcRoot ".pinned-commit"
+    $rvcSourceAsset = Get-PinnedAsset -Id "rvc-v2-source"
+    $rvcReady = (Test-Path -LiteralPath $rvcMarker) -and ((Get-Content -Raw -LiteralPath $rvcMarker).Trim() -eq [string]$rvcSourceAsset.version)
+    if (-not $rvcReady) {
+        $rvcZip = Join-Path $cacheRoot "rvc-$($rvcSourceAsset.version).zip"
+        Invoke-PinnedAssetDownload -Id "rvc-v2-source" -Destination $rvcZip -Validator ${function:Test-ZipReadable} | Out-Null
+        $rvcExtract = Join-Path $cacheRoot ("rvc-extract-" + [Guid]::NewGuid().ToString("N")); New-Item -ItemType Directory -Path $rvcExtract | Out-Null
+        try {
+            [IO.Compression.ZipFile]::ExtractToDirectory($rvcZip, $rvcExtract)
+            $rvcExtracted = Get-ChildItem -LiteralPath $rvcExtract -Directory | Select-Object -First 1
+            if (-not $rvcExtracted -or -not (Test-Path (Join-Path $rvcExtracted.FullName "webui.py"))) { throw "RVC 固定源码不完整" }
+            if (Test-Path -LiteralPath $rvcRoot) { Move-Item -LiteralPath $rvcRoot -Destination (Join-Path (Split-Path $rvcRoot) ("RVC.invalid-" + (Get-Date -Format "yyyyMMddHHmmss"))) }
+            Move-Item -LiteralPath $rvcExtracted.FullName -Destination $rvcRoot
+            Set-Content -LiteralPath $rvcMarker -Value $rvcSourceAsset.version -Encoding Ascii
+        } finally { if (Test-Path -LiteralPath $rvcExtract) { Remove-Item -LiteralPath $rvcExtract -Recurse -Force } }
+    }
+    foreach ($rvcId in @("rvc-hubert-config", "rvc-hubert-preprocessor-config", "rvc-hubert-model", "rvc-rmvpe", "rvc-v2-generator", "rvc-v2-discriminator")) {
+        $rvcAsset = Get-PinnedAsset -Id $rvcId
+        $rvcDestination = Join-Path $resolvedDataRoot ([string]$rvcAsset.destination).Replace("/", "\")
+        Invoke-PinnedAssetDownload -Id $rvcId -Destination $rvcDestination | Out-Null
+    }
     }
     $modelsReady = $coreModelsReady -and $privateToolsReady -and (-not $DownloadUVR5 -or $uvrReady)
     if ($modelsReady) {
