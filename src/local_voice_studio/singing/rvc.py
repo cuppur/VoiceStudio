@@ -89,16 +89,20 @@ class RVCEngine:
         env = os.environ.copy(); env["PYTHONUTF8"] = "1"; env["PYTHONIOENCODING"] = "utf-8"
         env["PATH"] = os.pathsep.join([str(self.config.env_root), str(self.config.env_root / "Scripts"), env.get("PATH", "")])
         product_src = Path(__file__).resolve().parents[2]
-        env["PYTHONPATH"] = str(product_src) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        extra_paths = [p for p in (os.environ.get("LOCAL_VOICE_STUDIO_RVC_PYTHONPATH", "").split(os.pathsep)) if p]
+        env["PYTHONPATH"] = os.pathsep.join(extra_paths + [str(cwd or self.config.engine_root), str(product_src)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
         self.process = subprocess.Popen(args, cwd=str(cwd or self.config.engine_root), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+        output_tail: list[str] = []
         try:
             assert self.process.stdout is not None
             for line in self.process.stdout:
+                output_tail.append(line.rstrip())
+                if len(output_tail) > 20: output_tail.pop(0)
                 if cancel is not None and getattr(cancel, "is_set", lambda: False)():
                     self.cancel(); raise RuntimeError("任务已取消")
             code = self.process.wait()
         finally: self.process = None
-        if code: raise RuntimeError(f"RVC 子进程退出码 {code}")
+        if code: raise RuntimeError(f"RVC 子进程退出码 {code}: {' | '.join(output_tail[-5:])}")
 
     def cancel(self) -> None:
         p = self.process
