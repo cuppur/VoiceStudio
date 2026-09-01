@@ -52,3 +52,20 @@ def test_cancel_forwards_to_active_separation(monkeypatch, tmp_path):
     service.current_request_id = "work"
     service.handle(Message("cancel", {"target_request_id": "work"}))
     assert called == [True]
+
+
+def test_worker_dispatches_singing_conversion(monkeypatch, tmp_path):
+    seen = {}
+
+    class FakeSinging:
+        def convert(self, payload, cancel=None):
+            seen["payload"] = payload; seen["cancel"] = cancel
+            return {"output_path": "x.wav", "content_origin": "ai_generated"}
+
+    service = WorkerService(paths(tmp_path), singing_engine=FakeSinging())
+    service.emit = lambda *args, **kwargs: None
+    service.handle(Message("convert_vocal", {"project_path": str(tmp_path), "profile_id": "p", "cover_id": "c"}))
+    assert service.current_thread is not None
+    service.current_thread.join(2)
+    assert seen["cancel"] is service.cancel_event
+    assert seen["payload"]["profile_id"] == "p"
