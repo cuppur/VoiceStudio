@@ -39,7 +39,9 @@ class WorkerService:
         self.separation: SongSeparationPipeline | None = None
         if singing_engine is None:
             rvc_root = self.paths.data_root / "engines" / "RVC"
-            rvc_python = self.paths.runtime_root / "rvc-env" / "python.exe"
+            rvc_python = self.paths.runtime_root / "rvc-env" / "Scripts" / "python.exe"
+            if not rvc_python.is_file():
+                rvc_python = self.paths.runtime_root / "rvc-env" / "python.exe"
             marker = rvc_root / ".pinned-commit"
             commit = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
             singing_engine = RVCEngine(RVCConfig(
