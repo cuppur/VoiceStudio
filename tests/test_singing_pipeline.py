@@ -1,5 +1,6 @@
 import hashlib
 import json
+import threading
 import wave
 from pathlib import Path
 
@@ -20,6 +21,13 @@ class FakeSingingEngine:
         with wave.open(str(path), "wb") as stream:
             stream.setnchannels(1); stream.setsampwidth(2); stream.setframerate(16000); stream.writeframes(b"\x00\x00" * 160)
         return path
+
+
+class CancellingEngine(FakeSingingEngine):
+    def train(self, payload, cancel=None):
+        if cancel is not None:
+            cancel.set()
+        return super().train(payload, cancel=cancel)
 
 
 def _fixture(tmp_path):
@@ -68,3 +76,15 @@ def test_training_rejects_unconsented_profile(tmp_path):
     (project / "project.json").write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ValueError, match="授权"):
         SingingPipeline(FakeSingingEngine()).train({"project_path": str(project), "profile_id": "profile", "training_run_id": "run", "training_dataset_sha256": hashlib.sha256(b"dataset").hexdigest()})
+
+
+def test_cancelled_training_cleans_staging_and_allows_retry(tmp_path):
+    project, _ = _fixture(tmp_path)
+    pipeline = SingingPipeline(CancellingEngine())
+    cancel = threading.Event()
+    with pytest.raises(RuntimeError, match="取消"):
+        pipeline.train({"project_path": str(project), "profile_id": "profile", "training_run_id": "cancelled", "training_dataset_sha256": hashlib.sha256(b"dataset").hexdigest()}, cancel=cancel)
+    root = project / "models" / "singing" / "profile"
+    assert not (root / "cancelled.staging").exists()
+    assert not (root / "cancelled").exists()
+    assert pipeline.engine is not None
