@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import wave
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -22,6 +23,15 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _validate_wav(path: Path) -> None:
+    try:
+        with wave.open(str(path), "rb") as stream:
+            if stream.getnframes() <= 0 or stream.getframerate() <= 0 or stream.getnchannels() <= 0:
+                raise ValueError
+    except (OSError, EOFError, wave.Error, ValueError) as exc:
+        raise RuntimeError("转换未生成有效 WAV 音频") from exc
 
 
 class SingingPipeline:
@@ -170,6 +180,7 @@ class SingingPipeline:
                 raise RuntimeError("任务已取消")
             if produced != staging or not staging.is_file() or not staging.stat().st_size:
                 raise RuntimeError("转换未生成有效输出")
+            _validate_wav(staging)
             staging.replace(output)
             asset = CoverAsset(id=output_id, role="ai_vocal", relative_path=output.relative_to(cover.root).as_posix(), sha256=_sha256(output), content_origin="ai_generated", producer="rvc_v2", producer_version=cache_key, model_id=model.id, model_sha256=model.checkpoint_sha256, source_asset_ids=[source.id])
             cover.add_asset(asset)

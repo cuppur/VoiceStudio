@@ -1,5 +1,6 @@
 import hashlib
 import json
+import wave
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,8 @@ class FakeSingingEngine:
 
     def convert(self, payload, cancel=None):
         path = Path(payload["output_path"])
-        path.write_bytes(b"RIFFfake audio")
+        with wave.open(str(path), "wb") as stream:
+            stream.setnchannels(1); stream.setsampwidth(2); stream.setframerate(16000); stream.writeframes(b"\x00\x00" * 160)
         return path
 
 
