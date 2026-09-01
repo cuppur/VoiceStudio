@@ -96,7 +96,7 @@
         "https://codeload.github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI/zip/8f2fdbf483955f924b4c87ab34919170d0b704ed"
       ],
       "install_root": "engines/RVC",
-      "python": "3.12",
+      "python": "3.11",
       "torch": "2.7.1+cu128",
       "torchaudio": "2.7.1+cu128",
       "requirements": "requirments_cu128_py312.txt"

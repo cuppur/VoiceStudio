@@ -396,11 +396,11 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "智能降噪依赖导入验证失败" }
     }
 
-    Write-Host "[Runtime] 准备隔离 RVC Python 3.12 环境"
+    Write-Host "[Runtime] 准备隔离 RVC Python 3.11 环境"
     $rvcEnvRoot = Join-Path $runtimeRoot "rvc-env"
     $rvcPython = Join-Path $rvcEnvRoot "python.exe"
     if (-not (Test-Path -LiteralPath $rvcPython)) {
-        & $condaExe create -y -p $rvcEnvRoot python=3.12 pip
+        & $condaExe create -y -p $rvcEnvRoot python=3.11 pip
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $rvcPython)) { throw "RVC 隔离 Python 创建失败" }
     }
     & $rvcPython -m pip install --disable-pip-version-check --no-input torch==2.7.1+cu128 torchaudio==2.7.1+cu128 --index-url https://download.pytorch.org/whl/cu128 --extra-index-url https://pypi.org/simple
