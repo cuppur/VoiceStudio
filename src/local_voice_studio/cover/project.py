@@ -5,7 +5,7 @@ import json
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 from uuid import uuid4
 
@@ -41,6 +41,61 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+ASSET_ROLES = {"original", "vocal", "instrumental", "ai_vocal"}
+
+
+@dataclass
+class CoverAsset:
+    """A project-owned audio artifact and its provenance."""
+
+    id: str
+    role: str
+    relative_path: str
+    sha256: str
+    content_origin: str
+    producer: str
+    producer_version: str = ""
+    model_id: str = ""
+    model_sha256: str = ""
+    source_asset_ids: list[str] = field(default_factory=list)
+    created_at: str = field(default_factory=_now)
+
+    def __post_init__(self) -> None:
+        try:
+            validate_id(self.id, legacy=True, field="asset_id")
+        except ValueError as exc:
+            raise CoverProjectError(str(exc)) from exc
+        if self.role not in ASSET_ROLES:
+            raise CoverProjectError(f"不支持的资产角色: {self.role}")
+        self.content_origin = content_origin(self.content_origin)
+        path_text = str(self.relative_path).replace("\\", "/")
+        if (not path_text or path_text.startswith("/") or Path(path_text).is_absolute()
+                or PureWindowsPath(path_text).is_absolute() or ".." in Path(path_text).parts):
+            raise CoverProjectError("asset relative_path 必须是项目内相对路径")
+        self.relative_path = path_text
+        # Hashes are required for persisted assets, but migration can retain a
+        # missing hash when the old file is no longer available.
+        if self.sha256:
+            validate_sha256(self.sha256, field="asset_sha256")
+        if self.model_sha256:
+            validate_sha256(self.model_sha256, field="model_sha256")
+        for source_id in self.source_asset_ids:
+            validate_id(source_id, legacy=True, field="source_asset_id")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id, "role": self.role, "relative_path": self.relative_path,
+            "sha256": self.sha256, "content_origin": self.content_origin,
+            "producer": self.producer, "producer_version": self.producer_version,
+            "model_id": self.model_id, "model_sha256": self.model_sha256,
+            "source_asset_ids": list(self.source_asset_ids), "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "CoverAsset":
+        return cls(**{key: value[key] for key in cls.__dataclass_fields__ if key in value})
+
+
 @dataclass
 class CoverProject:
     """A cover session whose files are owned by ``project/covers/<id>``."""
@@ -48,6 +103,7 @@ class CoverProject:
     project_root: str
     id: str = field(default_factory=lambda: uuid4().hex)
     source_path: str = ""
+    original_source_name: str = ""
     source_relative_path: str = ""
     source_sha256: str = ""
     title: str = "未命名翻唱"
@@ -67,10 +123,11 @@ class CoverProject:
     content_origin: str = "original"
     output_hashes: dict[str, str] = field(default_factory=dict)
     output_paths: dict[str, str] = field(default_factory=dict)
+    assets: list[CoverAsset] = field(default_factory=list)
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __post_init__(self) -> None:
         self.project_root = str(Path(self.project_root).resolve())
@@ -81,6 +138,13 @@ class CoverProject:
         self.content_origin = content_origin(self.content_origin)
         if self.rights_attestation_version < 1:
             raise CoverProjectError("rights_attestation_version 必须为正整数")
+        normalized_assets: list[CoverAsset] = []
+        for asset in self.assets:
+            normalized_assets.append(asset if isinstance(asset, CoverAsset) else CoverAsset.from_dict(asset))
+        self.assets = normalized_assets
+        ids = [asset.id for asset in self.assets]
+        if len(ids) != len(set(ids)):
+            raise CoverProjectError("assets 不允许重复 asset id")
 
     @property
     def root(self) -> Path:
@@ -98,6 +162,12 @@ class CoverProject:
     @property
     def source_audio_sha256(self) -> str:
         return self.source_sha256
+
+    @property
+    def ai_vocal_path(self) -> str:
+        """Compatibility view of the newest registered AI vocal asset."""
+        asset = self.get_asset(role="ai_vocal")
+        return asset.relative_path if asset else ""
 
     @classmethod
     def create(cls, project_root: Path, *, title: str = "未命名翻唱", cover_id: str | None = None, **kwargs: Any) -> "CoverProject":
@@ -119,7 +189,8 @@ class CoverProject:
         if not path.is_file():
             raise FileNotFoundError(path)
         value = json.loads(path.read_text(encoding="utf-8"))
-        if value.get("schema_version") != cls.SCHEMA_VERSION:
+        version = value.get("schema_version", 1)
+        if version not in (1, cls.SCHEMA_VERSION):
             raise CoverProjectError("不支持的翻唱项目版本")
         value.pop("schema_version", None)
         value.pop("manifest_path", None)
@@ -127,9 +198,36 @@ class CoverProject:
             value["source_relative_path"] = value["source_audio"]
         if value.get("source_audio_sha256") and not value.get("source_sha256"):
             value["source_sha256"] = value["source_audio_sha256"]
+        if version == 1:
+            value["original_source_name"] = value.get("original_source_name") or (
+                Path(value.get("source_path", "")).name or Path(value.get("source_relative_path", "")).name
+            )
+            migrated: list[CoverAsset] = []
+            if value.get("source_relative_path"):
+                migrated.append(CoverAsset(
+                    id="original", role="original", relative_path=value["source_relative_path"],
+                    sha256=value.get("source_sha256", ""), content_origin="original", producer="imported",
+                ))
+            for role, key in (("vocal", "vocal_path"), ("instrumental", "instrumental_path")):
+                if value.get(key):
+                    path = value[key]
+                    digest = ""
+                    candidate = root / path
+                    if candidate.is_file():
+                        digest = _sha256(candidate)
+                    migrated.append(CoverAsset(
+                        id=role, role=role, relative_path=path, sha256=digest,
+                        content_origin="separated", producer="migrated",
+                    ))
+            value["assets"] = migrated
         value["project_root"] = str(Path(project_root).resolve())
         project = cls(**{key: value[key] for key in cls.__dataclass_fields__ if key in value})
         project._validate_recorded_paths()
+        if version == 1:
+            # Persist the lossless schema-v2 representation immediately so a
+            # migrated project no longer carries the legacy absolute source
+            # path on disk.
+            project.save()
         return project
 
     @classmethod
@@ -149,7 +247,7 @@ class CoverProject:
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": self.SCHEMA_VERSION,
-            "id": self.id, "source_path": self.source_path,
+            "id": self.id, "original_source_name": self.original_source_name,
             "source_relative_path": self.source_relative_path,
             "source_sha256": self.source_sha256,
             "title": self.title, "duration_ms": self.duration_ms,
@@ -167,6 +265,7 @@ class CoverProject:
             "content_origin": self.content_origin,
             "output_hashes": dict(self.output_hashes),
             "output_paths": dict(self.output_paths),
+            "assets": [asset.to_dict() for asset in self.assets],
             "created_at": self.created_at, "updated_at": self.updated_at,
         }
 
@@ -189,18 +288,63 @@ class CoverProject:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
         self.source_path = str(source)
+        self.original_source_name = source.name
         self.source_relative_path = destination.relative_to(self.root).as_posix()
         self.source_sha256 = _sha256(destination)
+        self._upsert_asset(CoverAsset(
+            id="original", role="original", relative_path=self.source_relative_path,
+            sha256=self.source_sha256, content_origin="original", producer="imported",
+        ))
         self.title = source.stem
         self.save()
         return destination
 
     def set_stem(self, name: str, path: Path) -> None:
         relative = self._relative_owned(path)
-        if name == "vocal": self.vocal_path = relative
-        elif name == "instrumental": self.instrumental_path = relative
+        if name == "vocal": self.vocal_path = relative; origin = "separated"
+        elif name == "instrumental": self.instrumental_path = relative; origin = "separated"
         else: raise CoverProjectError(f"不支持的音轨: {name}")
+        self._upsert_asset(CoverAsset(
+            id=name, role=name, relative_path=relative, sha256=_sha256(Path(path)),
+            content_origin=origin, producer="separation",
+        ))
         self.save()
+
+    def _upsert_asset(self, asset: CoverAsset) -> None:
+        self.assets = [item for item in self.assets if item.id != asset.id]
+        self.assets.append(asset)
+
+    def add_asset(self, asset: CoverAsset, *, save: bool = True) -> CoverAsset:
+        """Append a new asset version, rejecting accidental ID reuse.
+
+        Multiple assets may have the same role (for example successive AI
+        vocal conversions); :meth:`get_asset` resolves a role to the newest
+        registration while ID lookup remains exact.
+        """
+        if not isinstance(asset, CoverAsset):
+            asset = CoverAsset.from_dict(asset)
+        if any(existing.id == asset.id for existing in self.assets):
+            raise CoverProjectError(f"资产 ID 已存在: {asset.id}")
+        candidate = ensure_within(self.root, self.root / asset.relative_path)
+        if asset.sha256 and candidate.is_file() and _sha256(candidate) != asset.sha256:
+            raise CoverProjectError(f"资产 Hash 不匹配: {asset.id}")
+        self.assets.append(asset)
+        if save:
+            self.save()
+        return asset
+
+    def get_asset(self, identifier: str | None = None, *, role: str | None = None) -> CoverAsset | None:
+        """Return an asset by ID, or the newest asset with the given role."""
+        identifier = role if role is not None else identifier
+        if identifier is None:
+            return None
+        exact = next((asset for asset in self.assets if asset.id == identifier), None)
+        if exact is not None:
+            return exact
+        for asset in reversed(self.assets):
+            if asset.role == identifier:
+                return asset
+        return None
 
     def set_lyrics(self, path: Path) -> None:
         self.lyrics_path = self._relative_owned(path)
@@ -256,6 +400,15 @@ class CoverProject:
             validate_sha256(digest, allow_empty=False, field="output_sha256")
         for value in self.output_paths.values():
             ensure_within(self.root, self.root / value)
+        for asset in self.assets:
+            candidate = ensure_within(self.root, self.root / asset.relative_path)
+            if asset.sha256:
+                validate_sha256(asset.sha256, field="asset_sha256")
+                # Loading a project must remain possible after on-disk damage;
+                # cache and conversion callers perform the actual digest check
+                # before use and can then repair or report the affected asset.
+            if asset.model_sha256:
+                validate_sha256(asset.model_sha256, field="model_sha256")
         if self.source_sha256:
             validate_sha256(self.source_sha256, field="source_sha256")
         if self.separator_model_sha256:

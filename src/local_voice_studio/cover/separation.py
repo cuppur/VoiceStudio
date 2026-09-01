@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -33,14 +34,19 @@ class UVR5RuntimeStatus:
         model = paths.engine_root / "tools" / "uvr5" / "uvr5_weights" / MODEL_NAME
         if not model.exists(): return cls("missing", model, error="UVR5 未安装")
         try:
-            if not model.is_file() or model.stat().st_size < 1024 * 1024:
+            resolver = EngineRuntimeResolver(paths)
+            manifest_path = resolver.bundle_root / "manifests" / "runtime-assets-v1.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            pin = next((item for item in manifest.get("installed_file_pins", []) if item.get("id") == "uvr5-hp2"), None)
+            if not pin:
+                return cls("corrupt", model, error="UVR5 资产清单缺少固定 Hash")
+            if not model.is_file() or model.stat().st_size != int(pin["size"]):
                 return cls("corrupt", model, error="UVR5 文件损坏")
-            with model.open("rb") as stream:
-                header = stream.read(4)
-            if not (header.startswith(b"PK") or header.startswith(b"\x80")):
-                return cls("corrupt", model, error="UVR5 文件损坏")
-            return cls("ready", model, sha256_file(model))
-        except OSError:
+            actual = sha256_file(model)
+            if actual != str(pin["sha256"]).lower():
+                return cls("hash_mismatch", model, actual, error="UVR5 模型 Hash 不匹配")
+            return cls("ready", model, actual)
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
             return cls("corrupt", model, error="UVR5 文件损坏")
 
 
@@ -124,8 +130,10 @@ class SongSeparationPipeline:
             for target in (final_vocal, final_instrumental):
                 if target.exists(): target.unlink()
             os.replace(vocal, final_vocal); os.replace(instrumental, final_instrumental)
-            cover.vocal_path = final_vocal.relative_to(cover.root).as_posix()
-            cover.instrumental_path = final_instrumental.relative_to(cover.root).as_posix()
+            # Register the stems through the schema-v2 asset API so provenance
+            # and hashes are persisted together with the compatibility paths.
+            cover.set_stem("vocal", final_vocal)
+            cover.set_stem("instrumental", final_instrumental)
             cover.separator = "uvr5"; cover.separator_model_sha256 = runtime.model_sha256
             cover.separation_cache_key = cache_key; cover.separation_status = "completed"
             cover.output_paths = {"vocal": cover.vocal_path, "instrumental": cover.instrumental_path}

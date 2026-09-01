@@ -26,8 +26,15 @@ class VoiceSelector(QComboBox):
                 name, identifier = getattr(profile, "name", str(profile)), getattr(profile, "id", None)
                 consent_confirmed = bool(getattr(profile, "consent_confirmed", False))
                 archived = bool(getattr(profile, "archived", False))
+            singing_status = ""
+            if hasattr(profile, "singing_status"):
+                try:
+                    singing_status = str(profile.singing_status())
+                except TypeError:
+                    singing_status = str(profile.singing_status(None))
             allowed = consent_confirmed and not archived
-            label = f"{name} · {'可用' if allowed else ('已归档' if archived else '未授权')}"
+            capability = {"ready": "歌唱模型就绪", "training": "歌唱模型训练中", "untrusted": "歌唱模型未验证", "model_missing": "歌唱模型缺失"}.get(singing_status, "歌唱模型未生成")
+            label = f"{name} · {'可用' if allowed else ('已归档' if archived else '未授权')} · {capability}"
             self.addItem(label, identifier)
             index = self.count() - 1
             if not allowed:

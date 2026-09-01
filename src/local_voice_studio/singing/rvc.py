@@ -1,0 +1,146 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import signal
+import subprocess
+import threading
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Mapping, Sequence
+
+from .base import EngineReadiness
+
+
+@dataclass(frozen=True)
+class RVCConfig:
+    engine_root: Path
+    python: Path
+    env_root: Path
+    commit: str = ""
+    hubert_sha256: str = ""
+    rmvpe_sha256: str = ""
+    pretrained_sha256: tuple[str, ...] = ()
+    torch_version: str = "2.7.1+cu128"
+
+
+class RVCReadiness:
+    def __init__(self, config: RVCConfig):
+        self.config = config
+
+    def check(self) -> EngineReadiness:
+        c = self.config
+        errors: list[str] = []
+        details: dict[str, Any] = {"engine_root": str(c.engine_root), "isolated": c.env_root.resolve() != Path(os.environ.get("LOCAL_VOICE_STUDIO_ENV", "")).resolve() if os.environ.get("LOCAL_VOICE_STUDIO_ENV") else True}
+        if not c.engine_root.is_dir(): errors.append("RVC 源码目录不存在")
+        required_scripts = ("train/preprocess.py", "train/dataset/extract_f0.py", "train/dataset/extract_hubert_feature.py", "train/train.py", "train/train_index.py")
+        missing_scripts = [p for p in required_scripts if not (c.engine_root / p).is_file()]
+        if missing_scripts: errors.append("RVC 训练脚本缺失: " + ", ".join(missing_scripts))
+        if not (c.engine_root / "infer/vc/modules.py").is_file(): errors.append("RVC 转换模块缺失: infer/vc/modules.py")
+        marker = c.engine_root / ".pinned-commit"
+        if not c.commit: errors.append("RVC commit 未固定")
+        elif not marker.is_file() or marker.read_text(encoding="utf-8").strip() != c.commit: errors.append("RVC 源码 commit marker 不匹配")
+        if not c.python.is_file(): errors.append("RVC 隔离 Python 不存在")
+        if not c.env_root.is_dir(): errors.append("RVC 隔离环境不存在")
+        if c.python.is_file():
+            try:
+                probe = subprocess.run([str(c.python), "-c", "import torch; print(torch.__version__); print(torch.cuda.is_available())"], capture_output=True, text=True, timeout=15)
+                lines = probe.stdout.strip().splitlines()
+                if probe.returncode != 0 or not lines or lines[0].strip() != c.torch_version:
+                    errors.append(f"RVC PyTorch 版本不匹配（需要 {c.torch_version}）")
+                elif len(lines) < 2 or lines[1].strip().lower() != "true":
+                    errors.append("RVC CUDA 不可用")
+            except (OSError, subprocess.SubprocessError):
+                errors.append("RVC 运行时探针失败")
+        for label, digest, candidates in (
+            ("HuBERT", c.hubert_sha256, (c.engine_root / "assets/hubert_base/hubert_base.pt", c.engine_root / "assets/hubert_base/pytorch_model.bin")),
+            ("RMVPE", c.rmvpe_sha256, (c.engine_root / "assets/rmvpe/rmvpe.pt", c.engine_root / "rmvpe.pt")),
+        ):
+            existing = next((p for p in candidates if p.is_file() and p.stat().st_size), None)
+            if existing is None: errors.append(f"{label} 权重不存在")
+            elif digest and _sha256(existing) != digest.lower(): errors.append(f"{label} 权重 SHA-256 不匹配")
+        pre = list((c.engine_root / "assets/pretrained_v2").glob("*.pth")) if (c.engine_root / "assets/pretrained_v2").is_dir() else []
+        if not pre: errors.append("RVC v2 pretrained 权重不存在")
+        for expected in c.pretrained_sha256:
+            if not any(_sha256(p) == expected.lower() for p in pre): errors.append(f"RVC pretrained SHA-256 缺失: {expected}")
+        details["pretrained_files"] = [p.name for p in pre]
+        details["missing_scripts"] = missing_scripts
+        return EngineReadiness(not errors, tuple(errors), details)
+
+    __call__ = check
+
+
+class RVCEngine:
+    """Adapter around the upstream scripts. It never imports the ML runtime."""
+    def __init__(self, config: RVCConfig, runner: Callable[..., int] | None = None):
+        self.config = config
+        self.process: subprocess.Popen | None = None
+        self._runner = runner
+
+    def readiness(self) -> EngineReadiness:
+        return RVCReadiness(self.config).check()
+
+    def _run(self, args: list[str], cwd: Path | None = None, cancel: Any = None) -> None:
+        if self._runner is not None:
+            code = self._runner(args, cwd=cwd or self.config.engine_root, cancel=cancel)
+            if code: raise RuntimeError(f"RVC 子进程退出码 {code}")
+            return
+        env = os.environ.copy(); env["PYTHONUTF8"] = "1"; env["PYTHONIOENCODING"] = "utf-8"
+        env["PATH"] = os.pathsep.join([str(self.config.env_root), str(self.config.env_root / "Scripts"), env.get("PATH", "")])
+        product_src = Path(__file__).resolve().parents[2]
+        env["PYTHONPATH"] = str(product_src) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        self.process = subprocess.Popen(args, cwd=str(cwd or self.config.engine_root), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+        try:
+            assert self.process.stdout is not None
+            for line in self.process.stdout:
+                if cancel is not None and getattr(cancel, "is_set", lambda: False)():
+                    self.cancel(); raise RuntimeError("任务已取消")
+            code = self.process.wait()
+        finally: self.process = None
+        if code: raise RuntimeError(f"RVC 子进程退出码 {code}")
+
+    def cancel(self) -> None:
+        p = self.process
+        if p and p.poll() is None:
+            if os.name == "nt": subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"], capture_output=True)
+            else: os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+
+    def train(self, payload: Mapping[str, Any], cancel: Any = None) -> Sequence[Path]:
+        root = self.config.engine_root; exp = str(payload["experiment_dir"]); sr = str(payload.get("sample_rate", "48k")); version = str(payload.get("version", "v2"))
+        # Upstream 2.3 exposes these as webui callbacks, backed by these scripts.
+        cmds = [
+            [str(self.config.python), "train/preprocess.py", str(payload["dataset_dir"]), exp, sr, str(payload.get("n_processes", 4))],
+            [str(self.config.python), "train/dataset/extract_f0.py", "cuda", "1", "0", "1", str(payload.get("n_processes", 4)), exp, "rmvpe"],
+            [str(self.config.python), "train/dataset/extract_hubert_feature.py", "cuda:0", "1", "0", exp, version],
+            [str(self.config.python), "train/train.py", "-e", exp, "-sr", sr, "-f0", "1", "-bs", str(payload.get("batch_size", 4)), "-te", str(payload.get("epochs", 20)), "-se", str(payload.get("save_every", 5)), "-pg", str(payload.get("pretrained_g", root / "assets/pretrained_v2/f0G48k.pth")), "-pd", str(payload.get("pretrained_d", root / "assets/pretrained_v2/f0D48k.pth"))],
+            [str(self.config.python), "train/train_index.py", exp, version],
+        ]
+        for cmd in cmds: self._run(cmd, root, cancel)
+        discovered = [p for p in (Path(exp).rglob("*") if Path(exp).is_dir() else []) if p.is_file() and p.suffix.lower() in {".pth", ".index"}]
+        return tuple(discovered or (Path(p) for p in payload.get("outputs", [])))
+
+    def convert(self, payload: Mapping[str, Any], cancel: Any = None) -> Path:
+        out = Path(str(payload["output_path"]))
+        bridge = Path(str(payload.get("bridge_module", "local_voice_studio.singing.rvc_bridge")))
+        cmd = [str(self.config.python), "-m", str(bridge), "--input", str(payload["input_path"]), "--model", str(payload["model_path"]), "--index", str(payload.get("index_path", "")), "--pitch", str(payload.get("pitch_shift", payload.get("transpose", 0))), "--output", str(out)]
+        self._run(cmd, self.config.engine_root, cancel)
+        if not out.is_file() or not out.stat().st_size: raise RuntimeError("RVC 转换未生成输出音频")
+        return out
+
+    def verify_model(self, checkpoint: Path, index: Path | None = None) -> bool:
+        args = [str(self.config.python), "-m", "local_voice_studio.singing.rvc_bridge", "--verify-model", "--model", str(checkpoint), "--output", str(checkpoint)]
+        if index:
+            args.extend(["--index", str(index)])
+        try:
+            self._run(args, self.config.engine_root)
+            return True
+        except Exception:
+            return False
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""): h.update(block)
+    return h.hexdigest()

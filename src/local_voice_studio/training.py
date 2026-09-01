@@ -13,6 +13,12 @@ from uuid import uuid4
 from .models import utc_now
 from .paths import AppPaths, ensure_within, validate_id, validate_sha256
 
+# Singing/RVC is deliberately imported lazily: the public desktop process must
+# remain free of torch and other GPU dependencies.
+def rvc_training_engine(config, runner=None):
+    from .singing.rvc import RVCEngine
+    return RVCEngine(config, runner=runner)
+
 
 class TrainingPipeline:
     """Direct subprocess orchestration for the pinned GPT-SoVITS training scripts."""

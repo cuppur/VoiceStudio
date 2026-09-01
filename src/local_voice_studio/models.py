@@ -8,6 +8,8 @@ import json
 from typing import Any
 from uuid import uuid4
 
+from .singing.models import SingingModelVersion
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -147,6 +149,8 @@ class VoiceProfile:
     last_workflow_id: str = ""
     active_model_version_id: str = ""
     model_versions: list[ModelVersion] = field(default_factory=list)
+    singing_models: list[SingingModelVersion] = field(default_factory=list)
+    active_singing_model_id: str = ""
     archived: bool = False
     consent_record: str = ""
     consent_confirmed_at: str = ""
@@ -161,8 +165,33 @@ class VoiceProfile:
         value = dict(value)
         refs = [ReferenceAsset(**item) for item in value.pop("reference_assets", [])]
         versions = [ModelVersion.from_dict(item) for item in value.pop("model_versions", [])]
+        singing_models = [SingingModelVersion.from_dict(item) for item in value.pop("singing_models", [])]
         allowed = cls.__dataclass_fields__
-        return cls(reference_assets=refs, model_versions=versions, **{key: item for key, item in value.items() if key in allowed})
+        return cls(reference_assets=refs, model_versions=versions, singing_models=singing_models, **{key: item for key, item in value.items() if key in allowed})
+
+    def singing_status(self, project_root: Any | None = None) -> str:
+        """Return the UI-neutral state of the selected singing capability.
+
+        A model is usable only when it is explicitly verified, its declared
+        files exist, and pinned hashes still match.  A missing file is distinct
+        from an untrusted/tampered model so callers can offer the right remedy.
+        """
+        if self.training_state in {"training", "training_singing_model"}:
+            return "training"
+        if not self.singing_models:
+            return "not_ready"
+        if not self.active_singing_model_id:
+            return "not_ready"
+        active = next((item for item in self.singing_models if item.id == self.active_singing_model_id), None)
+        if active is None:
+            return "model_missing"
+        if active.profile_id != self.id:
+            return "untrusted"
+        if not active.files_available(project_root):
+            return "model_missing"
+        if active.trust_status != "verified" or not active.hashes_match(project_root):
+            return "untrusted"
+        return "ready"
 
     def status(self, assets: list["SourceAsset"] | None = None) -> str:
         if not self.consent_confirmed: return "待确认授权"

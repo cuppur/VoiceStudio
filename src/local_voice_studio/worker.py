@@ -19,10 +19,12 @@ from .runtime import EngineRuntimeResolver
 from .text import split_text
 from .training import TrainingPipeline
 from .cover.separation import SongSeparationPipeline
+from .singing.pipeline import SingingPipeline
+from .singing.rvc import RVCConfig, RVCEngine
 
 
 class WorkerService:
-    def __init__(self, paths: AppPaths | None = None):
+    def __init__(self, paths: AppPaths | None = None, *, singing_engine: Any | None = None):
         self.paths = paths or AppPaths.default()
         self.paths.ensure()
         self.engine = GptSovitsEngine(self.paths)
@@ -35,6 +37,19 @@ class WorkerService:
         self.write_lock = threading.Lock()
         self.shutdown_event = threading.Event()
         self.separation: SongSeparationPipeline | None = None
+        if singing_engine is None:
+            rvc_root = self.paths.data_root / "engines" / "RVC"
+            rvc_python = self.paths.runtime_root / "rvc-env" / "python.exe"
+            marker = rvc_root / ".pinned-commit"
+            commit = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
+            singing_engine = RVCEngine(RVCConfig(
+                rvc_root, rvc_python, rvc_python.parent.parent, commit=commit,
+                hubert_sha256="cc8c20f4b90a520757260197a3ff2505705a7adbd20ad9eeaa4e1a9b38442ef5",
+                rmvpe_sha256="6d62215f4306e3ca278246188607209f09af3dc77ed4232efdd069798c4ec193",
+                pretrained_sha256=("b5d51f589cc3632d4eae36a315b4179397695042edc01d15312e1bddc2b764a4", "2269b73c7a4cf34da09aea99274dabf99b2ddb8a42cbfb065fb3c0aa9a2fc748"),
+                torch_version="2.7.1+cu128",
+            ))
+        self.singing_engine = singing_engine
 
     def emit(self, request_id: str, event: str, payload: dict[str, Any]) -> None:
         if request_id == self.current_request_id and self._request_context:
@@ -85,6 +100,10 @@ class WorkerService:
                 cancel = getattr(self.separation, "cancel", None)
                 if callable(cancel):
                     cancel()
+            if self.singing_engine is not None:
+                stop = getattr(self.singing_engine, "cancel", None)
+                if callable(stop):
+                    stop()
             self.emit(message.id, "result", {"cancel_requested": True, "target_request_id": self.current_request_id})
         elif message.type == "shutdown":
             self.cancel_event.set()
@@ -94,6 +113,10 @@ class WorkerService:
                 cancel = getattr(self.separation, "cancel", None)
                 if callable(cancel):
                     cancel()
+            if self.singing_engine is not None:
+                stop = getattr(self.singing_engine, "cancel", None)
+                if callable(stop):
+                    stop()
             self.shutdown_event.set()
             self.emit(message.id, "result", {"shutdown": True})
         else:
@@ -106,6 +129,8 @@ class WorkerService:
                 "prepare_dataset": self._prepare_dataset,
                 "train": self._train,
                 "separate_song": self._separate_song,
+                "train_singing_model": self._train_singing_model,
+                "convert_vocal": self._convert_vocal,
             }[message.type]
             self.current_request_id = message.id
             self._request_context = {key: message.payload[key] for key in ("workflow_id", "stage", "attempt", "overall_progress") if key in message.payload}
@@ -327,6 +352,19 @@ class WorkerService:
             self.emit(request_id, "result", {"progress": 1.0, **result})
         finally:
             self.separation = None
+
+    def _singing(self, request_id: str) -> SingingPipeline:
+        if self.singing_engine is None:
+            raise RuntimeError("RVC 歌唱引擎尚未安装或未配置")
+        return SingingPipeline(self.singing_engine, progress=lambda value, message: self.emit(request_id, "progress", {"progress": value, "stage": "singing", "message": message}))
+
+    def _train_singing_model(self, request_id: str, payload: dict[str, Any]) -> None:
+        result = self._singing(request_id).train(payload, cancel=self.cancel_event)
+        self.emit(request_id, "result", {"progress": 1.0, "model": result})
+
+    def _convert_vocal(self, request_id: str, payload: dict[str, Any]) -> None:
+        result = self._singing(request_id).convert(payload, cancel=self.cancel_event)
+        self.emit(request_id, "result", {"progress": 1.0, **result})
 
 
 def main() -> int:

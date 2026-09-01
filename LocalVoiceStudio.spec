@@ -22,7 +22,6 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name='LocalVoiceStudio',
-    icon=['assets\\voicestudio.ico'],
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -33,6 +32,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['assets\\voicestudio.ico'],
 )
 coll = COLLECT(
     exe,

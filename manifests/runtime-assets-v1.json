@@ -85,9 +85,73 @@
         "https://huggingface.co/XXXXRT/GPT-SoVITS-Pretrained/resolve/0c47645e02a7bc3688d7b263b0042c81e3cd82cd/open_jtalk_dic_utf_8-1.11.tar.gz",
         "https://hf-mirror.com/XXXXRT/GPT-SoVITS-Pretrained/resolve/0c47645e02a7bc3688d7b263b0042c81e3cd82cd/open_jtalk_dic_utf_8-1.11.tar.gz"
       ]
+    },
+    {
+      "id": "rvc-v2-source",
+      "version": "8f2fdbf483955f924b4c87ab34919170d0b704ed",
+      "destination": "cache/rvc-8f2fdbf.zip",
+      "size": 397348,
+      "sha256": "48b808f60e52ebd82fdc9e204d8c4669b0f562bc63a5065ec6b4391d0a41a91c",
+      "urls": [
+        "https://codeload.github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI/zip/8f2fdbf483955f924b4c87ab34919170d0b704ed"
+      ],
+      "install_root": "engines/RVC",
+      "python": "3.12",
+      "torch": "2.7.1+cu128",
+      "torchaudio": "2.7.1+cu128",
+      "requirements": "requirments_cu128_py312.txt"
     }
   ],
   "installed_file_pins": [
+    {
+      "id": "uvr5-hp2",
+      "version": "HP2_all_vocals",
+      "path": "engines/GPT-SoVITS/tools/uvr5/uvr5_weights/HP2_all_vocals.pth",
+      "size": 63454827,
+      "sha256": "39796caa5db18d7f9382d8ac997ac967bfd85f7761014bb807d2543cc844ef05"
+    },
+    {
+      "id": "rvc-hubert-config",
+      "version": "e6d0c1a17da07c33557852f9dfa2bd44cc75737d",
+      "path": "engines/RVC/assets/hubert_base/config.json",
+      "size": 1492,
+      "sha256": "0346950779dfb7f9316fa74ed846e2b8a22a08eedfdc5387b73f327cb1a4a7cf"
+    },
+    {
+      "id": "rvc-hubert-preprocessor-config",
+      "version": "e6d0c1a17da07c33557852f9dfa2bd44cc75737d",
+      "path": "engines/RVC/assets/hubert_base/preprocessor_config.json",
+      "size": 225,
+      "sha256": "7c1976a680fb7acc757cd36fb08eef878fa36c70b4c9d2d595df9c608bbbbf0e"
+    },
+    {
+      "id": "rvc-hubert-model",
+      "version": "e6d0c1a17da07c33557852f9dfa2bd44cc75737d",
+      "path": "engines/RVC/assets/hubert_base/pytorch_model.bin",
+      "size": 189206711,
+      "sha256": "cc8c20f4b90a520757260197a3ff2505705a7adbd20ad9eeaa4e1a9b38442ef5"
+    },
+    {
+      "id": "rvc-rmvpe",
+      "version": "e6d0c1a17da07c33557852f9dfa2bd44cc75737d",
+      "path": "engines/RVC/assets/rmvpe/rmvpe.pt",
+      "size": 181184272,
+      "sha256": "6d62215f4306e3ca278246188607209f09af3dc77ed4232efdd069798c4ec193"
+    },
+    {
+      "id": "rvc-v2-generator",
+      "version": "e6d0c1a17da07c33557852f9dfa2bd44cc75737d",
+      "path": "engines/RVC/assets/pretrained_v2/f0G48k.pth",
+      "size": 75465569,
+      "sha256": "b5d51f589cc3632d4eae36a315b4179397695042edc01d15312e1bddc2b764a4"
+    },
+    {
+      "id": "rvc-v2-discriminator",
+      "version": "e6d0c1a17da07c33557852f9dfa2bd44cc75737d",
+      "path": "engines/RVC/assets/pretrained_v2/f0D48k.pth",
+      "size": 142875703,
+      "sha256": "2269b73c7a4cf34da09aea99274dabf99b2ddb8a42cbfb065fb3c0aa9a2fc748"
+    },
     {
       "path": "tools/ffmpeg.exe",
       "size": 242496512,

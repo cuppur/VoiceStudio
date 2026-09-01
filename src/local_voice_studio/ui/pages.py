@@ -368,6 +368,14 @@ class TrainingPage(QWidget):
 
     def _build(self) -> None:
         layout = QVBoxLayout(self); title = QLabel("数据与训练"); title.setObjectName("pageTitle"); layout.addWidget(title)
+        singing = QGroupBox("歌唱模型（RVC v2）")
+        singing_form = QFormLayout(singing)
+        self.singing_profile = QComboBox(); self.singing_profile.setObjectName("singingProfile"); self.singing_profile.currentIndexChanged.connect(self._update_singing_status)
+        self.singing_status = QLabel("未生成"); self.singing_status.setObjectName("hint")
+        self.train_singing = QPushButton("训练歌唱模型"); self.train_singing.setObjectName("primaryButton"); self.train_singing.clicked.connect(self._train_singing_model)
+        singing_form.addRow("声音配置", self.singing_profile); singing_form.addRow("状态", self.singing_status); singing_form.addRow("操作", self.train_singing)
+        note = QLabel("需要已确认授权的声音素材；RVC v2 + RMVPE 在独立运行环境中执行。训练完成后还需验证模型才能用于 AI 人声生成。")
+        note.setWordWrap(True); note.setObjectName("hint"); singing_form.addRow("说明", note); layout.addWidget(singing)
         profile_row = QHBoxLayout(); self.training_profile = QComboBox(); self.training_profile.currentIndexChanged.connect(self._load_profile_assets); profile_row.addWidget(QLabel("声音配置")); profile_row.addWidget(self.training_profile, 1); layout.addLayout(profile_row)
         tabs = QTabWidget(); layout.addWidget(tabs)
         sources = QWidget(); sources_layout = QVBoxLayout(sources)
@@ -401,7 +409,34 @@ class TrainingPage(QWidget):
         candidate_index = self.ab_profile.findData(candidate_id)
         if candidate_index >= 0: self.ab_profile.setCurrentIndex(candidate_index)
         self.ab_profile.blockSignals(False); self.training_profile.blockSignals(False); self._load_profile_assets()
+        self.singing_profile.blockSignals(True); self.singing_profile.clear()
+        for profile in profiles:
+            status = profile.singing_status(self.project) if hasattr(profile, "singing_status") else "not_ready"
+            self.singing_profile.addItem(profile.name, profile.id)
+            if not profile.consent_confirmed: self.singing_profile.model().item(self.singing_profile.count() - 1).setEnabled(False)
+        self.singing_profile.blockSignals(False); self._update_singing_status()
         self._restore_candidate_state()
+
+    def _update_singing_status(self):
+        identifier = self.singing_profile.currentData(); profile = next((p for p in self.store.list_profiles(self.project) if p.id == identifier), None)
+        status = profile.singing_status(self.project) if profile and hasattr(profile, "singing_status") else "not_ready"
+        labels = {"ready": "就绪", "training": "训练中", "untrusted": "未验证", "model_missing": "模型缺失", "not_ready": "未生成"}
+        self.singing_status.setText(labels.get(status, status)); self.train_singing.setEnabled(bool(profile and profile.consent_confirmed and status != "training"))
+
+    def _train_singing_model(self):
+        profile_id = self.singing_profile.currentData()
+        profile = next((p for p in self.store.list_profiles(self.project) if p.id == profile_id), None)
+        if not profile or not profile.consent_confirmed:
+            _show_error(self, "未确认声音授权，不能训练歌唱模型"); return
+        assets = self.store.list_source_assets(self.project, profile.id)
+        selected = [a.to_dict() for a in assets if a.enabled and not a.duplicate_of]
+        if not selected: _show_error(self, "请先准备并确认声音素材"); return
+        payload = {"project_path": str(self.project), "profile_id": profile.id, "source_assets": selected, "engine": "rvc_v2", "f0_method": "rmvpe", "training_run_id": uuid4().hex, "dataset_snapshot_id": profile.dataset_snapshot_id, "snapshot_sha256": ""}
+        try:
+            request = self.client.send("train_singing_model", payload)
+            profile.training_state = "training_singing_model"; self.store.save_profile(self.project, profile); self.singing_status.setText("训练中"); self.train_singing.setEnabled(False)
+            self.active_requests[request] = Job(JobKind.TRAIN, payload)
+        except Exception as exc: _show_error(self, str(exc))
 
     def _load_profile_assets(self) -> None:
         profile_id = self.training_profile.currentData(); self.source_assets = self.store.list_source_assets(self.project, profile_id) if profile_id else []; self.source_table.setRowCount(len(self.source_assets))

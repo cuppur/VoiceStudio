@@ -1,5 +1,5 @@
 """Persistent data primitives for AI cover projects."""
 
-from .project import CoverProject, CoverProjectError, content_origin
+from .project import CoverAsset, CoverProject, CoverProjectError, content_origin
 
-__all__ = ["CoverProject", "CoverProjectError", "content_origin"]
+__all__ = ["CoverAsset", "CoverProject", "CoverProjectError", "content_origin"]

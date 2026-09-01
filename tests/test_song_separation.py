@@ -19,6 +19,14 @@ def setup_case(tmp_path: Path):
     model.parent.mkdir(parents=True); model.write_bytes(b"PK" + b"m" * (1024 * 1024))
     return paths, project, cover
 
+@pytest.fixture
+def ready_runtime(monkeypatch):
+    """Pipeline tests exercise separation, not the manifest verifier itself."""
+    monkeypatch.setattr(
+        "local_voice_studio.cover.separation.UVR5RuntimeStatus.detect",
+        lambda paths=None: UVR5RuntimeStatus("ready", Path("model.pth"), "1" * 64),
+    )
+
 def test_runtime_missing_and_corrupt(tmp_path: Path):
     paths, _, _ = setup_case(tmp_path); model = paths.engine_root / "tools" / "uvr5" / "uvr5_weights" / MODEL_NAME
     model.unlink(); assert UVR5RuntimeStatus.detect(paths).status == "missing"
@@ -33,7 +41,7 @@ class FakeProcess:
     def wait(self): return self.returncode
     def communicate(self): return "", ""
 
-def test_cache_and_tamper_repair(tmp_path: Path, monkeypatch):
+def test_cache_and_tamper_repair(tmp_path: Path, monkeypatch, ready_runtime):
     paths, project, cover = setup_case(tmp_path)
     monkeypatch.setattr("local_voice_studio.cover.separation.EngineRuntimeResolver.worker_launch", lambda self: SimpleNamespace(program=Path("python.exe"), source_root=Path("src")))
     monkeypatch.setattr("local_voice_studio.cover.separation.subprocess.Popen", FakeProcess)
@@ -47,24 +55,24 @@ def test_cache_and_tamper_repair(tmp_path: Path, monkeypatch):
     repaired = pipeline.separate(cover.id, cover.source_relative_path, cover.source_sha256)
     assert repaired["cache_hit"] is False
 
-def test_hash_and_path_validation(tmp_path: Path):
+def test_hash_and_path_validation(tmp_path: Path, ready_runtime):
     paths, project, cover = setup_case(tmp_path); pipeline = SongSeparationPipeline(project, paths=paths)
     with pytest.raises(ValueError): pipeline.separate(cover.id, cover.source_relative_path, "0" * 64)
     with pytest.raises(ValueError): pipeline.separate(cover.id, "../outside.wav", cover.source_sha256)
 
-def test_rights_gate_is_enforced_in_pipeline(tmp_path: Path):
+def test_rights_gate_is_enforced_in_pipeline(tmp_path: Path, ready_runtime):
     paths, project, cover = setup_case(tmp_path); cover.attest_rights(False)
     with pytest.raises(PermissionError, match="权利声明"):
         SongSeparationPipeline(project, paths=paths).separate(cover.id, cover.source_relative_path, cover.source_sha256)
 
-def test_mp3_input_uses_same_verified_pipeline(tmp_path: Path, monkeypatch):
+def test_mp3_input_uses_same_verified_pipeline(tmp_path: Path, monkeypatch, ready_runtime):
     paths, project, _ = setup_case(tmp_path); cover = CoverProject.create(project, cover_id="mp3"); cover.attest_rights(True)
     source = tmp_path / "song.mp3"; source.write_bytes(b"ID3" + b"x" * 100); cover.copy_source(source)
     monkeypatch.setattr("local_voice_studio.cover.separation.EngineRuntimeResolver.worker_launch", lambda self: SimpleNamespace(program=Path("python.exe"), source_root=Path("src")))
     monkeypatch.setattr("local_voice_studio.cover.separation.subprocess.Popen", FakeProcess)
     assert SongSeparationPipeline(project, paths=paths).separate(cover.id, cover.source_relative_path, cover.source_sha256)["content_origin"] == "separated"
 
-def test_cancel_marks_manifest_and_cleans_staging(tmp_path: Path, monkeypatch):
+def test_cancel_marks_manifest_and_cleans_staging(tmp_path: Path, monkeypatch, ready_runtime):
     paths, project, cover = setup_case(tmp_path)
     class Running(FakeProcess):
         def poll(self): return None
