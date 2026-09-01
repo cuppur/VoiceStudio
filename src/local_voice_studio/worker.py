@@ -43,7 +43,7 @@ class WorkerService:
             marker = rvc_root / ".pinned-commit"
             commit = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
             singing_engine = RVCEngine(RVCConfig(
-                rvc_root, rvc_python, rvc_python.parent.parent, commit=commit,
+                rvc_root, rvc_python, rvc_python.parent, commit=commit,
                 hubert_sha256="cc8c20f4b90a520757260197a3ff2505705a7adbd20ad9eeaa4e1a9b38442ef5",
                 rmvpe_sha256="6d62215f4306e3ca278246188607209f09af3dc77ed4232efdd069798c4ec193",
                 pretrained_sha256=("b5d51f589cc3632d4eae36a315b4179397695042edc01d15312e1bddc2b764a4", "2269b73c7a4cf34da09aea99274dabf99b2ddb8a42cbfb065fb3c0aa9a2fc748"),
