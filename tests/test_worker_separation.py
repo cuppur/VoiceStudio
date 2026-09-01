@@ -63,6 +63,7 @@ def test_worker_dispatches_singing_conversion(monkeypatch, tmp_path):
             return {"output_path": "x.wav", "content_origin": "ai_generated"}
 
     service = WorkerService(paths(tmp_path), singing_engine=FakeSinging())
+    service._singing = lambda _request_id: FakeSinging()
     service.emit = lambda *args, **kwargs: None
     service.handle(Message("convert_vocal", {"project_path": str(tmp_path), "profile_id": "p", "cover_id": "c"}))
     assert service.current_thread is not None
