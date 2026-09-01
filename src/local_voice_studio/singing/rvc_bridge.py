@@ -12,10 +12,10 @@ from pathlib import Path
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True)
+    parser.add_argument("--input", default="")
     parser.add_argument("--model", required=True)
     parser.add_argument("--index", default="")
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--output", default="")
     parser.add_argument("--pitch", type=int, default=0)
     parser.add_argument("--verify-model", action="store_true")
     args = parser.parse_args()
@@ -31,6 +31,8 @@ def main() -> int:
             import faiss
             faiss.read_index(str(Path(args.index).resolve()))
         return 0
+    if not args.input or not args.output:
+        parser.error("--input and --output are required for conversion")
     from configs.config import Config
     from infer.vc.modules import VC
     import soundfile as sf
