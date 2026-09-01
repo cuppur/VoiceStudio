@@ -8,12 +8,14 @@ import tempfile
 import wave
 from pathlib import Path
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("QT_QPA_PLATFORM", "windows" if os.name == "nt" else "offscreen")
 
 from PySide6.QtCore import QEventLoop, QTimer
+from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import QApplication
 
 from local_voice_studio.models import VoiceProfile
+from local_voice_studio.cover.separation import SongSeparationPipeline
 from local_voice_studio.paths import AppPaths
 from local_voice_studio.storage import StudioStore
 from local_voice_studio.ui.main_window import MainWindow, STYLE
@@ -44,15 +46,29 @@ def main() -> int:
     paths.database.parent.mkdir(parents=True, exist_ok=True)
     store = StudioStore(paths); project = store.create_project("AI 翻唱演示")
     store.save_profile(project, VoiceProfile("澄澈女声", True))
-    app = QApplication.instance() or QApplication(sys.argv); app.setStyle("Fusion"); app.setStyleSheet(STYLE)
+    app = QApplication.instance() or QApplication(sys.argv); app.setStyle("Fusion")
+    cjk_font = "Microsoft YaHei UI"
+    if cjk_font not in QFontDatabase.families(): raise RuntimeError("截图环境缺少 Microsoft YaHei UI 中文字体")
+    app.setFont(QFont(cjk_font, 10)); app.setStyleSheet(STYLE)
     WorkerClient.start = lambda self: None; WorkerClient.shutdown = lambda self: None
-    window = MainWindow(paths, store); window.show(); window.cover_page.set_song(str(sample_song(root)))
-    loop = QEventLoop(); QTimer.singleShot(5000, loop.quit)
-    if window.cover_page._thread: window.cover_page._thread.finished.connect(loop.quit)
-    loop.exec(); app.processEvents()
+    window = MainWindow(paths, store); window.show()
     output = Path(__file__).resolve().parents[1] / "docs" / "screenshots"; output.mkdir(parents=True, exist_ok=True)
-    for width, height in ((1440, 900), (1280, 720)):
-        window.resize(width, height); app.processEvents(); window.grab().save(str(output / f"ai-cover-{width}x{height}.png"))
+    def wait_load():
+        loop = QEventLoop(); QTimer.singleShot(5000, loop.quit)
+        for thread in tuple(window.cover_page._threads): thread.finished.connect(loop.quit)
+        loop.exec(); app.processEvents()
+    def capture(name: str, width: int, height: int):
+        window.resize(width, height); app.processEvents()
+        window.grab().toImage().scaled(width, height).save(str(output / name))
+    capture("phase2-empty-1440x900.png", 1440, 900)
+    song = sample_song(root); window.cover_page.set_song(str(song)); wait_load()
+    capture("phase2-imported-1440x900.png", 1440, 900)
+    capture("phase2-imported-1280x720.png", 1280, 720)
+    cover = window.cover_page.cover_project; cover.attest_rights(True)
+    result = SongSeparationPipeline(project, paths=paths).separate(cover.id, cover.source_relative_path, cover.source_sha256)
+    window.cover_page._load_track(1, Path(result["vocal_path"])); window.cover_page._load_track(2, Path(result["instrumental_path"])); wait_load()
+    capture("phase2-separated-1440x900.png", 1440, 900)
+    capture("phase2-separated-1280x720.png", 1280, 720)
     window.close(); return 0
 
 

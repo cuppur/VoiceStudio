@@ -1,32 +1,69 @@
 from __future__ import annotations
 
+from enum import Enum
+
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QSlider, QWidget
+from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QSlider, QWidget
+
+from .waveform import WaveformWidget
+
+
+class TrackStatus(str, Enum):
+    EMPTY = "empty"
+    READY = "ready"
+    PROCESSING = "processing"
+    ERROR = "error"
+
+
+_STATUS_LABELS = {
+    TrackStatus.EMPTY: "未就绪",
+    TrackStatus.READY: "就绪",
+    TrackStatus.PROCESSING: "处理中",
+    TrackStatus.ERROR: "错误",
+}
 
 
 class StemTrackWidget(QWidget):
     mute_changed = Signal(bool)
     solo_changed = Signal(bool)
     volume_changed = Signal(int)
+    seek_requested = Signal(int)
 
     def __init__(self, name: str = "音轨", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("stemTrack")
-        self.setFixedHeight(42)
+        self.setFixedHeight(62)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 4, 8, 4)
         self.name_label = QLabel(name)
+        self.name_label.setFixedWidth(76)
         self.mute = QCheckBox("M")
         self.solo = QCheckBox("S")
         self.volume = QSlider(Qt.Horizontal)
         self.volume.setFixedWidth(100)
         self.volume.setRange(0, 100); self.volume.setValue(80)
-        self.status = QComboBox(); self.status.addItems(["Ready", "Empty", "等待分离", "等待生成", "处理中", "错误"]); self.status.setFixedWidth(90)
-        layout.addWidget(self.name_label, 1); layout.addWidget(self.mute); layout.addWidget(self.solo); layout.addWidget(self.volume); layout.addWidget(self.status)
+        self.status = TrackStatus.EMPTY
+        self.status_label = QLabel()
+        self.status_label.setObjectName("trackStatus")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setFixedWidth(70)
+        self.waveform = WaveformWidget(self)
+        self.waveform.setMinimumHeight(44)
+        self.waveform.seek_requested.connect(self.seek_requested)
+        layout.addWidget(self.name_label); layout.addWidget(self.waveform, 1); layout.addWidget(self.mute); layout.addWidget(self.solo); layout.addWidget(self.volume); layout.addWidget(self.status_label)
         self.mute.toggled.connect(self.mute_changed)
         self.solo.toggled.connect(self.solo_changed)
         self.volume.valueChanged.connect(self.volume_changed)
 
     def set_name(self, name: str) -> None: self.name_label.setText(str(name))
-    def set_status(self, status: str) -> None: self.status.setCurrentText(str(status))
+    def set_status(self, status: TrackStatus | str) -> None:
+        if not isinstance(status, TrackStatus):
+            aliases = {"Empty": TrackStatus.EMPTY, "Ready": TrackStatus.READY, "Processing": TrackStatus.PROCESSING, "Error": TrackStatus.ERROR}
+            status = aliases.get(str(status), TrackStatus(str(status).lower()))
+        self.status = status
+        self.status_label.setText(_STATUS_LABELS[status])
+        self.status_label.setProperty("state", status.value)
+        self.status_label.style().unpolish(self.status_label); self.status_label.style().polish(self.status_label)
     def set_volume(self, value: int) -> None: self.volume.setValue(max(0, min(100, int(value))))
+    def set_waveform(self, peaks, duration_ms: int) -> None: self.waveform.set_waveform(peaks, duration_ms)
+    def set_position(self, position_ms: int) -> None: self.waveform.set_position(position_ms)

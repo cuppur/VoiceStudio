@@ -7,6 +7,10 @@ $python = @(
     (Join-Path $repoRoot ".venv\Scripts\python.exe"),
     (Join-Path $env:LOCALAPPDATA "Programs\Python\Python310\python.exe")
 ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+if (-not $python) {
+    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+    if ($pythonCommand) { $python = $pythonCommand.Source }
+}
 if (-not $python) { throw "未找到可用于构建快速入口的 Python 3.10" }
 
 $icon = Join-Path $repoRoot "assets\voicestudio.ico"

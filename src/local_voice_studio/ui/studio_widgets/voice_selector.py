@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QComboBox, QWidget
 
 
@@ -9,18 +9,28 @@ class VoiceSelector(QComboBox):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.currentIndexChanged.connect(lambda index: self.voice_selected.emit(self.itemData(index)))
+        self.currentIndexChanged.connect(self._emit_if_allowed)
+
+    def _emit_if_allowed(self, index: int) -> None:
+        if index >= 0 and self.model().item(index).flags() & Qt.ItemIsEnabled:
+            self.voice_selected.emit(self.itemData(index))
 
     def set_profiles(self, profiles) -> None:
         self.clear()
         for profile in profiles or []:
             if isinstance(profile, dict):
                 name, identifier = profile.get("name", "未命名声音"), profile.get("id", profile.get("profile_id"))
-                # Singing is not implemented by this presentation-only component.
-                ready = False
+                consent_confirmed = bool(profile.get("consent_confirmed", False))
+                archived = bool(profile.get("archived", False))
             else:
                 name, identifier = getattr(profile, "name", str(profile)), getattr(profile, "id", None)
-                ready = False
-            # Singing readiness is intentionally display-only and never inferred.
-            label = f"{name} · {'可用' if ready else '未就绪'}"
+                consent_confirmed = bool(getattr(profile, "consent_confirmed", False))
+                archived = bool(getattr(profile, "archived", False))
+            allowed = consent_confirmed and not archived
+            label = f"{name} · {'可用' if allowed else ('已归档' if archived else '未授权')}"
             self.addItem(label, identifier)
+            index = self.count() - 1
+            if not allowed:
+                item = self.model().item(index)
+                item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
+                item.setData("已归档声音不可用" if archived else "请先确认授权", Qt.ToolTipRole)

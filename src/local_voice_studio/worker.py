@@ -18,6 +18,7 @@ from .protocol import COMMANDS, Message
 from .runtime import EngineRuntimeResolver
 from .text import split_text
 from .training import TrainingPipeline
+from .cover.separation import SongSeparationPipeline
 
 
 class WorkerService:
@@ -33,6 +34,7 @@ class WorkerService:
         self.cancel_event = threading.Event()
         self.write_lock = threading.Lock()
         self.shutdown_event = threading.Event()
+        self.separation: SongSeparationPipeline | None = None
 
     def emit(self, request_id: str, event: str, payload: dict[str, Any]) -> None:
         if request_id == self.current_request_id and self._request_context:
@@ -79,11 +81,19 @@ class WorkerService:
             self.cancel_event.set()
             self.engine.stop()
             self.training.cancel()
+            if self.separation is not None:
+                cancel = getattr(self.separation, "cancel", None)
+                if callable(cancel):
+                    cancel()
             self.emit(message.id, "result", {"cancel_requested": True, "target_request_id": self.current_request_id})
         elif message.type == "shutdown":
             self.cancel_event.set()
             self.engine.stop()
             self.training.cancel()
+            if self.separation is not None:
+                cancel = getattr(self.separation, "cancel", None)
+                if callable(cancel):
+                    cancel()
             self.shutdown_event.set()
             self.emit(message.id, "result", {"shutdown": True})
         else:
@@ -95,6 +105,7 @@ class WorkerService:
                 "synthesize": self._synthesize,
                 "prepare_dataset": self._prepare_dataset,
                 "train": self._train,
+                "separate_song": self._separate_song,
             }[message.type]
             self.current_request_id = message.id
             self._request_context = {key: message.payload[key] for key in ("workflow_id", "stage", "attempt", "overall_progress") if key in message.payload}
@@ -293,6 +304,29 @@ class WorkerService:
         sovits = [str(path) for path in outputs if path.suffix.lower() == ".pth" and path.is_file() and path.stat().st_size > 0]
         if not gpt or not sovits: raise RuntimeError("训练结束但没有找到真实 GPT 和 SoVITS 检查点")
         self.emit(request_id, "result", {"progress": 1.0, "training_run_id": payload.get("training_run_id", ""), "outputs": [str(path) for path in outputs], "checkpoints": {"gpt": gpt[0], "sovits": sovits[0], "gpt_sha256": sha256_file(Path(gpt[0])), "sovits_sha256": sha256_file(Path(sovits[0])), "origin": "trained-local", "trust_status": "verified"}})
+
+    def _separate_song(self, request_id: str, payload: dict[str, Any]) -> None:
+        if str(payload.get("mode", "uvr5")) != "uvr5":
+            raise ValueError("当前阶段只支持 UVR5 分离")
+        project = ensure_within(self.paths.projects_root, Path(str(payload.get("project_path", ""))))
+        cover_id = str(payload.get("cover_id", ""))
+        source_relative_path = str(payload.get("source_relative_path", ""))
+        source_sha256 = str(payload.get("source_sha256", ""))
+        if not cover_id or not source_relative_path or not source_sha256:
+            raise ValueError("separate_song 缺少 cover_id/source_relative_path/source_sha256")
+        pipeline = SongSeparationPipeline(project, paths=self.paths)
+        self.separation = pipeline
+        try:
+            result = pipeline.separate(
+                cover_id,
+                source_relative_path,
+                source_sha256,
+                cancel=self.cancel_event,
+                progress=lambda value, stage, message: self.emit(request_id, "progress", {"progress": value, "stage": stage, "message": message}),
+            )
+            self.emit(request_id, "result", {"progress": 1.0, **result})
+        finally:
+            self.separation = None
 
 
 def main() -> int:

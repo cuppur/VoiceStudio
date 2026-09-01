@@ -1,71 +1,182 @@
 from __future__ import annotations
+
+import shutil
 from pathlib import Path
-from PySide6.QtCore import QThread, Signal, Qt, QUrl
+
+from PySide6.QtCore import QThread, Qt, QUrl, Signal
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-from PySide6.QtWidgets import QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QPushButton, QSpinBox, QSlider, QVBoxLayout, QWidget, QCheckBox
+from PySide6.QtWidgets import QDialog, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QSpinBox, QVBoxLayout, QWidget
+
+from ..cover import CoverProject
+from ..cover.separation import UVR5RuntimeStatus
 from .cover_session import SongSession, parse_lrc
-from .studio_widgets import LyricView, StemTrackWidget, TaskProgress, TransportWidget, VoiceSelector, WaveformWidget
+from .studio_widgets import LyricView, StemTrackWidget, TaskProgress, TrackStatus, TransportWidget, VoiceSelector
+
+RIGHTS_TEXT = "我确认自己拥有或已经获得处理、使用该音频所需的权利，并理解公开传播或商业发行可能需要额外取得歌曲、录音等相关授权。"
+TRACK_NAMES = ("原曲", "原唱人声", "伴奏", "AI 人声", "最终混音")
+STAGE_INDEX = {"validating": 0, "preparing_model": 1, "separating": 2, "generating_waveforms": 3, "saving_project": 4}
+
 
 class _LoadThread(QThread):
-    loaded = Signal(object); failed = Signal(str)
-    def __init__(self, audio, lrc, paths, parent=None): super().__init__(parent); self.audio,self.lrc,self.paths=Path(audio),lrc,paths
+    loaded = Signal(int, object); failed = Signal(int, str)
+    def __init__(self, index, audio, lrc, paths, cache_dir, parent=None):
+        super().__init__(parent); self.index, self.audio, self.lrc, self.paths, self.cache_dir = index, Path(audio), lrc, paths, cache_dir
     def run(self):
-        try: self.loaded.emit(SongSession.load(self.audio,lrc_path=self.lrc,paths=self.paths,cache_dir=self.paths.data_root/'cache'/'waveforms',cancel=self.isInterruptionRequested))
-        except Exception as e: self.failed.emit(str(e))
+        try:
+            value = SongSession.load(self.audio, lrc_path=self.lrc, paths=self.paths, cache_dir=self.cache_dir, cancel=self.isInterruptionRequested)
+            self.loaded.emit(self.index, value)
+        except Exception as exc: self.failed.emit(self.index, str(exc))
 
-class _TaskDialog(QDialog):
-    def __init__(self,parent=None):
-        super().__init__(parent); self.setWindowTitle('AI 翻唱任务'); b=QVBoxLayout(self); b.addWidget(QLabel('AI翻唱引擎尚未安装，将在下一阶段启用')); self.progress=TaskProgress(); b.addWidget(self.progress)
-        for i,t in enumerate(('读取歌曲','处理歌词','准备目标声音','生成翻唱','导出混音')): b.addWidget(QLabel(f'{i+1}. {t} · 等待'))
-        x=QDialogButtonBox(QDialogButtonBox.Close); x.rejected.connect(self.reject); b.addWidget(x)
 
-class _SeparationDialog(QDialog):
-    def __init__(self,parent=None):
-        super().__init__(parent); self.setWindowTitle('分离人声与伴奏'); b=QVBoxLayout(self); b.addWidget(QLabel('选择分离模式'))
-        for t in ('快速 UVR5 · 已安装','高质量分离 · 即将支持','多轨分离 · 即将支持'): b.addWidget(QLabel('●  '+t))
-        x=QDialogButtonBox(QDialogButtonBox.Close); x.rejected.connect(self.reject); b.addWidget(x)
+class SeparationDialog(QDialog):
+    def __init__(self, runtime, parent=None):
+        super().__init__(parent); self.setWindowTitle("选择歌曲分离方式"); self.setMinimumWidth(520); layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("歌曲分离"))
+        cards = (("UVR5", "快速分离", "已安装 · 可用" if runtime.ready else ("文件损坏" if runtime.status == "corrupt" else "未安装"), runtime.ready),
+                 ("RoFormer", "高质量分离", "尚未安装 · 未来版本", False), ("多轨", "主唱 / 和声 / 伴奏", "未来版本", False))
+        for name, detail, state, enabled in cards:
+            button = QPushButton(f"{name}\n{detail}    {state}"); button.setObjectName("separatorCard"); button.setEnabled(enabled)
+            if enabled: button.clicked.connect(self.accept)
+            layout.addWidget(button)
+        cancel = QPushButton("取消"); cancel.clicked.connect(self.reject); layout.addWidget(cancel, alignment=Qt.AlignRight)
+
 
 class CoverPage(QWidget):
-    profileChanged=Signal(str)
-    def __init__(self,paths,store,project,parent=None):
-        super().__init__(parent); self.paths,self.store,self.project=paths,store,Path(project); self.session=None; self._thread=None
-        self.audio_output=QAudioOutput(self); self.audio_output.setVolume(.75); self.player=QMediaPlayer(self); self.player.setAudioOutput(self.audio_output); self._build(); self.refresh_profiles()
-        self.player.positionChanged.connect(self._position); self.player.durationChanged.connect(self._duration); self.player.playbackStateChanged.connect(lambda s:self.transport.set_playing(s==QMediaPlayer.PlayingState)); self.player.mediaStatusChanged.connect(self._media_status)
+    profileChanged = Signal(str)
+    def __init__(self, paths, store, project, worker=None, parent=None):
+        super().__init__(parent); self.paths, self.store, self.project, self.worker = paths, store, Path(project), worker
+        self.cover_project = None; self.sessions = {}; self.track_paths = {}; self._threads = set(); self._separation_request = ""; self._selected_track = 0
+        self.audio_output = QAudioOutput(self); self.audio_output.setVolume(.75); self.player = QMediaPlayer(self); self.player.setAudioOutput(self.audio_output)
+        self._build(); self.refresh_profiles(); self.refresh_runtime_status(); self.restore_cover()
+        self.player.positionChanged.connect(self._position); self.player.durationChanged.connect(lambda v: self.transport.set_timeline(self.player.position(), v)); self.player.playbackStateChanged.connect(lambda s: self.transport.set_playing(s == QMediaPlayer.PlayingState))
+
     def _build(self):
-        self.setStyleSheet("#coverPage{background:#0b1020;color:#e5e7eb} QLabel#title{font-size:28px;font-weight:700;color:#fff} QLabel#muted{color:#8b95a7} QFrame#settings{background:#151c2f;border:1px solid #283452;border-radius:14px} QPlainTextEdit,QComboBox,QSpinBox{background:#121a2c;color:#e5e7eb;border:1px solid #33415f;border-radius:7px;padding:7px} QPushButton{background:#1b2640;color:#e5e7eb;border:1px solid #3b4d76;border-radius:7px;padding:9px 14px} QPushButton#primaryButton{background:#7c3aed;color:#fff}"); root=QHBoxLayout(self); root.setContentsMargins(28,24,28,24); root.setSpacing(22); left=QVBoxLayout(); root.addLayout(left,1)
-        h=QHBoxLayout(); self.song_title=QLabel('还没有导入歌曲'); self.song_title.setObjectName('title'); h.addWidget(self.song_title); h.addStretch(); self.import_button=QPushButton('导入歌曲'); self.import_button.clicked.connect(self.import_song); h.addWidget(self.import_button); left.addLayout(h); self.song_meta=QLabel('支持 WAV / MP3 / FLAC · 导入后自动寻找同名 LRC'); self.song_meta.setObjectName('muted'); left.addWidget(self.song_meta)
-        self.waveform=WaveformWidget(); self.waveform.setMinimumHeight(130); self.waveform.setMaximumHeight(170); self.waveform.seek_requested.connect(self.player.setPosition); left.addWidget(self.waveform); self.transport=TransportWidget(); self.transport.play_requested.connect(self.toggle_playback); self.transport.seek_relative_requested.connect(lambda n:self.player.setPosition(max(0,min(self.player.duration(),self.player.position()+n)))); self.transport.timeline.sliderMoved.connect(self.player.setPosition); self.transport.volume_changed.connect(lambda n:self.audio_output.setVolume(n/100)); left.addWidget(self.transport)
-        stems=QVBoxLayout(); self.stems=[]
-        for n,s in (('原曲','Ready'),('人声','Empty'),('伴奏','Empty'),('音高','Empty'),('混音','Empty')): w=StemTrackWidget(n); w.set_status(s); self.stems.append(w); stems.addWidget(w)
-        left.addLayout(stems); lh=QHBoxLayout(); lh.addWidget(QLabel('歌词')); lh.addStretch(); self.lyric_status=QLabel('未载入'); self.lyric_status.setObjectName('muted'); lh.addWidget(self.lyric_status); self.lyric_import=QPushButton('手动导入 LRC'); self.lyric_import.clicked.connect(self.import_lyrics); lh.addWidget(self.lyric_import); left.addLayout(lh); self.lyrics=LyricView(); self.lyrics.seek_requested.connect(self.player.setPosition); left.addWidget(self.lyrics,1)
-        a=QHBoxLayout(); self.separate_button=QPushButton('分离人声 / 伴奏'); self.separate_button.clicked.connect(lambda:_SeparationDialog(self).exec()); a.addWidget(self.separate_button); a.addStretch(); self.cover_button=QPushButton('开始 AI 翻唱'); self.cover_button.setObjectName('primaryButton'); self.cover_button.clicked.connect(lambda:_TaskDialog(self).exec()); a.addWidget(self.cover_button); left.addLayout(a)
-        panel=QFrame(); panel.setObjectName('settings'); panel.setFixedWidth(270); f=QFormLayout(panel); f.addRow(QLabel('翻唱设置')); self.profile_combo=VoiceSelector(); self.profile_combo.voice_selected.connect(lambda p:self.profileChanged.emit(str(p or ''))); f.addRow('目标声音',self.profile_combo); self.pitch=QSpinBox(); self.pitch.setRange(-12,12); self.pitch.setValue(0); self.pitch.setSuffix(' 半音'); f.addRow('音调',self.pitch)
-        for label,val,name in (('音色',75,'timbre'),('细节',50,'detail')): x=QSlider(Qt.Horizontal); x.setRange(0,100); x.setValue(val); setattr(self,name,x); f.addRow(label,x)
-        for label,name in (('AI人声','ai_gain'),('伴奏','inst_gain')): x=QSpinBox(); x.setRange(-24,24); x.setValue(0); x.setSuffix(' dB'); setattr(self,name,x); f.addRow(label,x)
-        for label,name in (('自动音高','auto_pitch'),('去混响','dereverb'),('保留和声','keep_harmony')): x=QCheckBox(label); x.setChecked(True); setattr(self,name,x); f.addRow(x)
-        f.addRow(QLabel('本地处理 · 不上传音频')); root.addWidget(panel)
+        root = QHBoxLayout(self); root.setContentsMargins(24, 20, 24, 20); root.setSpacing(18); left = QVBoxLayout(); root.addLayout(left, 1)
+        header = QHBoxLayout(); self.song_title = QLabel("还没有导入歌曲"); self.song_title.setObjectName("songTitle"); header.addWidget(self.song_title); header.addStretch()
+        self.import_button = QPushButton("导入歌曲"); self.import_button.clicked.connect(self.import_song); header.addWidget(self.import_button); left.addLayout(header)
+        self.song_meta = QLabel("支持 WAV / MP3 / FLAC · 导入后自动寻找同名 LRC"); self.song_meta.setObjectName("muted"); left.addWidget(self.song_meta)
+        self.transport = TransportWidget(); self.transport.play_requested.connect(self.toggle_playback); self.transport.seek_relative_requested.connect(lambda d: self.player.setPosition(max(0, min(self.player.duration(), self.player.position() + d)))); self.transport.timeline.sliderMoved.connect(self.player.setPosition); self.transport.volume_changed.connect(lambda v: self.audio_output.setVolume(v / 100)); left.addWidget(self.transport)
+        self.stems = []
+        for index, name in enumerate(TRACK_NAMES):
+            track = StemTrackWidget(name); track.set_status(TrackStatus.EMPTY); track.seek_requested.connect(self.player.setPosition)
+            track.solo_changed.connect(lambda _v, i=index: self._track_mix_changed(i)); track.mute_changed.connect(lambda _v, i=index: self._track_mix_changed(i)); track.volume_changed.connect(lambda _v, i=index: self._track_mix_changed(i))
+            self.stems.append(track); left.addWidget(track)
+        lyric_header = QHBoxLayout(); lyric_header.addWidget(QLabel("歌词")); lyric_header.addStretch(); self.lyric_status = QLabel("未载入"); self.lyric_status.setObjectName("muted"); lyric_header.addWidget(self.lyric_status)
+        self.lyric_import = QPushButton("手动导入 LRC"); self.lyric_import.clicked.connect(self.import_lyrics); lyric_header.addWidget(self.lyric_import); left.addLayout(lyric_header)
+        self.lyrics = LyricView(); self.lyrics.seek_requested.connect(self.player.setPosition); left.addWidget(self.lyrics, 1)
+        self.progress = TaskProgress(); self.progress.hide(); left.addWidget(self.progress)
+        actions = QHBoxLayout(); self.separate_button = QPushButton("分离人声 / 伴奏"); self.separate_button.clicked.connect(self.separate_song); actions.addWidget(self.separate_button)
+        self.cancel_button = QPushButton("取消分离"); self.cancel_button.clicked.connect(self.cancel_separation); self.cancel_button.hide(); actions.addWidget(self.cancel_button); actions.addStretch()
+        self.cover_button = QPushButton("AI 翻唱（后续阶段）"); self.cover_button.setEnabled(False); actions.addWidget(self.cover_button); left.addLayout(actions)
+        panel = QFrame(); panel.setObjectName("coverSettings"); panel.setFixedWidth(270); form = QFormLayout(panel); form.addRow(QLabel("翻唱设置"))
+        self.profile_combo = VoiceSelector(); self.profile_combo.voice_selected.connect(lambda p: self.profileChanged.emit(str(p or ""))); form.addRow("目标声音", self.profile_combo)
+        self.pitch = QSpinBox(); self.pitch.setRange(-12, 12); self.pitch.setSuffix(" 半音"); form.addRow("音调", self.pitch)
+        self.rights_state = QLabel("歌曲权利：未确认"); self.rights_state.setWordWrap(True); form.addRow(self.rights_state)
+        self.uvr_status = QLabel(); self.uvr_status.setObjectName("muted"); self.uvr_status.setWordWrap(True); form.addRow("伴奏分离", self.uvr_status)
+        note = QLabel("本地处理 · 不上传音频\n普通分离音轨不是 AI 翻唱成品"); note.setWordWrap(True); form.addRow(note); root.addWidget(panel)
+
     def import_song(self):
-        p,_=QFileDialog.getOpenFileName(self,'导入歌曲',str(self.project),'音频 (*.wav *.flac *.mp3 *.m4a *.aac *.ogg)');
-        if p:self.set_song(p)
-    def set_song(self,path):
-        if self._thread and self._thread.isRunning(): return
-        self.player.stop(); self.player.setSource(QUrl()); p=Path(path); self.song_path=str(p); self.song_title.setText(p.stem); self.song_meta.setText(f'{p.suffix.upper().lstrip(".")} · 读取中…'); self.import_button.setEnabled(False); self._thread=_LoadThread(p,p.with_suffix('.lrc'),self.paths,self); self._thread.loaded.connect(self._loaded); self._thread.failed.connect(lambda e:self.song_meta.setText('读取失败：'+e)); self._thread.finished.connect(self._load_finished); self._thread.start()
-    def _load_finished(self):
-        self.import_button.setEnabled(True); self._thread=None
-    def _loaded(self,s):
-        self.session=s; m=s.metadata; self.player.setSource(QUrl.fromLocalFile(s.audio_path)); self.waveform.set_waveform(s.peaks,int(m.duration_seconds*1000)); self.lyrics.set_lyrics(s.lyrics); self.song_meta.setText(f'{Path(s.audio_path).suffix.upper().lstrip(".")} · {m.duration_seconds:.1f}s · {m.sample_rate} Hz · {m.channels}ch · 目标声音：{self.profile_combo.currentText()}'); self.lyric_status.setText('已匹配同名 LRC' if s.lyrics else '未载入')
+        path, _ = QFileDialog.getOpenFileName(self, "导入歌曲", str(self.project), "音频 (*.wav *.flac *.mp3 *.m4a *.aac *.ogg)")
+        if path: self.set_song(path)
+
+    def set_song(self, path):
+        try:
+            self.cover_project = CoverProject.create(self.project, title=Path(path).stem); copied = self.cover_project.copy_source(Path(path)); self.track_paths = {0: str(copied)}; lrc = Path(path).with_suffix(".lrc"); destination = None
+            if lrc.is_file(): destination = self.cover_project.root / "lyrics" / "lyrics.lrc"; shutil.copy2(lrc, destination); self.cover_project.set_lyrics(destination)
+            self._reset_tracks(); self._load_track(0, copied, destination)
+        except Exception as exc: self.song_meta.setText("导入失败：" + str(exc))
+
+    def _reset_tracks(self):
+        self.sessions.clear()
+        for track in self.stems: track.set_status(TrackStatus.EMPTY); track.set_waveform([], 0)
+        self.stems[0].set_status(TrackStatus.PROCESSING)
+
+    def _load_track(self, index, path, lrc=None):
+        path = Path(path)
+        if not path.is_file(): return
+        self.stems[index].set_status(TrackStatus.PROCESSING); self.import_button.setEnabled(False); cache = self.cover_project.root / "waveform" if self.cover_project else self.paths.data_root / "cache" / "waveforms"
+        thread = _LoadThread(index, path, lrc, self.paths, cache, self); self._threads.add(thread); thread.loaded.connect(self._loaded); thread.failed.connect(self._load_failed); thread.finished.connect(lambda t=thread: self._load_finished(t)); thread.start()
+
+    def _loaded(self, index, session):
+        self.sessions[index] = session; self.track_paths[index] = session.audio_path; duration = round(session.metadata.duration_seconds * 1000); self.stems[index].set_waveform(session.peaks, duration); self.stems[index].set_status(TrackStatus.READY)
+        if index == 0:
+            self.song_title.setText(self.cover_project.title if self.cover_project else Path(session.audio_path).stem); m = session.metadata; self.song_meta.setText(f"{Path(session.audio_path).suffix.upper().lstrip('.')} · {m.duration_seconds:.1f}s · {m.sample_rate} Hz · {m.channels}ch")
+            self.lyrics.set_lyrics(session.lyrics); self.lyric_status.setText("已载入 LRC" if session.lyrics else "未载入")
+            if self.cover_project: self.cover_project.duration_ms = duration; self.cover_project.save()
+            self._select_track(0, False)
+        if self.cover_project:
+            key = ("original", "vocals", "instrumental")[index] if index < 3 else str(index); cache = self.cover_project.root / "waveform" / f"{session.sha256}.json"
+            if cache.is_file(): self.cover_project.set_waveform(cache, key)
+
+    def _load_failed(self, index, error): self.stems[index].set_status(TrackStatus.ERROR); self.song_meta.setText("读取失败：" + error)
+    def _load_finished(self, thread): self._threads.discard(thread); self.import_button.setEnabled(not self._threads)
+
     def import_lyrics(self):
-        p,_=QFileDialog.getOpenFileName(self,'导入歌词',str(self.project),'歌词 (*.lrc *.txt)');
-        if p:self.lyrics.set_lyrics(parse_lrc(Path(p).read_text(encoding='utf-8-sig',errors='replace'))); self.lyric_status.setText('已手动导入')
-    def toggle_playback(self): self.player.pause() if self.player.playbackState()==QMediaPlayer.PlayingState else self.player.play()
-    def _position(self,v): self.waveform.set_position(v); self.lyrics.set_position(v); self.transport.set_timeline(v,self.player.duration())
-    def _duration(self,v): self.waveform.set_waveform(self.session.peaks if self.session else [],v); self.transport.set_timeline(self.player.position(),v)
-    def _media_status(self,s):
-        if s==QMediaPlayer.EndOfMedia:self.player.setPosition(0); self.transport.set_playing(False)
+        if not self.cover_project: return
+        path, _ = QFileDialog.getOpenFileName(self, "导入歌词", str(self.project), "歌词 (*.lrc *.txt)")
+        if path:
+            destination = self.cover_project.root / "lyrics" / "lyrics.lrc"; shutil.copy2(path, destination); self.cover_project.set_lyrics(destination); self.lyrics.set_lyrics(parse_lrc(destination.read_text(encoding="utf-8-sig", errors="replace"))); self.lyric_status.setText("已手动载入 LRC")
+
     def refresh_profiles(self):
-        try:self.profile_combo.set_profiles(self.store.list_profiles(self.project))
-        except (AttributeError,OSError,TypeError): self.profile_combo.set_profiles([])
+        try: self.profile_combo.set_profiles(self.store.list_profiles(self.project))
+        except (AttributeError, OSError, TypeError): self.profile_combo.set_profiles([])
+
+    def refresh_runtime_status(self):
+        self.runtime_status = UVR5RuntimeStatus.detect(self.paths); self.uvr_status.setText("UVR5 已就绪" if self.runtime_status.ready else ("UVR5 文件损坏" if self.runtime_status.status == "corrupt" else "UVR5 未安装")); self.separate_button.setEnabled(self.runtime_status.ready)
+
+    def _confirm_rights(self):
+        if self.cover_project and self.cover_project.rights_confirmed: return True
+        answer = QMessageBox.question(self, "歌曲权利确认", RIGHTS_TEXT + "\n\n这只是您的权利声明，VoiceStudio 不会替您取得版权。", QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
+        if answer != QMessageBox.Yes: return False
+        self.cover_project.attest_rights(True, version=1); self.rights_state.setText("歌曲权利：已确认"); return True
+
+    def restore_cover(self):
+        covers = CoverProject.list(self.project)
+        if not covers: return
+        self.cover_project = max(covers, key=lambda item: item.updated_at); self.rights_state.setText("歌曲权利：已确认" if self.cover_project.rights_confirmed else "歌曲权利：未确认"); self.track_paths = {}; source = self.cover_project.root / self.cover_project.source_relative_path; lrc = self.cover_project.root / self.cover_project.lyrics_path if self.cover_project.lyrics_path else None; self._reset_tracks(); self._load_track(0, source, lrc)
+        for index, relative in ((1, self.cover_project.vocal_path), (2, self.cover_project.instrumental_path)):
+            if relative: self._load_track(index, self.cover_project.root / relative)
+
+    def separate_song(self):
+        if not self.cover_project or not self.worker: self.song_meta.setText("请先导入歌曲"); return
+        self.refresh_runtime_status()
+        if not self.runtime_status.ready or SeparationDialog(self.runtime_status, self).exec() != QDialog.Accepted or not self._confirm_rights(): return
+        payload = {"project_path": str(self.project), "cover_id": self.cover_project.id, "source_relative_path": self.cover_project.source_relative_path, "source_sha256": self.cover_project.source_sha256, "mode": "uvr5"}
+        self.stems[1].set_status(TrackStatus.PROCESSING); self.stems[2].set_status(TrackStatus.PROCESSING); self.progress.show(); self.progress.set_stage(0); self.separate_button.setEnabled(False); self.cancel_button.show()
+        try: self._separation_request = self.worker.send("separate_song", payload)
+        except Exception as exc: self._separation_failed(str(exc))
+
+    def cancel_separation(self):
+        if self._separation_request and self.worker:
+            self.cancel_button.setEnabled(False); self.song_meta.setText("正在停止 UVR5…")
+            self.worker.send("cancel", {"target_request_id": self._separation_request})
+
+    def handle_worker_event(self, request_id, event, payload):
+        if not self._separation_request or request_id != self._separation_request: return
+        if event == "progress": self.progress.set_stage(STAGE_INDEX.get(str(payload.get("stage", "")), 2)); self.song_meta.setText(str(payload.get("message", "正在分离")))
+        elif event == "result":
+            self._separation_request = ""; self.separate_button.setEnabled(True); self.cancel_button.hide(); self.cancel_button.setEnabled(True); self.progress.set_stage(5); self.cover_project = CoverProject.load(self.project, self.cover_project.id); self._load_track(1, Path(payload["vocal_path"])); self._load_track(2, Path(payload["instrumental_path"])); self.song_meta.setText("分离完成" + (" · 已复用缓存" if payload.get("cache_hit") else ""))
+        elif event == "error": self._separation_failed(str(payload.get("message", "分离失败")))
+
+    def _separation_failed(self, message):
+        self._separation_request = ""; self.separate_button.setEnabled(self.runtime_status.ready); self.cancel_button.hide(); self.cancel_button.setEnabled(True); self.stems[1].set_status(TrackStatus.ERROR); self.stems[2].set_status(TrackStatus.ERROR); self.song_meta.setText(message)
+
+    def _track_mix_changed(self, changed):
+        solos = [i for i, track in enumerate(self.stems[:3]) if track.solo.isChecked() and i in self.track_paths]; target = solos[0] if solos else (changed if changed in self.track_paths else self._selected_track); self._select_track(target); current = self.stems[self._selected_track]; self.audio_output.setVolume(0 if current.mute.isChecked() else current.volume.value() / 100)
+
+    def _select_track(self, index, preserve=True):
+        if index not in self.track_paths: return
+        position, playing = self.player.position(), self.player.playbackState() == QMediaPlayer.PlayingState; self._selected_track = index; self.player.setSource(QUrl.fromLocalFile(self.track_paths[index]))
+        if preserve: self.player.setPosition(position)
+        if playing: self.player.play()
+
+    def toggle_playback(self):
+        if self.player.playbackState() == QMediaPlayer.PlayingState: self.player.pause()
+        elif self._selected_track in self.track_paths: self.player.play()
+    def _position(self, value):
+        for track in self.stems: track.set_position(value)
+        self.lyrics.set_position(value); self.transport.set_timeline(value, self.player.duration())
     def release_resources(self):
-        if self._thread and self._thread.isRunning(): self._thread.requestInterruption(); self._thread.wait()
+        for thread in tuple(self._threads): thread.requestInterruption(); thread.wait()
         self.player.stop(); self.player.setSource(QUrl()); self.player.setAudioOutput(None)
-    def closeEvent(self,e): self.release_resources(); super().closeEvent(e)
+    def closeEvent(self, event): self.release_resources(); super().closeEvent(event)

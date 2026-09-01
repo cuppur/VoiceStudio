@@ -9,7 +9,9 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 import time
+from array import array
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
@@ -172,17 +174,46 @@ def decode_pcm_peaks(audio_path: Path, metadata: AudioMetadata | None = None, *,
     ffmpeg = _tool("ffmpeg", paths)
     command = [str(ffmpeg), "-v", "error", "-ss", f"{start:.6f}", "-i", str(audio_path)]
     command += ["-t", f"{end - start:.6f}", "-f", "s16le", "-ac", "1", "-ar", str(metadata.sample_rate), "pipe:1"]
-    raw = _run_cancellable(command, timeout=180, cancel=cancel)
-    samples = [int.from_bytes(raw[i:i + 2], "little", signed=True) for i in range(0, len(raw) - 1, 2)]
-    if not samples:
-        return []
-    buckets = min(count, len(samples))
-    result: list[tuple[int, int]] = []
-    for index in range(buckets):
-        left = index * len(samples) // buckets; right = (index + 1) * len(samples) // buckets
-        values = samples[left:max(left + 1, right)]
-        result.append((min(values), max(values)))
-    return result
+    expected_samples = max(1, round((end - start) * metadata.sample_rate))
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert process.stdout is not None
+    try:
+        result = peaks_from_pcm_chunks(
+            iter(lambda: process.stdout.read(64 * 1024), b""),
+            total_samples=expected_samples,
+            peak_count=count,
+            cancel=cancel,
+        )
+        _, stderr = process.communicate(timeout=10)
+        if process.returncode:
+            raise subprocess.CalledProcessError(process.returncode, command, stderr=stderr)
+        return result
+    except BaseException:
+        if process.poll() is None:
+            process.terminate()
+            try: process.wait(timeout=3)
+            except subprocess.TimeoutExpired: process.kill(); process.wait()
+        raise
+
+
+def peaks_from_pcm_chunks(chunks: Iterable[bytes], *, total_samples: int, peak_count: int = 6000,
+                          cancel: Callable[[], bool] | None = None) -> list[tuple[int, int]]:
+    """Aggregate little-endian signed 16-bit PCM without retaining the decoded song."""
+    total = max(1, int(total_samples)); count = max(1, min(int(peak_count), total))
+    lows = [32767] * count; highs = [-32768] * count
+    sample_index = 0; carry = b""
+    for chunk in chunks:
+        if cancel and cancel(): raise InterruptedError("音频读取已取消")
+        data = carry + bytes(chunk); usable = len(data) - (len(data) % 2); carry = data[usable:]
+        values = array("h"); values.frombytes(data[:usable])
+        if sys.byteorder != "little": values.byteswap()
+        for value in values:
+            bucket = min(count - 1, sample_index * count // total)
+            if value < lows[bucket]: lows[bucket] = value
+            if value > highs[bucket]: highs[bucket] = value
+            sample_index += 1
+    if sample_index == 0: return []
+    return [(low, high) for low, high in zip(lows, highs) if low <= high]
 
 
 def save_session_cache(session: SongSession, cache_dir: Path) -> Path:

@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
 
 
 class TaskProgress(QWidget):
-    STAGES = ("素材", "清理", "识别", "训练", "验证")
+    STAGES = ("验证歌曲", "准备模型", "分离人声", "生成波形", "保存工程")
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)

@@ -25,18 +25,19 @@ def test_probe_metadata_uses_private_ffprobe(monkeypatch, tmp_path):
 
 
 def test_decode_pcm_peaks_clamps_seek_and_buckets(monkeypatch, tmp_path):
-    ffmpeg = tmp_path / "ffmpeg.exe"; ffmpeg.write_bytes(b"")
-    monkeypatch.setattr(cover, "_tool", lambda name, paths=None: ffmpeg)
     # 10 signed samples; requesting 4 buckets gives exact min/max pairs.
     raw = b"".join(int(value).to_bytes(2, "little", signed=True) for value in [-4, 2, 8, -1, 3, 7, -8, 0, 5, 1])
-    seen = {}
-    def run(command, **kwargs):
-        seen["command"] = command
-        return raw
-    monkeypatch.setattr(cover, "_run_cancellable", run)
-    result = cover.decode_pcm_peaks(tmp_path / "song.wav", cover.AudioMetadata(10, 10, 1), start_seconds=-4, end_seconds=99, peak_count=4)
-    assert result == [(-4, 2), (-1, 8), (-8, 7), (0, 5)]
-    assert seen["command"][seen["command"].index("-ss") + 1] == "0.000000"
+    result = cover.peaks_from_pcm_chunks([raw[:7], raw[7:13], raw[13:]], total_samples=10, peak_count=4)
+    # Buckets use proportional floor boundaries: [0, 3, 5, 7, 10].
+    assert result == [(-4, 8), (-1, 3), (-8, 7), (1, 5)]
+
+
+def test_streaming_peak_aggregation_is_bounded_and_cancellable():
+    chunk = b"\x00\x80\xff\x7f" * 32_768
+    peaks = cover.peaks_from_pcm_chunks((chunk for _ in range(30)), total_samples=1_966_080, peak_count=6000)
+    assert len(peaks) <= 6000 and peaks[0] == (-32768, 32767)
+    with pytest.raises(InterruptedError):
+        cover.peaks_from_pcm_chunks([chunk], total_samples=100, cancel=lambda: True)
 
 
 def test_decode_zero_and_short_audio_return_empty(monkeypatch, tmp_path):

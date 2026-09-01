@@ -7,7 +7,7 @@ from uuid import uuid4
 
 
 
-COMMANDS = {"health", "load_profile", "synthesize", "prepare_dataset", "train", "cancel", "shutdown"}
+COMMANDS = {"health", "load_profile", "synthesize", "prepare_dataset", "train", "separate_song", "cancel", "shutdown"}
 EVENTS = {"ready", "progress", "result", "error"}
 
 

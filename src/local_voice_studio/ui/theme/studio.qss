@@ -41,3 +41,24 @@ QSlider::handle:horizontal { width: 13px; margin: -5px 0; border-radius: 6px; ba
 QScrollBar:vertical { width: 9px; background: transparent; }
 QScrollBar::handle:vertical { background: #333946; border-radius: 4px; min-height: 24px; }
 QStatusBar { background: #11141B; color: #858C9A; border-top: 1px solid #20242E; }
+
+/* Cover page inline theme, kept here so the page also renders correctly when
+   the shared studio stylesheet is loaded by the application shell. */
+#coverPage { background: #0B1020; color: #E5E7EB; }
+QLabel#title { font-size: 28px; font-weight: 700; color: #FFFFFF; }
+QLabel#muted { color: #8B95A7; }
+QFrame#settings { background: #151C2F; border: 1px solid #283452; border-radius: 14px; }
+#coverPage QPlainTextEdit, #coverPage QComboBox, #coverPage QSpinBox {
+    background: #121A2C; color: #E5E7EB; border: 1px solid #33415F;
+    border-radius: 7px; padding: 7px;
+}
+#coverPage QPushButton {
+    background: #1B2640; color: #E5E7EB; border: 1px solid #3B4D76;
+    border-radius: 7px; padding: 9px 14px;
+}
+#coverPage QPushButton#primaryButton { background: #7C3AED; color: #FFFFFF; }
+#coverPage QPushButton:disabled { color: #626A78; background: #171A21; border-color: #242832; }
+#trackStatus { color: #AEB7FF; background: #22273A; border-radius: 7px; padding: 3px 6px; }
+#trackStatus[state="processing"] { color: #EBCB8B; background: #28251E; }
+#trackStatus[state="error"] { color: #FFB4B4; background: #3A2428; }
+#trackStatus[state="empty"] { color: #9299A8; background: #20242E; }

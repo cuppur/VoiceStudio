@@ -112,7 +112,7 @@ class MainWindow(QMainWindow):
             page = self.stack.widget(0)
             if hasattr(page, "release_resources"): page.release_resources()
             self.stack.removeWidget(page); page.deleteLater()
-        self.cover_page = CoverPage(self.paths, self.store, self.project); self.generate_page = OneClickGeneratePage(self.store, self.project, self.client); self.voice_page = MyVoicesPage(self.store, self.project); self.training_page = OneClickTrainingPage(self.store, self.project, self.client); self.settings_page = SimpleSettingsPage(self.paths, self.store, self.project, self.client)
+        self.cover_page = CoverPage(self.paths, self.store, self.project, self.client); self.generate_page = OneClickGeneratePage(self.store, self.project, self.client); self.voice_page = MyVoicesPage(self.store, self.project); self.training_page = OneClickTrainingPage(self.store, self.project, self.client); self.settings_page = SimpleSettingsPage(self.paths, self.store, self.project, self.client)
         for page in (self.cover_page, self.generate_page, self.voice_page, self.training_page, self.settings_page): self.stack.addWidget(page)
         self.stack.setCurrentIndex(row)
         self.voice_page.profiles_changed.connect(self.generate_page.refresh_profiles); self.voice_page.profiles_changed.connect(self.cover_page.refresh_profiles); self.training_page.profiles_changed.connect(self.generate_page.refresh_profiles); self.training_page.profiles_changed.connect(self.cover_page.refresh_profiles); self.training_page.profiles_changed.connect(self.voice_page.refresh); self.voice_page.generate_requested.connect(self._use_profile); self.voice_page.retrain_requested.connect(self._retrain_profile); self.generate_page.train_requested.connect(lambda: self.navigation.setCurrentRow(3)); self.settings_page.install_requested.connect(self._open_setup)
@@ -169,6 +169,8 @@ class MainWindow(QMainWindow):
 
     def _worker_event(self, request_id: str, event: str, payload: dict) -> None:
         if request_id == "worker" and event == "ready": self.statusBar().showMessage("本地工作进程就绪", 5000)
+        if hasattr(self, "cover_page"):
+            self.cover_page.handle_worker_event(request_id, event, payload)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         for index in range(self.stack.count()):
@@ -176,49 +178,5 @@ class MainWindow(QMainWindow):
             if hasattr(page, "release_resources"): page.release_resources()
         self.client.shutdown(); super().closeEvent(event)
 
-
-LEGACY_STYLE = """
-QWidget { font-family: "Microsoft YaHei UI"; font-size: 14px; color: #172033; }
-QMainWindow, QStackedWidget { background: #f6f8fc; }
-#sidebar { background: #18233a; }
-#brand { color: white; font-size: 21px; font-weight: 700; padding: 20px 14px 4px 14px; }
-#projectName { color: #9fb0cc; padding: 0 14px 16px 14px; }
-#projectPicker { color: #e6edf8; background: #23314d; border: 1px solid #344563; border-radius: 7px; margin: 2px 12px 12px 12px; padding: 9px; text-align: left; }
-#sidebarFoot { color: #8394b2; padding: 16px; font-size: 12px; }
-#sidebarButton { margin: 4px 12px; background: #23314d; color: #dbe7f8; border-color: #344563; }
-#navigation { background: transparent; color: #cbd6e8; outline: none; }
-#navigation::item { padding: 13px 18px; margin: 2px 8px; border-radius: 7px; }
-#navigation::item:selected { background: #2d6cdf; color: white; }
-QStackedWidget > QWidget { background: #f6f8fc; }
-#pageTitle { font-size: 26px; font-weight: 700; color: #111827; margin-bottom: 8px; }
-#hint { color: #667085; }
-#dropArea { background: #f8fbff; border: 2px dashed #9bb9e9; border-radius: 10px; }
-#dropTitle { color: #245fc8; font-size: 17px; font-weight: 600; }
-#voiceCard, #healthCard, #reviewCard, #historyCard { background: white; border: 1px solid #d7deea; border-radius: 10px; }
-#cardTitle { font-size: 18px; font-weight: 700; color: #111827; }
-#cardTitleSmall { font-size: 14px; font-weight: 700; color: #111827; }
-#statusChip { color: #166534; background: #dcfce7; border-radius: 9px; padding: 3px 9px; }
-#dangerChip { color: #991b1b; background: #fee2e2; border-radius: 9px; padding: 3px 9px; }
-#issueWarning { color: #9a3412; background: #fff7ed; border-radius: 6px; padding: 6px; }
-#issueGood { color: #166534; background: #f0fdf4; border-radius: 6px; padding: 6px; }
-#inlinePlayer { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 7px; }
-#emptyState { color: #667085; font-size: 18px; padding: 32px; }
-#stepPending, #stepActive, #stepDone, #stepFailed { border-radius: 8px; padding: 6px; }
-#stepPending { background: #e9edf4; color: #7b8494; }
-#stepActive { background: #dbeafe; color: #1d4ed8; font-weight: 700; }
-#stepDone { background: #dcfce7; color: #166534; }
-#stepFailed { background: #fee2e2; color: #991b1b; font-weight: 700; }
-#recordPrompt { background: white; border: 1px solid #d7deea; border-radius: 8px; padding: 20px; font-size: 18px; }
-QLineEdit, QPlainTextEdit, QTextBrowser, QComboBox, QSpinBox, QDoubleSpinBox, QTableWidget { background: white; border: 1px solid #d7deea; border-radius: 6px; padding: 6px; selection-background-color: #2d6cdf; }
-QGroupBox { border: 1px solid #d7deea; border-radius: 8px; margin-top: 12px; padding: 12px; background: white; }
-QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 5px; }
-QPushButton { background: white; border: 1px solid #c9d2e1; border-radius: 6px; padding: 8px 14px; }
-QPushButton:hover { background: #eef3fb; }
-QPushButton:disabled { color: #99a2b1; background: #eef0f4; }
-#primaryButton { background: #2d6cdf; border-color: #2d6cdf; color: white; font-weight: 600; }
-#primaryButton:hover { background: #245fc8; }
-QProgressBar { border: 1px solid #d7deea; border-radius: 5px; text-align: center; background: white; }
-QProgressBar::chunk { background: #2d6cdf; border-radius: 4px; }
-"""
 
 STYLE = load_theme()
