@@ -111,11 +111,11 @@ class RVCEngine:
         # Upstream 2.3 exposes these as webui callbacks, backed by these scripts.
         n_processes = str(payload.get("n_processes", 4))
         cmds = [
-            [str(self.config.python), "train/preprocess.py", str(payload["dataset_dir"]), sr, n_processes, exp, "False", "3.0"],
-            [str(self.config.python), "train/dataset/extract_f0.py", "cuda", "1", "0", "0", str(root), exp, "True"],
-            [str(self.config.python), "train/dataset/extract_hubert_feature.py", "cuda:0", "1", "0", "0", str(root), exp, version, "True"],
-            [str(self.config.python), "train/train.py", "-e", exp, "-sr", sr, "-f0", "1", "-bs", str(payload.get("batch_size", 4)), "-te", str(payload.get("epochs", 20)), "-se", str(payload.get("save_every", 5)), "-pg", str(payload.get("pretrained_g", root / "assets/pretrained_v2/f0G48k.pth")), "-pd", str(payload.get("pretrained_d", root / "assets/pretrained_v2/f0D48k.pth")), "-l", "1", "-c", "0", "-sw", "1", "-v", version],
-            [str(self.config.python), "train/train_index.py", exp, version],
+            [str(self.config.python), "-m", "train.preprocess", str(payload["dataset_dir"]), sr, n_processes, exp, "False", "3.0"],
+            [str(self.config.python), "-m", "train.dataset.extract_f0", "cuda", "1", "0", "0", str(root), exp, "True"],
+            [str(self.config.python), "-m", "train.dataset.extract_hubert_feature", "cuda:0", "1", "0", "0", str(root), exp, version, "True"],
+            [str(self.config.python), "-m", "train.train", "-e", exp, "-sr", sr, "-f0", "1", "-bs", str(payload.get("batch_size", 4)), "-te", str(payload.get("epochs", 20)), "-se", str(payload.get("save_every", 5)), "-pg", str(payload.get("pretrained_g", root / "assets/pretrained_v2/f0G48k.pth")), "-pd", str(payload.get("pretrained_d", root / "assets/pretrained_v2/f0D48k.pth")), "-l", "1", "-c", "0", "-sw", "1", "-v", version],
+            [str(self.config.python), "-m", "train.train_index", exp, version],
         ]
         for cmd in cmds: self._run(cmd, root, cancel)
         discovered = [p for p in (Path(exp).rglob("*") if Path(exp).is_dir() else []) if p.is_file() and p.suffix.lower() in {".pth", ".index"}]
