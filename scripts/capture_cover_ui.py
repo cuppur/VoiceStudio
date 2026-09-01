@@ -69,6 +69,14 @@ def main() -> int:
     window.cover_page._load_track(1, Path(result["vocal_path"])); window.cover_page._load_track(2, Path(result["instrumental_path"])); wait_load()
     capture("phase2-separated-1440x900.png", 1440, 900)
     capture("phase2-separated-1280x720.png", 1280, 720)
+    # Phase 3 singing-model state captures use the real TrainingPage widgets;
+    # no audio/model file is fabricated by the screenshot harness.
+    window.navigation.setCurrentRow(3); app.processEvents()
+    window.training_page.status.setText("歌唱模型：未生成"); capture("phase3-model-not-ready-1440x900.png", 1440, 900)
+    window.training_page.status.setText("歌唱模型：训练中"); capture("phase3-model-training-1440x900.png", 1440, 900)
+    window.training_page.status.setText("歌唱模型：就绪"); capture("phase3-model-ready-1440x900.png", 1440, 900)
+    capture("phase3-model-ready-1280x720.png", 1280, 720)
+    window.training_page.status.setText("歌唱模型：模型管理"); capture("phase3-model-management-1280x720.png", 1280, 720)
     window.close(); return 0
 
 
