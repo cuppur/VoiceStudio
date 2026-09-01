@@ -455,6 +455,10 @@ try {
             if (Test-Path -LiteralPath $rvcRoot) { Move-Item -LiteralPath $rvcRoot -Destination (Join-Path (Split-Path $rvcRoot) ("RVC.invalid-" + (Get-Date -Format "yyyyMMddHHmmss"))) }
             Move-Item -LiteralPath $rvcExtracted.FullName -Destination $rvcRoot
             Set-Content -LiteralPath $rvcMarker -Value $rvcSourceAsset.version -Encoding Ascii
+            foreach ($packageDir in @("train", "tools", "i18n", "configs")) {
+                $init = Join-Path $rvcRoot (Join-Path $packageDir "__init__.py")
+                if (-not (Test-Path -LiteralPath $init)) { New-Item -ItemType File -Path $init | Out-Null }
+            }
         } finally { if (Test-Path -LiteralPath $rvcExtract) { Remove-Item -LiteralPath $rvcExtract -Recurse -Force } }
     }
     foreach ($rvcId in @("rvc-hubert-config", "rvc-hubert-preprocessor-config", "rvc-hubert-model", "rvc-rmvpe", "rvc-v2-generator", "rvc-v2-discriminator")) {
