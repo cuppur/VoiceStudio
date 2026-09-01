@@ -2,12 +2,31 @@ import hashlib
 import json
 import threading
 import wave
+import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
 from local_voice_studio.cover.project import CoverProject
 from local_voice_studio.singing.pipeline import SingingPipeline
+from local_voice_studio.singing.rvc import RVCEngine, RVCConfig
+
+
+def test_rvc_subprocess_cancel_without_output(tmp_path):
+    engine = RVCEngine(RVCConfig(tmp_path, Path(sys.executable), tmp_path, commit="test"))
+    cancel = threading.Event(); result = {}
+    def run():
+        try:
+            engine._run([sys.executable, "-S", "-c", "import time; time.sleep(30)"], tmp_path, cancel)
+        except RuntimeError as exc:
+            result["error"] = str(exc)
+    worker = threading.Thread(target=run); worker.start()
+    time.sleep(0.15); cancel.set(); worker.join(5)
+    assert not worker.is_alive()
+    assert "取消" in result["error"]
+    assert engine.process is None
 
 
 class FakeSingingEngine:

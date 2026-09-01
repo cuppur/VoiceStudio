@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import threading
+import queue
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -93,13 +94,31 @@ class RVCEngine:
         env["PYTHONPATH"] = os.pathsep.join(extra_paths + [str(cwd or self.config.engine_root), str(product_src)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
         self.process = subprocess.Popen(args, cwd=str(cwd or self.config.engine_root), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
         output_tail: list[str] = []
-        try:
-            assert self.process.stdout is not None
+        lines: queue.Queue[str | None] = queue.Queue()
+        def _drain() -> None:
+            assert self.process is not None and self.process.stdout is not None
             for line in self.process.stdout:
-                output_tail.append(line.rstrip())
+                lines.put(line.rstrip())
+            lines.put(None)
+        reader = threading.Thread(target=_drain, name="rvc-output", daemon=True)
+        reader.start()
+        try:
+            while True:
+                try:
+                    line = lines.get(timeout=0.1)
+                except queue.Empty:
+                    line = ""
+                if line is None:
+                    if self.process.poll() is not None:
+                        break
+                elif line:
+                    output_tail.append(line)
+                    if len(output_tail) > 20: output_tail.pop(0)
                 if len(output_tail) > 20: output_tail.pop(0)
                 if cancel is not None and getattr(cancel, "is_set", lambda: False)():
                     self.cancel(); raise RuntimeError("任务已取消")
+                if self.process.poll() is not None and lines.empty():
+                    break
             code = self.process.wait()
         finally: self.process = None
         if code: raise RuntimeError(f"RVC 子进程退出码 {code}: {' | '.join(output_tail[-5:])}")
