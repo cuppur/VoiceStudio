@@ -119,18 +119,24 @@ class RVCEngine:
         ]
         for cmd in cmds: self._run(cmd, root, cancel)
         discovered = [p for p in (Path(exp).rglob("*") if Path(exp).is_dir() else []) if p.is_file() and p.suffix.lower() in {".pth", ".index"}]
+        raw = next((p for p in discovered if p.name.startswith("G_") and p.name.endswith(".pth")), None)
+        if raw is not None and bool(payload.get("prepare_checkpoint", True)):
+            prepared = Path(exp) / "model.pth"
+            bridge = Path(__file__).with_name("rvc_bridge.py")
+            self._run([str(self.config.python), str(bridge), "--prepare-checkpoint", "--model", str(raw), "--output", str(prepared), "--sample-rate", sr, "--version", version], root, cancel)
+            discovered.append(prepared)
         return tuple(discovered or (Path(p) for p in payload.get("outputs", [])))
 
     def convert(self, payload: Mapping[str, Any], cancel: Any = None) -> Path:
         out = Path(str(payload["output_path"]))
-        bridge = Path(str(payload.get("bridge_module", "local_voice_studio.singing.rvc_bridge")))
-        cmd = [str(self.config.python), "-m", str(bridge), "--input", str(payload["input_path"]), "--model", str(payload["model_path"]), "--index", str(payload.get("index_path", "")), "--pitch", str(payload.get("pitch_shift", payload.get("transpose", 0))), "--output", str(out)]
+        bridge = Path(__file__).with_name("rvc_bridge.py")
+        cmd = [str(self.config.python), str(bridge), "--input", str(payload["input_path"]), "--model", str(payload["model_path"]), "--index", str(payload.get("index_path", "")), "--pitch", str(payload.get("pitch_shift", payload.get("transpose", 0))), "--output", str(out)]
         self._run(cmd, self.config.engine_root, cancel)
         if not out.is_file() or not out.stat().st_size: raise RuntimeError("RVC 转换未生成输出音频")
         return out
 
     def verify_model(self, checkpoint: Path, index: Path | None = None) -> bool:
-        args = [str(self.config.python), "-m", "local_voice_studio.singing.rvc_bridge", "--verify-model", "--model", str(checkpoint), "--output", str(checkpoint)]
+        args = [str(self.config.python), str(Path(__file__).with_name("rvc_bridge.py")), "--verify-model", "--model", str(checkpoint)]
         if index:
             args.extend(["--index", str(index)])
         try:
