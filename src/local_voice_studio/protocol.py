@@ -7,8 +7,40 @@ from uuid import uuid4
 
 
 
-COMMANDS = {"health", "load_profile", "synthesize", "prepare_dataset", "train", "separate_song", "train_singing_model", "convert_vocal", "cancel", "shutdown"}
+COMMANDS = {"health", "load_profile", "synthesize", "prepare_dataset", "train", "separate_song", "train_singing_model", "convert_vocal", "render_cover", "export_cover", "cancel", "shutdown"}
 EVENTS = {"ready", "progress", "result", "error"}
+
+# Product commands use positive allowlists.  Paths and hashes which can be
+# derived from the owning project never cross the UI/worker trust boundary.
+PAYLOAD_FIELDS: dict[str, frozenset[str]] = {
+    "train_singing_model": frozenset({
+        "project_path", "profile_id", "source_asset_ids", "training_run_id", "engine",
+    }),
+    "convert_vocal": frozenset({
+        "project_path", "cover_id", "profile_id", "singing_model_id", "pitch_shift",
+    }),
+    "render_cover": frozenset({
+        "project_path", "cover_id", "profile_id", "singing_model_id", "mix_settings",
+    }),
+    "export_cover": frozenset({
+        "project_path", "cover_id", "final_asset_id", "format", "file_name",
+        "destination", "existing_policy", "publication_rights_acknowledged",
+    }),
+    "separate_song": frozenset({
+        "project_path", "cover_id", "source_relative_path", "source_sha256", "mode",
+    }),
+}
+
+
+def validate_payload(command: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Reject unknown fields for security-sensitive product commands."""
+    allowed = PAYLOAD_FIELDS.get(command)
+    if allowed is None:
+        return dict(payload)
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ValueError(f"{command} 包含未知字段: {', '.join(unknown)}")
+    return dict(payload)
 
 
 @dataclass

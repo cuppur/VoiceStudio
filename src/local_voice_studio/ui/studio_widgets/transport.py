@@ -11,6 +11,7 @@ class TransportWidget(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("transportWidget")
         layout = QHBoxLayout(self)
         self.play_button = QPushButton("▶")
         self.back_button = QPushButton("−10s")

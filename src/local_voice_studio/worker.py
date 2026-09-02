@@ -14,11 +14,13 @@ from .engine import GptSovitsEngine, safe_torch_load
 from .audio import sha256_file
 from .models import DatasetManifest, dataset_snapshot_sha256, utc_now
 from .paths import AppPaths, ensure_within, validate_id, validate_sha256
-from .protocol import COMMANDS, Message
+from .protocol import COMMANDS, Message, validate_payload
 from .runtime import EngineRuntimeResolver
 from .text import split_text
 from .training import TrainingPipeline
 from .cover.separation import SongSeparationPipeline
+from .cover.mixing import CoverMixSettings, CoverMixer
+from .cover.exporting import CoverExporter
 from .singing.pipeline import SingingPipeline
 from .singing.rvc import RVCConfig, RVCEngine
 
@@ -37,6 +39,8 @@ class WorkerService:
         self.write_lock = threading.Lock()
         self.shutdown_event = threading.Event()
         self.separation: SongSeparationPipeline | None = None
+        self.mixer: CoverMixer | None = None
+        self.exporter: CoverExporter | None = None
         if singing_engine is None:
             rvc_root = self.paths.data_root / "engines" / "RVC"
             rvc_python = self.paths.runtime_root / "rvc-env" / "Scripts" / "python.exe"
@@ -74,6 +78,11 @@ class WorkerService:
             return
         if message.type in {"health", "load_profile"} and self.current_request_id and self.current_thread and self.current_thread.is_alive():
             self.emit(message.id, "error", {"message": "已有 GPU 任务正在运行，请等待完成或取消当前任务"})
+            return
+        try:
+            message.payload = validate_payload(message.type, message.payload)
+        except ValueError as exc:
+            self.emit(message.id, "error", {"message": str(exc), "exception": type(exc).__name__})
             return
         if message.type == "health":
             health = self.engine.gpu_health()
@@ -120,6 +129,8 @@ class WorkerService:
                 stop = getattr(self.singing_engine, "cancel", None)
                 if callable(stop):
                     stop()
+            if self.mixer is not None: self.mixer.cancel()
+            if self.exporter is not None: self.exporter.cancel()
             self.emit(message.id, "result", {"cancel_requested": True, "target_request_id": self.current_request_id})
         elif message.type == "shutdown":
             self.cancel_event.set()
@@ -133,6 +144,8 @@ class WorkerService:
                 stop = getattr(self.singing_engine, "cancel", None)
                 if callable(stop):
                     stop()
+            if self.mixer is not None: self.mixer.cancel()
+            if self.exporter is not None: self.exporter.cancel()
             self.shutdown_event.set()
             self.emit(message.id, "result", {"shutdown": True})
         else:
@@ -147,6 +160,8 @@ class WorkerService:
                 "separate_song": self._separate_song,
                 "train_singing_model": self._train_singing_model,
                 "convert_vocal": self._convert_vocal,
+                "render_cover": self._render_cover,
+                "export_cover": self._export_cover,
             }[message.type]
             self.current_request_id = message.id
             self._request_context = {key: message.payload[key] for key in ("workflow_id", "stage", "attempt", "overall_progress") if key in message.payload}
@@ -375,6 +390,7 @@ class WorkerService:
         return SingingPipeline(
             self.singing_engine,
             projects_root=self.paths.projects_root,
+            paths=self.paths,
             progress=lambda value, message: self.emit(request_id, "progress", {"progress": value, "stage": "singing", "message": message}),
         )
 
@@ -406,6 +422,53 @@ class WorkerService:
         result = self._singing(request_id).convert(self._validated_singing_payload(payload, training=False), cancel=self.cancel_event)
         self.emit(request_id, "result", {"progress": 1.0, **result})
 
+    def _validated_cover_payload(self, payload: dict[str, Any], *, export: bool = False) -> dict[str, Any]:
+        command = "export_cover" if export else "render_cover"
+        normalized = validate_payload(command, payload)
+        project_value = str(normalized.get("project_path", ""))
+        if not project_value:
+            raise ValueError("缺少 project_path")
+        project = ensure_within(self.paths.projects_root, Path(project_value))
+        if not project.is_dir() or not (project / "project.json").is_file():
+            raise ValueError("项目目录不存在或项目清单缺失")
+        validate_id(str(normalized.get("cover_id", "")), legacy=True, field="cover_id")
+        normalized["project_path"] = str(project)
+        return normalized
+
+    def _render_cover(self, request_id: str, payload: dict[str, Any]) -> None:
+        value = self._validated_cover_payload(payload)
+        raw_settings = value.get("mix_settings") or {}
+        if not isinstance(raw_settings, dict):
+            raise ValueError("mix_settings 必须是对象")
+        settings = CoverMixSettings(**raw_settings)
+        self.mixer = CoverMixer(self.paths)
+        try:
+            self.emit(request_id, "progress", {"progress": .05, "stage": "validating", "message": "正在验证混音素材"})
+            result = self.mixer.mix(
+                Path(value["project_path"]), str(value["cover_id"]), settings,
+                profile_id=str(value.get("profile_id", "")), model_id=str(value.get("singing_model_id", "")),
+                cancel=self.cancel_event,
+            )
+            self.emit(request_id, "result", {"progress": 1.0, "stage": "complete", **result})
+        finally:
+            self.mixer = None
+
+    def _export_cover(self, request_id: str, payload: dict[str, Any]) -> None:
+        value = self._validated_cover_payload(payload, export=True)
+        self.exporter = CoverExporter(self.paths)
+        try:
+            self.emit(request_id, "progress", {"progress": .05, "stage": "validating", "message": "正在验证导出信息"})
+            result = self.exporter.export(
+                Path(value["project_path"]), str(value["cover_id"]),
+                format=str(value.get("format", "wav")), destination=Path(str(value.get("destination", ""))),
+                file_name=str(value.get("file_name", "")), final_asset_id=str(value.get("final_asset_id", "")),
+                existing=str(value.get("existing_policy", "reject")), cancel=self.cancel_event,
+                publication_rights_ack=bool(value.get("publication_rights_acknowledged", False)),
+            )
+            self.emit(request_id, "result", {"progress": 1.0, "stage": "complete", **result})
+        finally:
+            self.exporter = None
+
 
 def main() -> int:
     # QProcess and direct command-line launches must share one wire encoding,
@@ -416,15 +479,21 @@ def main() -> int:
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     service = WorkerService()
     service.emit("worker", "ready", {"version": 1, "commands": sorted(COMMANDS)})
-    for line in sys.stdin:
-        if service.shutdown_event.is_set():
-            break
+    # QProcess can transiently report EOF on the write channel while a
+    # background GPU task is still running (notably after a native UVR child
+    # closes an inherited Windows pipe handle).  Treat an empty read as an
+    # idle interval, not as an implicit shutdown; only the explicit shutdown
+    # command is allowed to terminate the worker.
+    while not service.shutdown_event.is_set():
+        line = sys.stdin.readline()
+        if not line:
+            import time
+            time.sleep(0.05)
+            continue
         try:
             service.handle(Message.decode(line))
         except Exception as exc:
             service.emit("worker", "error", {"message": str(exc), "exception": type(exc).__name__})
-        if service.shutdown_event.is_set():
-            break
     return 0
 
 

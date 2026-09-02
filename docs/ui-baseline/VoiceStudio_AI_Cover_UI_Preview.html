@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VoiceStudio · AI 翻唱工作台预览</title>
+  <style>
+    :root{
+      --bg:#090b10;
+      --bg2:#0d1017;
+      --panel:#111620;
+      --panel2:#151b27;
+      --panel3:#0d121b;
+      --stroke:#222a39;
+      --stroke-soft:#1a2130;
+      --text:#f6f8fc;
+      --muted:#929cad;
+      --muted2:#667085;
+      --accent:#7c6cff;
+      --accent2:#4f8cff;
+      --cyan:#63d3ff;
+      --green:#43d69e;
+      --amber:#ffbd5c;
+      --danger:#ff657a;
+      --shadow:0 24px 80px rgba(0,0,0,.32);
+      --radius:18px;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0}
+    body{
+      font-family:Inter,"Segoe UI","Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+      background:
+        radial-gradient(circle at 78% 14%, rgba(76,85,255,.09), transparent 26%),
+        radial-gradient(circle at 28% 72%, rgba(67,214,158,.04), transparent 28%),
+        var(--bg);
+      color:var(--text);overflow:hidden;
+    }
+    button,input,select{font:inherit}
+    button{border:0;color:inherit}
+    .app{height:100vh;display:grid;grid-template-columns:220px minmax(0,1fr)}
+    .sidebar{
+      border-right:1px solid #151b26;background:rgba(9,12,18,.91);
+      backdrop-filter: blur(18px);padding:22px 14px 16px;display:flex;flex-direction:column;min-width:0;
+    }
+    .brand{display:flex;align-items:center;gap:11px;padding:3px 8px 22px}
+    .brand-mark{width:35px;height:35px;border-radius:11px;display:grid;place-items:center;
+      background:linear-gradient(145deg,#8b7cff,#4e88ff);box-shadow:0 10px 28px rgba(93,99,255,.26)}
+    .brand-mark svg{width:21px;height:21px}
+    .brand-name{font-size:18px;font-weight:750;letter-spacing:-.02em}
+    .brand-sub{font-size:10px;color:var(--muted2);margin-top:2px;letter-spacing:.08em;text-transform:uppercase}
+    .nav-section{margin:9px 8px 7px;font-size:10px;letter-spacing:.12em;color:#586174;text-transform:uppercase;font-weight:700}
+    .nav{display:flex;flex-direction:column;gap:5px}
+    .nav-item{height:42px;padding:0 12px;border-radius:11px;color:#949daf;display:flex;align-items:center;gap:11px;cursor:pointer;transition:.18s;background:transparent}
+    .nav-item:hover{background:#111722;color:#dce2ee}
+    .nav-item.active{background:linear-gradient(90deg,rgba(124,108,255,.16),rgba(79,140,255,.07));color:white;box-shadow:inset 0 0 0 1px rgba(124,108,255,.16)}
+    .nav-item svg{width:18px;height:18px;opacity:.9}
+    .sidebar-spacer{flex:1}
+    .engine-card{padding:12px;border:1px solid #1c2431;border-radius:14px;background:#0e131c;margin:8px 4px 0}
+    .engine-top{display:flex;justify-content:space-between;gap:8px;align-items:center;font-size:11px}
+    .engine-title{font-weight:650;color:#d8deea}
+    .dot{width:7px;height:7px;border-radius:50%;display:inline-block;background:var(--green);box-shadow:0 0 0 4px rgba(67,214,158,.08);margin-right:7px}
+    .engine-meta{font-size:10px;color:#667085;line-height:1.55;margin-top:7px}
+
+    .workspace{min-width:0;display:flex;flex-direction:column;height:100vh}
+    .topbar{height:72px;flex:0 0 72px;padding:0 26px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #131924;background:rgba(9,11,16,.64);backdrop-filter:blur(14px)}
+    .crumb{display:flex;align-items:center;gap:8px;color:#7d8799;font-size:12px}
+    .crumb strong{font-size:14px;color:#e9edf5}
+    .top-actions{display:flex;align-items:center;gap:9px}
+    .ghost,.secondary,.primary{height:38px;border-radius:11px;padding:0 14px;cursor:pointer;transition:.18s;display:inline-flex;align-items:center;gap:8px;font-weight:650;font-size:12px}
+    .ghost{background:transparent;color:#929caf;border:1px solid #222a39}
+    .ghost:hover,.secondary:hover{background:#151b27;border-color:#2b3547;color:white}
+    .secondary{background:#121823;border:1px solid #252f40;color:#dce2ee}
+    .primary{background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 12px 28px rgba(92,98,255,.22);color:#fff}
+    .primary:hover{transform:translateY(-1px);box-shadow:0 16px 34px rgba(92,98,255,.29)}
+    .icon-btn{width:38px;padding:0;justify-content:center}
+
+    .main{min-height:0;flex:1;padding:22px 26px 18px;display:flex;flex-direction:column;gap:16px;overflow:hidden}
+    .hero{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:20px;align-items:center}
+    .song-info{display:flex;align-items:center;min-width:0}
+    .cover{width:72px;height:72px;border-radius:17px;position:relative;overflow:hidden;flex:0 0 72px;box-shadow:0 18px 40px rgba(0,0,0,.34);background:
+      radial-gradient(circle at 72% 20%,rgba(255,255,255,.5) 0 3%,transparent 4%),
+      linear-gradient(150deg,#6a5cff 0%,#303e9f 42%,#111a35 100%)}
+    .cover:before{content:"";position:absolute;width:105px;height:105px;border:1px solid rgba(255,255,255,.16);border-radius:50%;left:-30px;top:23px}
+    .cover:after{content:"";position:absolute;width:60px;height:60px;border:1px solid rgba(255,255,255,.12);border-radius:50%;right:-20px;top:-13px}
+    .cover-lines{position:absolute;left:12px;right:12px;bottom:13px;height:22px;display:flex;align-items:end;gap:3px}
+    .cover-lines i{width:3px;background:#fff;border-radius:3px;opacity:.8}
+    .song-copy{padding-left:15px;min-width:0}
+    .eyebrow{display:flex;align-items:center;gap:8px;color:#7f899b;font-size:10px;font-weight:650;text-transform:uppercase;letter-spacing:.12em;margin-bottom:7px}
+    .quality-pill{color:#9ce8c7;background:rgba(67,214,158,.08);border:1px solid rgba(67,214,158,.12);padding:3px 6px;border-radius:6px;font-size:9px;letter-spacing:.04em}
+    .song-title{font-size:24px;font-weight:760;letter-spacing:-.03em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .song-meta{font-size:11px;color:#7f899a;margin-top:7px;display:flex;gap:12px;flex-wrap:wrap}
+    .hero-actions{display:flex;gap:9px}
+
+    .studio-grid{min-height:0;flex:1;display:grid;grid-template-columns:minmax(620px,1fr) 330px;gap:16px}
+    .left-col{min-width:0;min-height:0;display:grid;grid-template-rows:minmax(292px,1.08fr) minmax(210px,.8fr);gap:16px}
+    .card{border:1px solid var(--stroke-soft);background:linear-gradient(180deg,rgba(19,25,36,.95),rgba(14,19,28,.97));border-radius:var(--radius);box-shadow:var(--shadow);min-width:0;overflow:hidden}
+    .card-head{height:50px;padding:0 15px 0 17px;border-bottom:1px solid #1b2330;display:flex;align-items:center;justify-content:space-between}
+    .card-title{font-size:12px;font-weight:720;display:flex;align-items:center;gap:9px;color:#e9edf5}
+    .card-sub{font-size:10px;color:#667085}
+    .toolbar{display:flex;gap:6px;align-items:center}
+    .mini{height:28px;padding:0 9px;border-radius:8px;border:1px solid #242d3c;background:#111722;color:#80899a;font-size:10px;cursor:pointer}
+    .mini:hover,.mini.active{color:#fff;background:#192130}
+
+    .timeline-card{display:flex;flex-direction:column;min-height:0}
+    .timeline-ruler{height:25px;margin-left:128px;margin-right:16px;position:relative;border-bottom:1px solid #19212e;color:#50596a;font-size:9px;flex:0 0 25px}
+    .tick{position:absolute;bottom:6px;transform:translateX(-50%)}
+    .tracks{padding:6px 14px 11px;display:grid;grid-template-rows:repeat(5,minmax(42px,1fr));gap:4px;min-height:0;flex:1}
+    .track{display:grid;grid-template-columns:106px minmax(0,1fr);align-items:center;gap:8px;min-height:0}
+    .track-info{height:100%;display:flex;align-items:center;gap:8px;padding:0 5px 0 2px;min-width:0}
+    .track-dot{width:7px;height:7px;border-radius:50%;flex:0 0 7px}
+    .track-name{font-size:10px;color:#aeb7c6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
+    .track-buttons{display:flex;gap:3px}
+    .track-btn{width:20px;height:20px;border-radius:6px;background:#0e141d;border:1px solid #202938;color:#5f697b;font-size:8px;cursor:pointer;padding:0}
+    .track-btn.active{background:#292344;color:#bbb3ff;border-color:#443d6a}
+    .wave-wrap{height:100%;min-height:38px;position:relative;border-radius:8px;background:#0a0f17;border:1px solid #18202d;overflow:hidden;cursor:crosshair}
+    canvas.wave{width:100%;height:100%;display:block}
+    .playhead{position:absolute;top:0;bottom:0;width:1px;background:#f5f7fb;left:31.5%;pointer-events:none;opacity:.94;box-shadow:0 0 0 1px rgba(255,255,255,.04),0 0 16px rgba(255,255,255,.18)}
+    .playhead:before{content:"";width:7px;height:7px;background:#fff;position:absolute;top:0;left:50%;transform:translate(-50%,-1px);border-radius:50%}
+    .processed-mask{position:absolute;inset:0 auto 0 0;width:31.5%;background:linear-gradient(90deg,rgba(124,108,255,.02),rgba(124,108,255,.075));pointer-events:none}
+
+    .lyrics-mixer{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(260px,.85fr);min-height:0}
+    .lyrics-panel{min-width:0;border-right:1px solid #1b2330;display:flex;flex-direction:column;min-height:0}
+    .lyrics-head,.mixer-head{height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 16px;border-bottom:1px solid #1b2330;flex:0 0 48px}
+    .lyrics-body{padding:10px 18px 20px;overflow:auto;scrollbar-width:thin;scrollbar-color:#263142 transparent;min-height:0}
+    .lyric{padding:7px 10px;border-radius:9px;color:#5f6879;font-size:12px;line-height:1.35;cursor:pointer;transition:.2s;display:flex;gap:10px;align-items:flex-start}
+    .lyric time{width:36px;flex:0 0 36px;font-size:9px;color:#454e5f;margin-top:3px}
+    .lyric:hover{background:#151c27;color:#aeb8c7}
+    .lyric.active{color:#fff;background:linear-gradient(90deg,rgba(124,108,255,.14),transparent 85%);font-size:13px;font-weight:650}
+    .lyric.active time{color:#9188ff}
+    .mixer-panel{min-width:0;display:flex;flex-direction:column;min-height:0}
+    .mixer-body{padding:14px 16px;display:flex;flex-direction:column;gap:13px;overflow:auto;min-height:0}
+    .mix-row{display:grid;grid-template-columns:67px minmax(0,1fr) 42px;gap:8px;align-items:center}
+    .mix-label{font-size:10px;color:#7f899a}.mix-val{font-size:9px;color:#7b8494;text-align:right}
+    input[type=range]{appearance:none;width:100%;height:3px;border-radius:99px;background:#273041;outline:none}
+    input[type=range]::-webkit-slider-thumb{appearance:none;width:12px;height:12px;border-radius:50%;background:#d7dcff;border:2px solid #7972f3;box-shadow:0 1px 8px rgba(0,0,0,.4)}
+    .mixer-note{margin-top:auto;padding:9px 10px;border-radius:10px;background:#0c121a;border:1px solid #19212d;color:#5f6878;font-size:9px;line-height:1.55}
+
+    .right-col{min-width:0;min-height:0;display:flex;flex-direction:column;gap:16px}
+    .voice-card{padding:16px}
+    .section-label{font-size:10px;color:#697385;text-transform:uppercase;letter-spacing:.1em;font-weight:700;margin-bottom:9px}
+    .voice-select{border:1px solid #273142;background:#0c121b;border-radius:14px;padding:12px;display:flex;align-items:center;gap:11px;cursor:pointer}
+    .avatar{width:38px;height:38px;border-radius:12px;background:linear-gradient(145deg,#2e3650,#1e2540);display:grid;place-items:center;flex:0 0 38px;border:1px solid #35405a}
+    .avatar svg{width:19px;height:19px;color:#aaa5ff}
+    .voice-copy{min-width:0;flex:1}.voice-name{font-size:12px;font-weight:700}.voice-meta{font-size:9px;color:#687285;margin-top:4px}
+    .capabilities{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}.cap{font-size:9px;padding:5px 7px;border-radius:7px;background:#151c27;border:1px solid #202a3a;color:#768196}.cap.ok{color:#9be3c4;border-color:rgba(67,214,158,.13);background:rgba(67,214,158,.055)}
+    .settings-card{flex:1;min-height:0;display:flex;flex-direction:column}
+    .settings-body{padding:15px 16px;overflow:auto;min-height:0;scrollbar-width:thin;scrollbar-color:#263142 transparent}
+    .setting-group{padding-bottom:15px;margin-bottom:15px;border-bottom:1px solid #1b2330}.setting-group:last-child{border-bottom:0;margin-bottom:0}
+    .setting-row{display:grid;grid-template-columns:90px minmax(0,1fr) 40px;gap:8px;align-items:center;margin:11px 0}.setting-row label{font-size:10px;color:#8b95a6}.value{font-size:9px;text-align:right;color:#8b95a6}
+    .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0}.toggle-copy b{font-size:10px;font-weight:650;color:#cfd5e1;display:block}.toggle-copy span{font-size:8px;color:#5f6878;display:block;margin-top:3px}
+    .switch{width:34px;height:19px;border-radius:99px;background:#283142;position:relative;cursor:pointer;transition:.2s;flex:0 0 34px}.switch:after{content:"";position:absolute;top:3px;left:3px;width:13px;height:13px;border-radius:50%;background:#778094;transition:.2s}.switch.on{background:rgba(124,108,255,.38)}.switch.on:after{left:18px;background:#a8a0ff}
+    .render-box{padding:14px 16px;border-top:1px solid #1b2330;background:#0f141d}
+    .render-summary{display:flex;align-items:center;justify-content:space-between;font-size:9px;color:#687284;margin-bottom:10px}.render-summary b{font-size:10px;color:#bdc5d2;font-weight:600}
+    .render{width:100%;height:43px;border-radius:12px;background:linear-gradient(135deg,#7c6cff,#4e8cff);color:white;font-size:12px;font-weight:720;cursor:pointer;box-shadow:0 12px 25px rgba(86,91,255,.18);transition:.18s}.render:hover{transform:translateY(-1px)}
+
+    .transport{height:68px;flex:0 0 68px;border-top:1px solid #171d28;background:rgba(10,13,19,.94);backdrop-filter:blur(16px);display:grid;grid-template-columns:280px minmax(320px,1fr) 260px;align-items:center;padding:0 24px;gap:18px}
+    .now-playing{display:flex;align-items:center;min-width:0}.tiny-cover{width:42px;height:42px;border-radius:10px;background:linear-gradient(145deg,#6558e9,#16234f);margin-right:10px;flex:0 0 42px}.now-title{font-size:11px;font-weight:650}.now-sub{font-size:9px;color:#667085;margin-top:3px}
+    .transport-center{display:flex;align-items:center;justify-content:center;gap:13px;min-width:0}.transport-btn{width:30px;height:30px;border-radius:50%;background:transparent;color:#778194;display:grid;place-items:center;cursor:pointer}.transport-btn:hover{color:white;background:#151b26}.play-btn{width:38px;height:38px;color:#fff;background:#f2f5fa}.play-btn svg{color:#141821}.time{font-size:10px;color:#778194;font-variant-numeric:tabular-nums;width:42px}.time:first-child{text-align:right}.transport-progress{height:3px;background:#242c3a;border-radius:99px;position:relative;cursor:pointer;flex:1;max-width:440px}.transport-progress > i{position:absolute;inset:0 auto 0 0;width:31.5%;background:linear-gradient(90deg,#8a7aff,#6995ff);border-radius:99px}.transport-right{display:flex;align-items:center;justify-content:flex-end;gap:10px;color:#657083;font-size:9px}.status-chip{padding:6px 8px;border-radius:8px;background:#101722;border:1px solid #202a38;color:#7e899b}
+
+    .task-pop{position:fixed;right:28px;bottom:86px;width:350px;background:rgba(17,22,32,.98);border:1px solid #2a3445;border-radius:16px;box-shadow:0 28px 90px rgba(0,0,0,.48);padding:15px;z-index:20;transform:translateY(20px);opacity:0;pointer-events:none;transition:.22s}
+    .task-pop.show{transform:translateY(0);opacity:1;pointer-events:auto}
+    .task-title{display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:700}.task-stage{font-size:10px;color:#8a94a6;margin-top:10px}.progressbar{height:6px;background:#202838;border-radius:99px;margin-top:9px;overflow:hidden}.progressbar i{display:block;width:0;height:100%;border-radius:inherit;background:linear-gradient(90deg,#7c6cff,#4f8cff);transition:width .3s}
+    .steps{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin-top:12px}.step{height:4px;border-radius:99px;background:#252d3b}.step.done{background:#6670f5}.step.active{background:#8e86ff;box-shadow:0 0 12px rgba(124,108,255,.35)}
+    .task-foot{display:flex;justify-content:space-between;margin-top:10px;color:#5e687a;font-size:9px}.task-close{background:transparent;color:#687386;cursor:pointer}
+
+    .separate-pop{position:fixed;inset:0;background:rgba(4,6,9,.58);backdrop-filter:blur(8px);display:grid;place-items:center;z-index:30;opacity:0;pointer-events:none;transition:.2s}.separate-pop.show{opacity:1;pointer-events:auto}.modal{width:440px;background:#121823;border:1px solid #283244;border-radius:20px;box-shadow:0 30px 100px rgba(0,0,0,.55);padding:20px}.modal h3{font-size:15px;margin:0 0 6px}.modal p{font-size:10px;color:#747f91;line-height:1.6;margin:0 0 16px}.mode-option{border:1px solid #242e3e;background:#0d131c;border-radius:12px;padding:12px;margin:8px 0;cursor:pointer;display:flex;gap:10px}.mode-option.selected{border-color:#554f8d;background:rgba(124,108,255,.07)}.radio{width:16px;height:16px;border-radius:50%;border:1px solid #465064;display:grid;place-items:center;flex:0 0 16px;margin-top:1px}.selected .radio:after{content:"";width:8px;height:8px;border-radius:50%;background:#8c83ff}.mode-copy b{font-size:11px;display:block}.mode-copy span{font-size:9px;color:#687285;display:block;margin-top:3px}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:17px}
+
+    .prototype-label{position:fixed;top:79px;right:28px;z-index:5;font-size:9px;color:#515b6c;background:rgba(11,15,22,.82);border:1px solid #1c2432;border-radius:8px;padding:6px 8px;pointer-events:none}
+    svg{display:block}
+    @media (max-width:1150px){.app{grid-template-columns:184px minmax(0,1fr)}.sidebar{padding-left:10px;padding-right:10px}.studio-grid{grid-template-columns:minmax(560px,1fr) 300px}.transport{grid-template-columns:210px 1fr 160px}.track{grid-template-columns:92px 1fr}.timeline-ruler{margin-left:114px}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 15V9m4 9V6m4 13V5m4 11V8" stroke="white" stroke-linecap="round"/><path d="M3 19h18" stroke="white" opacity=".55"/></svg></div>
+      <div><div class="brand-name">VoiceStudio</div><div class="brand-sub">Local AI Audio</div></div>
+    </div>
+    <div class="nav-section">创作</div>
+    <div class="nav">
+      <div class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg>AI 翻唱</div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3v18M8 7.5c0-2 1.8-3.5 4-3.5s4 1.2 4 3-1.7 2.8-4 3.3-4 1.4-4 3.7 1.8 4 4.3 4 4.2-1.5 4.2-3.7"/></svg>文字生成</div>
+    </div>
+    <div class="nav-section">声音</div>
+    <div class="nav">
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3a4 4 0 0 0-4 4v5a4 4 0 1 0 8 0V7a4 4 0 0 0-4-4Z"/><path d="M5 11v1a7 7 0 0 0 14 0v-1M12 19v3"/></svg>我的声音</div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 5v14M5 12h14"/><circle cx="12" cy="12" r="9" opacity=".45"/></svg>训练声音</div>
+    </div>
+    <div class="nav-section">工具</div>
+    <div class="nav">
+      <div class="nav-item" id="navSeparate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 7h16M4 17h16M8 3v8M16 13v8"/><circle cx="8" cy="14" r="2"/><circle cx="16" cy="10" r="2"/></svg>音频分离</div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 15V4m0 0 4 4m-4-4L8 8"/><path d="M5 14v5h14v-5"/></svg>导出中心</div>
+    </div>
+    <div class="sidebar-spacer"></div>
+    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.05.05-2.83 2.83-.05-.05A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6l-.04.07V21h-4v-.93l-.04-.07a1.7 1.7 0 0 0-1-.6 1.7 1.7 0 0 0-1.88.34l-.05.05-2.83-2.83.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1l-.07-.04H3v-4h.93L4 9.92a1.7 1.7 0 0 0 .6-1 1.7 1.7 0 0 0-.34-1.88l-.05-.05 2.83-2.83.05.05A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6l.04-.07V3h4v.93l.04.07a1.7 1.7 0 0 0 1 .6 1.7 1.7 0 0 0 1.88-.34l.05-.05 2.83 2.83-.05.05A1.7 1.7 0 0 0 19.4 9c.08.39.29.75.6 1l.07.04H21v4h-.93L20 14a1.7 1.7 0 0 0-.6 1Z" opacity=".65"/></svg>设置</div>
+    <div class="engine-card">
+      <div class="engine-top"><span class="engine-title"><i class="dot"></i>本地引擎</span><span style="color:#6b7586">就绪</span></div>
+      <div class="engine-meta">RTX 5070 Ti · CUDA 12.8<br>全部处理留在本机</div>
+    </div>
+  </aside>
+
+  <section class="workspace">
+    <header class="topbar">
+      <div class="crumb"><span>创作</span><span>›</span><strong>AI 翻唱工作台</strong></div>
+      <div class="top-actions">
+        <button class="ghost"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4v6h6M20 20v-6h-6"/><path d="M5.3 15A8 8 0 0 0 18 17.5M18.7 9A8 8 0 0 0 6 6.5"/></svg>最近工程</button>
+        <button class="secondary" id="importBtn"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m0-12 4 4m-4-4L8 7"/><path d="M4 14v6h16v-6"/></svg>导入歌曲</button>
+        <button class="ghost icon-btn" title="任务中心"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 2v3M18 2v3M3 8h18M5 4h14a2 2 0 0 1 2 2v14H3V6a2 2 0 0 1 2-2Z"/></svg></button>
+      </div>
+    </header>
+
+    <main class="main">
+      <div class="hero">
+        <div class="song-info">
+          <div class="cover"><div class="cover-lines"><i style="height:9px"></i><i style="height:17px"></i><i style="height:11px"></i><i style="height:21px"></i><i style="height:14px"></i><i style="height:18px"></i><i style="height:7px"></i><i style="height:16px"></i><i style="height:12px"></i><i style="height:19px"></i></div></div>
+          <div class="song-copy">
+            <div class="eyebrow"><span>当前歌曲工程</span><span class="quality-pill">STEMS READY</span></div>
+            <div class="song-title">落日信号</div>
+            <div class="song-meta"><span>示例曲目</span><span>04:29</span><span>44.1 kHz / Stereo</span><span>WAV</span></div>
+          </div>
+        </div>
+        <div class="hero-actions">
+          <button class="secondary" id="separateBtn"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M5 4v16M12 4v16M19 4v16"/><path d="M3 9h4M10 14h4M17 7h4"/></svg>重新分离</button>
+          <button class="ghost"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 20h16M6 16l4-4 3 3 5-7"/></svg>工程信息</button>
+        </div>
+      </div>
+
+      <div class="studio-grid">
+        <section class="left-col">
+          <div class="card timeline-card">
+            <div class="card-head">
+              <div><div class="card-title">多轨波形 <span class="card-sub">· 点击或拖拽任意波形可定位播放</span></div></div>
+              <div class="toolbar"><button class="mini">−</button><button class="mini active">适应宽度</button><button class="mini">＋</button></div>
+            </div>
+            <div class="timeline-ruler" id="ruler"></div>
+            <div class="tracks" id="tracks">
+              <div class="track" data-type="original" data-color="#677286"><div class="track-info"><span class="track-dot" style="background:#697488"></span><span class="track-name">原曲</span><div class="track-buttons"><button class="track-btn mute">M</button><button class="track-btn solo">S</button></div></div><div class="wave-wrap"><canvas class="wave"></canvas><span class="processed-mask"></span><span class="playhead"></span></div></div>
+              <div class="track" data-type="vocal" data-color="#8f82ff"><div class="track-info"><span class="track-dot" style="background:#8f82ff"></span><span class="track-name">原唱人声</span><div class="track-buttons"><button class="track-btn mute">M</button><button class="track-btn solo">S</button></div></div><div class="wave-wrap"><canvas class="wave"></canvas><span class="processed-mask"></span><span class="playhead"></span></div></div>
+              <div class="track" data-type="inst" data-color="#4f9dff"><div class="track-info"><span class="track-dot" style="background:#4f9dff"></span><span class="track-name">伴奏</span><div class="track-buttons"><button class="track-btn mute">M</button><button class="track-btn solo">S</button></div></div><div class="wave-wrap"><canvas class="wave"></canvas><span class="processed-mask"></span><span class="playhead"></span></div></div>
+              <div class="track" data-type="ai" data-color="#63d3ff"><div class="track-info"><span class="track-dot" style="background:#63d3ff"></span><span class="track-name">AI 人声</span><div class="track-buttons"><button class="track-btn mute">M</button><button class="track-btn solo">S</button></div></div><div class="wave-wrap"><canvas class="wave"></canvas><span class="processed-mask"></span><span class="playhead"></span></div></div>
+              <div class="track" data-type="mix" data-color="#43d69e"><div class="track-info"><span class="track-dot" style="background:#43d69e"></span><span class="track-name">最终混音</span><div class="track-buttons"><button class="track-btn mute">M</button><button class="track-btn solo">S</button></div></div><div class="wave-wrap"><canvas class="wave"></canvas><span class="processed-mask"></span><span class="playhead"></span></div></div>
+            </div>
+          </div>
+
+          <div class="card lyrics-mixer">
+            <section class="lyrics-panel">
+              <div class="lyrics-head"><div class="card-title">同步歌词 <span class="card-sub">· 点击歌词跳转</span></div><button class="mini">导入 LRC</button></div>
+              <div class="lyrics-body" id="lyrics">
+                <div class="lyric" data-time="8"><time>00:08</time><span>城市把晚风收进玻璃窗里</span></div>
+                <div class="lyric" data-time="28"><time>00:28</time><span>路灯把影子拉成很长的距离</span></div>
+                <div class="lyric" data-time="50"><time>00:50</time><span>我在嘈杂人群里听见你的名字</span></div>
+                <div class="lyric" data-time="74"><time>01:14</time><span>像一段旧电台突然恢复了清晰</span></div>
+                <div class="lyric" data-time="97"><time>01:37</time><span>如果落日还能收到我的讯号</span></div>
+                <div class="lyric active" data-time="111"><time>01:51</time><span>就让这一句沿着夜色慢慢抵达</span></div>
+                <div class="lyric" data-time="137"><time>02:17</time><span>不必回答 只要你曾经听到</span></div>
+                <div class="lyric" data-time="164"><time>02:44</time><span>沉默也会在旋律尽头留下坐标</span></div>
+                <div class="lyric" data-time="194"><time>03:14</time><span>风经过天台 带走最后一束光</span></div>
+                <div class="lyric" data-time="225"><time>03:45</time><span>我们把明天留给还没写完的方向</span></div>
+              </div>
+            </section>
+            <section class="mixer-panel">
+              <div class="mixer-head"><div class="card-title">快速混音</div><button class="mini">重置</button></div>
+              <div class="mixer-body">
+                <div class="mix-row"><span class="mix-label">AI 人声</span><input type="range" min="0" max="100" value="82"><span class="mix-val">+1.2 dB</span></div>
+                <div class="mix-row"><span class="mix-label">伴奏</span><input type="range" min="0" max="100" value="72"><span class="mix-val">−0.8 dB</span></div>
+                <div class="mix-row"><span class="mix-label">原唱</span><input type="range" min="0" max="100" value="0"><span class="mix-val">−∞</span></div>
+                <div class="mixer-note">预览混音仅影响试听。最终导出时会按右侧“翻唱设置”与这里的音量比例重新渲染。</div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <aside class="right-col">
+          <div class="card voice-card">
+            <div class="section-label">目标声音</div>
+            <div class="voice-select">
+              <div class="avatar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3a4 4 0 0 0-4 4v5a4 4 0 0 0 8 0V7a4 4 0 0 0-4-4Z"/><path d="M5 11v1a7 7 0 0 0 14 0v-1M12 19v2"/></svg></div>
+              <div class="voice-copy"><div class="voice-name">Studio Voice 01</div><div class="voice-meta">已训练 · 3m 42s 素材</div></div>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#697386" stroke-width="1.8"><path d="m6 9 6 6 6-6"/></svg>
+            </div>
+            <div class="capabilities"><span class="cap ok">✓ 文字生成</span><span class="cap ok">✓ AI 翻唱</span><span class="cap">RVC v2</span></div>
+          </div>
+
+          <div class="card settings-card">
+            <div class="card-head"><div class="card-title">翻唱设置</div><button class="mini">高级</button></div>
+            <div class="settings-body">
+              <div class="setting-group">
+                <div class="section-label">声音转换</div>
+                <div class="setting-row"><label>音调</label><input id="pitch" type="range" min="-12" max="12" value="0"><span class="value" id="pitchVal">0</span></div>
+                <div class="setting-row"><label>音色强度</label><input id="timbre" type="range" min="0" max="100" value="76"><span class="value" id="timbreVal">76%</span></div>
+                <div class="setting-row"><label>细节保留</label><input id="detail" type="range" min="0" max="100" value="64"><span class="value" id="detailVal">64%</span></div>
+              </div>
+              <div class="setting-group">
+                <div class="section-label">人声处理</div>
+                <div class="toggle-row"><div class="toggle-copy"><b>自动音高校正</b><span>轻度修正偏音，不改变旋律</span></div><span class="switch on"></span></div>
+                <div class="toggle-row"><div class="toggle-copy"><b>去混响</b><span>减少原唱空间残留</span></div><span class="switch on"></span></div>
+                <div class="toggle-row"><div class="toggle-copy"><b>保留和声</b><span>和声轨保持原音色</span></div><span class="switch"></span></div>
+                <div class="toggle-row"><div class="toggle-copy"><b>呼吸与齿音保护</b><span>减少过度转换造成的金属感</span></div><span class="switch on"></span></div>
+              </div>
+              <div class="setting-group">
+                <div class="section-label">输出</div>
+                <div class="toggle-row"><div class="toggle-copy"><b>高质量渲染</b><span>FP32 后处理 · 更慢</span></div><span class="switch on"></span></div>
+                <div class="toggle-row"><div class="toggle-copy"><b>导出 WAV + MP3</b><span>保留无损母带与分享版</span></div><span class="switch on"></span></div>
+              </div>
+            </div>
+            <div class="render-box">
+              <div class="render-summary"><span>预计本地处理</span><b>高质量 · 5 个阶段</b></div>
+              <button class="render" id="renderBtn">✦ 开始 AI 翻唱</button>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </main>
+
+    <footer class="transport">
+      <div class="now-playing"><div class="tiny-cover"></div><div><div class="now-title">落日信号 · AI Preview</div><div class="now-sub">Studio Voice 01</div></div></div>
+      <div class="transport-center"><span class="time" id="curTime">01:25</span><button class="transport-btn" id="backBtn" title="后退 10 秒"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7v5h5"/><path d="M5.5 16A8 8 0 1 0 6 7.5"/><path d="M10 11v4m3-4v4"/></svg></button><button class="transport-btn play-btn" id="playBtn"><svg id="playIcon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="m9 6 9 6-9 6V6Z"/></svg></button><button class="transport-btn" id="forwardBtn" title="前进 10 秒"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 7v5h-5"/><path d="M18.5 16A8 8 0 1 1 18 7.5"/><path d="M10 11v4m3-4v4"/></svg></button><div class="transport-progress" id="transportProgress"><i></i></div><span class="time">04:29</span></div>
+      <div class="transport-right"><span class="status-chip">🎧 最终混音</span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 9v6h4l5 4V5L9 9H5Z"/><path d="M17 9a4 4 0 0 1 0 6"/></svg><input type="range" min="0" max="100" value="72" style="width:72px"></div>
+    </footer>
+  </section>
+</div>
+<div class="prototype-label">交互式 UI 原型 · 非真实模型输出</div>
+
+<div class="task-pop" id="taskPop">
+  <div class="task-title"><span>AI 翻唱正在处理</span><button class="task-close" id="taskClose">×</button></div>
+  <div class="task-stage" id="taskStage">准备歌曲工程…</div>
+  <div class="progressbar"><i id="taskBar"></i></div>
+  <div class="steps"><i class="step active"></i><i class="step"></i><i class="step"></i><i class="step"></i><i class="step"></i></div>
+  <div class="task-foot"><span id="taskPercent">0%</span><span>本地 GPU 任务</span></div>
+</div>
+
+<div class="separate-pop" id="separatePop">
+  <div class="modal">
+    <h3>一键原声 / 伴奏分离</h3>
+    <p>选择处理质量。预览仅模拟交互，正式版会调用本地分离模型并缓存结果，换音色时无需重复分离。</p>
+    <div class="mode-option"><span class="radio"></span><div class="mode-copy"><b>快速 · UVR5</b><span>速度优先，适合普通试听与旧显卡</span></div></div>
+    <div class="mode-option selected"><span class="radio"></span><div class="mode-copy"><b>高质量 · RoFormer</b><span>更干净的人声边缘，推荐 AI 翻唱</span></div></div>
+    <div class="mode-option"><span class="radio"></span><div class="mode-copy"><b>极致 · 主唱 / 和声 / 伴奏</b><span>多轨分离并去混响，耗时更长</span></div></div>
+    <div class="modal-actions"><button class="ghost" id="cancelSeparate">取消</button><button class="primary" id="startSeparate">开始分离</button></div>
+  </div>
+</div>
+
+<input type="file" id="fileInput" accept="audio/*" hidden>
+<script>
+  const duration = 269;
+  let current = 85;
+  let playing = false;
+  let timer = null;
+  const playheads = [...document.querySelectorAll('.playhead')];
+  const masks = [...document.querySelectorAll('.processed-mask')];
+  const progressFill = document.querySelector('#transportProgress i');
+  const curTime = document.getElementById('curTime');
+  const lyrics = [...document.querySelectorAll('.lyric')];
+
+  function fmt(sec){ sec=Math.max(0,Math.min(duration,Math.round(sec))); return `${String(Math.floor(sec/60)).padStart(2,'0')}:${String(sec%60).padStart(2,'0')}`; }
+  function setTime(sec){
+    current=Math.max(0,Math.min(duration,sec)); const pct=current/duration*100;
+    playheads.forEach(x=>x.style.left=pct+'%'); masks.forEach(x=>x.style.width=pct+'%'); progressFill.style.width=pct+'%'; curTime.textContent=fmt(current);
+    let active=lyrics[0]; lyrics.forEach((l)=>{ if(+l.dataset.time<=current) active=l; }); lyrics.forEach(l=>l.classList.toggle('active',l===active));
+    active?.scrollIntoView({block:'nearest',behavior:'smooth'});
+  }
+  setTime(current);
+
+  function drawWave(canvas, color, seed, type){
+    const rect=canvas.getBoundingClientRect(); const dpr=window.devicePixelRatio||1; canvas.width=Math.max(1,rect.width*dpr); canvas.height=Math.max(1,rect.height*dpr); const ctx=canvas.getContext('2d'); ctx.scale(dpr,dpr);
+    const w=rect.width,h=rect.height, mid=h/2; ctx.clearRect(0,0,w,h); ctx.strokeStyle=color; ctx.globalAlpha=.82; ctx.lineWidth=1;
+    let x=0; const step=3;
+    function rnd(n){const v=Math.sin(n*12.9898+seed*78.233)*43758.5453;return v-Math.floor(v)}
+    for(let i=0;x<w;i++,x+=step){
+      const t=x/w; let env=.2+.55*Math.pow(Math.sin((t*.94+.03)*Math.PI),.7); env*=.72+.28*Math.sin(t*12.5+seed);
+      if(type==='vocal'||type==='ai') env*=.25+.75*(Math.sin(t*24+seed*2)>.15?1:.2);
+      if(type==='inst') env=.34+.42*(.5+.5*Math.sin(t*9.7+seed));
+      if(type==='mix') env=.36+.43*(.5+.5*Math.sin(t*13.2+seed));
+      let a=(.20+.80*rnd(i))*env*(h*.44); if(type==='original') a*=.92;
+      ctx.beginPath();ctx.moveTo(x,mid-a);ctx.lineTo(x,mid+a);ctx.stroke();
+    }
+  }
+  function redraw(){document.querySelectorAll('.track').forEach((t,i)=>drawWave(t.querySelector('canvas'),t.dataset.color,13+i*11,t.dataset.type));}
+  redraw(); window.addEventListener('resize',redraw);
+
+  document.querySelectorAll('.wave-wrap').forEach(w=>{
+    let drag=false; const seek=e=>{const r=w.getBoundingClientRect();setTime((e.clientX-r.left)/r.width*duration)};
+    w.addEventListener('mousedown',e=>{drag=true;seek(e)}); window.addEventListener('mousemove',e=>{if(drag)seek(e)}); window.addEventListener('mouseup',()=>drag=false);
+  });
+  lyrics.forEach(l=>l.addEventListener('click',()=>setTime(+l.dataset.time)));
+  document.querySelectorAll('.track-btn').forEach(b=>b.addEventListener('click',()=>b.classList.toggle('active')));
+  document.querySelectorAll('.switch').forEach(s=>s.addEventListener('click',()=>s.classList.toggle('on')));
+
+  const playBtn=document.getElementById('playBtn');
+  function updatePlayIcon(){document.getElementById('playIcon').innerHTML=playing?'<path d="M7 6h4v12H7V6Zm6 0h4v12h-4V6Z"/>':'<path d="m9 6 9 6-9 6V6Z"/>';}
+  playBtn.addEventListener('click',()=>{playing=!playing;updatePlayIcon(); if(playing){timer=setInterval(()=>{setTime(current+.5);if(current>=duration){playing=false;clearInterval(timer);updatePlayIcon()}},500)}else clearInterval(timer)});
+  document.getElementById('backBtn').onclick=()=>setTime(current-10); document.getElementById('forwardBtn').onclick=()=>setTime(current+10);
+  document.getElementById('transportProgress').addEventListener('click',e=>{const r=e.currentTarget.getBoundingClientRect();setTime((e.clientX-r.left)/r.width*duration)});
+
+  [['pitch','pitchVal',v=>v>0?'+'+v:v],['timbre','timbreVal',v=>v+'%'],['detail','detailVal',v=>v+'%']].forEach(([id,out,f])=>document.getElementById(id).addEventListener('input',e=>document.getElementById(out).textContent=f(e.target.value)));
+
+  const taskPop=document.getElementById('taskPop'),taskBar=document.getElementById('taskBar'),taskStage=document.getElementById('taskStage'),taskPercent=document.getElementById('taskPercent');
+  const stages=['解析歌曲与缓存','人声 / 伴奏分离','同步歌词与时间轴','AI 音色转换','混音并导出'];
+  let taskTimer=null;
+  function runTask(startStage=0){
+    clearInterval(taskTimer); taskPop.classList.add('show'); let p=startStage*20; taskBar.style.width=p+'%';
+    taskTimer=setInterval(()=>{ p+=1.25; if(p>=100){p=100;clearInterval(taskTimer);taskStage.textContent='完成 · 已生成 WAV / MP3'; setTimeout(()=>taskPop.classList.remove('show'),1500)} else { const idx=Math.min(4,Math.floor(p/20));taskStage.textContent=stages[idx]+'…'; }
+      taskBar.style.width=p+'%';taskPercent.textContent=Math.round(p)+'%';document.querySelectorAll('.step').forEach((s,i)=>{s.classList.toggle('done',i<Math.floor(p/20));s.classList.toggle('active',i===Math.min(4,Math.floor(p/20)))})
+    },100);
+  }
+  document.getElementById('renderBtn').onclick=()=>runTask(0); document.getElementById('taskClose').onclick=()=>taskPop.classList.remove('show');
+
+  const sep=document.getElementById('separatePop'); const openSep=()=>sep.classList.add('show');
+  document.getElementById('separateBtn').onclick=openSep; document.getElementById('navSeparate').onclick=openSep; document.getElementById('cancelSeparate').onclick=()=>sep.classList.remove('show');
+  document.querySelectorAll('.mode-option').forEach(o=>o.addEventListener('click',()=>{document.querySelectorAll('.mode-option').forEach(x=>x.classList.remove('selected'));o.classList.add('selected')}));
+  document.getElementById('startSeparate').onclick=()=>{sep.classList.remove('show');runTask(1)};
+
+  const fileInput=document.getElementById('fileInput'); document.getElementById('importBtn').onclick=()=>fileInput.click(); fileInput.onchange=()=>{ if(!fileInput.files[0])return; document.querySelector('.song-title').textContent=fileInput.files[0].name.replace(/\.[^.]+$/,''); document.querySelector('.quality-pill').textContent='NEW SONG'; setTime(0); };
+
+  const ruler=document.getElementById('ruler'); [0,45,90,135,180,225,269].forEach(t=>{const s=document.createElement('span');s.className='tick';s.style.left=(t/duration*100)+'%';s.textContent=fmt(t);ruler.appendChild(s)});
+</script>
+</body>
+</html>

@@ -8,12 +8,15 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import subprocess
+import time
 import wave
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from ..cover.project import CoverProject, CoverAsset, RIGHTS_ATTESTATION_TEXT_HASH, content_origin
-from ..paths import ensure_within, validate_id, validate_sha256
+from ..paths import AppPaths, ensure_within, validate_id, validate_sha256
+from ..runtime import EngineRuntimeResolver
 from .models import SingingModelVersion
 from .dataset import SourceAssetDatasetBuilder
 from .verification import SingingModelVerifier
@@ -37,9 +40,10 @@ def _validate_wav(path: Path) -> None:
 
 
 class SingingPipeline:
-    def __init__(self, engine: Any, *, projects_root: Path | None = None, progress: Callable[[float, str], None] | None = None):
+    def __init__(self, engine: Any, *, projects_root: Path | None = None, paths: AppPaths | None = None, progress: Callable[[float, str], None] | None = None):
         self.engine = engine
         self.projects_root = Path(projects_root).resolve() if projects_root is not None else None
+        self.paths = paths
         self.progress = progress or (lambda _value, _message: None)
 
     def _project(self, payload: Mapping[str, Any]) -> Path:
@@ -50,20 +54,42 @@ class SingingPipeline:
             raise ValueError("项目目录不存在")
         return project
 
-    @staticmethod
-    def _verification_clip(snapshot: Any, project: Path) -> Path:
-        candidate = next((item for item in snapshot.lineage if 3.0 <= float(item.get("duration_seconds", 0)) and str(item.get("project_relative_path", "")).lower().endswith(".wav")), None)
+    def _verification_clip(self, snapshot: Any, project: Path, cancel: Any = None) -> Path:
+        supported = {".wav", ".flac", ".mp3", ".m4a", ".aac", ".ogg"}
+        candidate = next((item for item in snapshot.lineage if 3.0 <= float(item.get("duration_seconds", 0)) and Path(str(item.get("project_relative_path", ""))).suffix.lower() in supported), None)
         if candidate is None:
-            raise RuntimeError("授权训练快照中没有可用于模型验证的 3 秒以上 WAV")
+            raise RuntimeError("授权训练快照中没有可用于模型验证的 3 秒以上音频")
         source = ensure_within(project, project / str(candidate["project_relative_path"]))
         output = ensure_within(Path(snapshot.manifest_path).parent, Path(snapshot.manifest_path).parent / "verification-input.wav")
-        with wave.open(str(source), "rb") as reader:
-            rate = reader.getframerate(); frames = min(reader.getnframes(), int(rate * 5.0))
-            if rate <= 0 or frames < rate * 3:
+        if source.suffix.lower() == ".wav":
+            with wave.open(str(source), "rb") as reader:
+                rate = reader.getframerate(); frames = min(reader.getnframes(), int(rate * 5.0))
+                if rate <= 0 or frames < rate * 3:
+                    raise RuntimeError("模型验证输入不足 3 秒")
+                with wave.open(str(output), "wb") as writer:
+                    writer.setparams((reader.getnchannels(), reader.getsampwidth(), rate, 0, reader.getcomptype(), reader.getcompname()))
+                    writer.writeframes(reader.readframes(frames))
+            return output
+        ffmpeg = EngineRuntimeResolver(self.paths).resolve_private_tool("ffmpeg") if self.paths else None
+        if ffmpeg is None:
+            raise RuntimeError("非 WAV 验证输入需要受信任的 FFmpeg")
+        process = subprocess.Popen([str(ffmpeg), "-v", "error", "-i", str(source), "-t", "5", "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le", "-y", str(output)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        while process.poll() is None:
+            if cancel is not None and cancel.is_set():
+                process.terminate()
+                try: process.wait(timeout=3)
+                except subprocess.TimeoutExpired: process.kill(); process.wait()
+                output.unlink(missing_ok=True)
+                raise RuntimeError("任务已取消")
+            time.sleep(.05)
+        if process.returncode:
+            error = (process.stderr.read() if process.stderr else b"").decode("utf-8", errors="replace")
+            output.unlink(missing_ok=True)
+            raise RuntimeError("模型验证音频解码失败: " + error[-300:])
+        with wave.open(str(output), "rb") as reader:
+            if reader.getframerate() <= 0 or reader.getnframes() < reader.getframerate() * 3:
+                output.unlink(missing_ok=True)
                 raise RuntimeError("模型验证输入不足 3 秒")
-            with wave.open(str(output), "wb") as writer:
-                writer.setparams((reader.getnchannels(), reader.getsampwidth(), rate, 0, reader.getcomptype(), reader.getcompname()))
-                writer.writeframes(reader.readframes(frames))
         return output
 
     @staticmethod
@@ -147,7 +173,7 @@ class SingingPipeline:
             shutil.move(str(staging), str(final))
             checkpoint = ensure_within(final, final / checkpoint_rel)
             index = ensure_within(final, final / index.relative_to(staging))
-            verification_input = self._verification_clip(snapshot, project)
+            verification_input = self._verification_clip(snapshot, project, cancel)
             self.progress(0.9, "验证歌唱模型")
             verification = SingingModelVerifier(self.engine).verify(checkpoint, index, verification_input, final, cancel=cancel)
             if cancel is not None and cancel.is_set():

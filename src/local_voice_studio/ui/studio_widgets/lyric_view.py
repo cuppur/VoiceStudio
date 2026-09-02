@@ -9,6 +9,9 @@ class LyricView(QListWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.setObjectName("lyricView")
+        self.setAlternatingRowColors(False)
+        self.setUniformItemSizes(True)
         self.lines: list[tuple[int, str]] = []
         self.setSelectionMode(QListWidget.SingleSelection)
         self.itemClicked.connect(self._seek_item)
@@ -26,8 +29,10 @@ class LyricView(QListWidget):
                 position = round(float(getattr(line, "timestamp_seconds", 0)) * 1000)
                 text = str(getattr(line, "text", line))
             self.lines.append((max(0, position), text))
-            item = QListWidgetItem(text)
+            seconds = max(0, position) // 1000
+            item = QListWidgetItem(f"{seconds // 60:02d}:{seconds % 60:02d}   {text}")
             item.setData(Qt.UserRole, max(0, position))
+            item.setData(Qt.UserRole + 1, text)
             self.addItem(item)
 
     def set_position(self, ms) -> None:

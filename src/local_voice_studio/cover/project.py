@@ -44,7 +44,7 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-ASSET_ROLES = {"original", "vocal", "instrumental", "ai_vocal"}
+ASSET_ROLES = {"original", "vocal", "instrumental", "ai_vocal", "final_mix"}
 
 
 @dataclass
@@ -62,6 +62,7 @@ class CoverAsset:
     model_sha256: str = ""
     source_asset_ids: list[str] = field(default_factory=list)
     created_at: str = field(default_factory=_now)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         try:
@@ -92,6 +93,7 @@ class CoverAsset:
             "producer": self.producer, "producer_version": self.producer_version,
             "model_id": self.model_id, "model_sha256": self.model_sha256,
             "source_asset_ids": list(self.source_asset_ids), "created_at": self.created_at,
+            "metadata": dict(self.metadata),
         }
 
     @classmethod

@@ -1,5 +1,27 @@
 QWidget { font-family: "Microsoft YaHei UI"; font-size: 13px; color: #F5F7FA; }
 QMainWindow, QStackedWidget, #workspace { background: #0D0F14; }
+#coverPage, #coverPage QWidget, #coverPage QScrollArea, #coverPage QScrollArea > QWidget { background: #090B10; color: #F6F8FC; }
+#songHeader { background: transparent; border: 0; }
+#coverArt { background: qlineargradient(x1:0,y1:1,x2:1,y2:0, stop:0 #111A35, stop:.48 #303E9F, stop:1 #6A5CFF); border-radius: 16px; border: 1px solid #343E73; }
+#eyebrow, #sectionLabel { color: #7F899B; font-size: 10px; font-weight: 700; }
+#songTitle { font-size: 25px; font-weight: 760; color: #F6F8FC; }
+#timelineCard, #lyricsCard, #mixerCard, #coverSettings { background: #111620; border: 1px solid #222A39; border-radius: 16px; }
+#timelineCard > QVBoxLayout > QHBoxLayout, #lyricsCard > QVBoxLayout > QHBoxLayout, #mixerCard > QVBoxLayout > QHBoxLayout { min-height: 46px; border-bottom: 1px solid #1B2330; }
+#tracks { background: #0D121B; }
+#cardTitle { color: #E9EDF5; font-size: 12px; font-weight: 720; }
+#cardSub, #muted { color: #667085; font-size: 10px; }
+#miniChip, #capabilities { color: #A8A0FF; background: #181B32; border: 1px solid #30325D; border-radius: 7px; padding: 4px 8px; font-size: 10px; }
+#miniButton { min-height: 26px; padding: 4px 9px; border-radius: 7px; font-size: 10px; }
+#mixerLabel { color: #7F899A; font-size: 10px; min-width: 54px; }
+#mixerValue { color: #7B8494; font-size: 9px; min-width: 28px; }
+#mixerNote, #settingsNote { color: #667085; background: #0C121A; border: 1px solid #19212D; border-radius: 8px; padding: 8px; font-size: 9px; }
+#rightsState { color: #D7DCEE; background: #171D2B; border-radius: 8px; padding: 7px; font-size: 10px; }
+#settingToggle { color: #CFD5E1; padding: 4px 0; }
+#globalTransport, #transportWidget { min-height: 58px; background: #0A0D13; border-top: 1px solid #171D28; }
+#globalTransport QPushButton, #transportWidget QPushButton { min-width: 34px; padding: 5px 9px; }
+#coverPage QSlider::groove:horizontal { height: 3px; background: #273041; border-radius: 2px; }
+#coverPage QSlider::handle:horizontal { width: 12px; margin: -5px 0; border-radius: 6px; background: #8A82FF; border: 1px solid #A8A0FF; }
+#coverPage QSpinBox, #coverPage QComboBox { background: #0C121B; border: 1px solid #273142; border-radius: 8px; padding: 6px; }
 #sidebar { background: #11141B; border-right: 1px solid #20242E; }
 #brand { color: #FFFFFF; font-size: 22px; font-weight: 700; padding: 22px 16px 4px 16px; }
 #brandSub { color: #6F7685; font-size: 11px; padding: 0 16px 14px 16px; }
@@ -62,3 +84,7 @@ QFrame#settings { background: #151C2F; border: 1px solid #283452; border-radius:
 #trackStatus[state="processing"] { color: #EBCB8B; background: #28251E; }
 #trackStatus[state="error"] { color: #FFB4B4; background: #3A2428; }
 #trackStatus[state="empty"] { color: #9299A8; background: #20242E; }
+#lyricView { background: #0D121B; border: 0; border-radius: 0; padding: 8px 10px; outline: none; }
+#lyricView::item { color: #5F6879; padding: 7px 8px; border-radius: 8px; }
+#lyricView::item:hover { color: #AEB8C7; background: #151C27; }
+#lyricView::item:selected { color: #FFFFFF; background: #262044; border-left: 2px solid #8F82FF; }

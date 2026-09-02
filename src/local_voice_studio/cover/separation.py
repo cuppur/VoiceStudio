@@ -108,6 +108,7 @@ class SongSeparationPipeline:
             # blocking readline here would make Cancel wait until the whole
             # song had finished, so keep the child quiet and poll its state.
             self.process = subprocess.Popen(command, cwd=str(self.paths.engine_root), env=env,
+                                            stdin=subprocess.DEVNULL,
                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if progress: progress(.25, "separating", "正在分离人声与伴奏")
             while self.process.poll() is None:

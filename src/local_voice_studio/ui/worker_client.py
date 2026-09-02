@@ -10,6 +10,7 @@ from uuid import uuid4
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, Signal
 
 from ..paths import AppPaths
+from ..protocol import COMMANDS, validate_payload
 from ..runtime import EngineRuntimeResolver
 
 
@@ -65,12 +66,15 @@ class WorkerClient(QObject):
         self.process.start()
 
     def send(self, command: str, payload: dict | None = None, request_id: str | None = None) -> str:
+        if command not in COMMANDS:
+            raise ValueError(f"未知 Worker 命令: {command}")
+        payload = validate_payload(command, payload or {})
         if self.process.state() != QProcess.Running:
             self.start()
             if not self.process.waitForStarted(5000):
                 raise RuntimeError("无法启动本地工作进程。请进入“设置”安装或修复本地引擎。")
         request_id = request_id or uuid4().hex
-        line = json.dumps({"id": request_id, "type": command, "payload": payload or {}}, ensure_ascii=False) + "\n"
+        line = json.dumps({"id": request_id, "type": command, "payload": payload}, ensure_ascii=False) + "\n"
         encoded = line.encode("utf-8")
         accepted = self.process.write(encoded)
         self._diagnostic(f"send id={request_id} command={command} bytes={len(encoded)} accepted={accepted}")

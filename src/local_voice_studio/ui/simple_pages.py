@@ -224,8 +224,16 @@ class OneClickTrainingPage(QWidget):
         duration = sum(item.duration_seconds for item in assets)
         labels = {"ready": "就绪", "training": "训练中", "untrusted": "未验证", "verification_failed": "训练完成，但模型验证失败", "model_missing": "模型缺失", "not_ready": "未生成"}
         self.singing_status.setText(labels.get(state, str(state)))
-        self.singing_detail.setText(f"可用于 AI 翻唱。训练素材 {len(assets)} 个，共 {duration:.1f} 秒。" if state == "ready" else f"训练素材 {len(assets)} 个，共 {duration:.1f} 秒；训练完成并通过验证后，才可在 AI 翻唱中使用。")
-        self.singing_train_button.setEnabled(not self.singing_request and bool(assets) and bool(profile.consent_confirmed))
+        minutes, seconds = divmod(round(duration), 60); elapsed = f"{minutes}:{seconds:02d}"
+        if duration < 180:
+            amount = f"素材不足 · {elapsed} / 最低 3:00"
+        elif duration < 600:
+            amount = f"可训练 · {elapsed} · 建议准备 10 分钟以上素材"
+        else:
+            amount = f"数据量充足 · {elapsed}"
+        prefix = "模型已验证，可用于 AI 翻唱。" if state == "ready" else "训练完成并通过验证后，才可在 AI 翻唱中使用。"
+        self.singing_detail.setText(f"{amount}\n{prefix} 当前共 {len(assets)} 个授权素材。")
+        self.singing_train_button.setEnabled(not self.singing_request and duration >= 180 and bool(profile.consent_confirmed))
 
     def _start_singing_training(self) -> None:
         profile_id = self.singing_profile.currentData()

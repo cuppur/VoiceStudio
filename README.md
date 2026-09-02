@@ -5,9 +5,11 @@
 ## 当前实现
 
 - PySide6 原生中文工作台，包含 AI 翻唱、文字生成、我的声音、训练声音、设置与全局任务中心。
-- AI 翻唱工作台已实现歌曲导入、项目内不可变源文件副本、SHA-256 校验、流式波形、LRC 歌词、歌曲权利声明、UVR5 人声/伴奏分离、五轨时间线、单轨试听、Mute/Solo、同步 Seek、取消、缓存与重开恢复。
+- AI 翻唱工作台已按正式 HTML 视觉基线重构，并实现歌曲导入、项目内不可变源文件副本、SHA-256 校验、流式波形、LRC 歌词、歌曲权利声明、UVR5 人声/伴奏分离、五轨时间线、实时多源试听、Mute/Solo、同步 Seek、取消、缓存与重开恢复。
 - Singing Model 产品链已接入独立锁定的 RVC v2/RMVPE/HuBERT 运行时：正式“一键训练”页面只接受当前声音的 SourceAsset ID，由 Worker 在项目内构建不可变训练快照；RVC 模型经受限加载、Index 校验和授权短音频真实推理验证后才可启用。
 - 正式 AI 翻唱页面可从已分离 Vocal 生成带 `ai_generated` 标识的 AI Vocal，支持真实波形、Seek、原唱/AI 人声 A/B 单轨试听、Pitch、缓存、取消与重开恢复。
+- Quick Mixer 支持 AI 人声、伴奏和可选原唱人声增益；最终渲染在 Worker 后台统一转换为 48 kHz 立体声，执行响度标准化、防削波限制、缓存和原子发布，并登记 `final_mix` CoverAsset。
+- 成品 Export Dialog 支持 WAV、320 kbps MP3 或同时导出，绝不静默覆盖文件；每次导出同时生成 `.voicestudio.json`，记录 AI 生成标识、歌曲权利声明、声音/模型、混音参数及输出 SHA-256。
 - 导入音频和麦克风录音统一保存为 `SourceAsset`；SHA-256 去重、解码、声道、响度、削波和长静音检查，原始文件永不覆盖。
 - 声音配置可在尚无参考转写时保存；状态、素材、零样本参考、数据集快照及 GPT/SoVITS 检查点持久化，并同步刷新三个页面。
 - 中文/英文混合长文本安全分段、可恢复任务记录、WAV 分段和 WAV/320 kbps MP3 合并输出。
@@ -17,7 +19,7 @@
 - 训练结果保存为 `ModelVersion`。候选模型通过真实加载及固定中文/中英混合 WAV 验证后自动启用，旧活动版本始终保留并可回退。
 - 60 秒训练门槛只统计“已人工确认、文本非空、纳入训练且无质量问题”的切片，不统计原文件总时长。
 - 真实临时试听调用 GPT-SoVITS 并用 QMediaPlayer 自动播放，只写入 `%LOCALAPPDATA%\LocalVoiceStudio\cache\preview` 的 WAV，不生成 MP3。
-- stdin/stdout JSON Lines 单 GPU 工作进程；`health`、`load_profile`、`synthesize`、`prepare_dataset`、`train`、`separate_song`、`train_singing_model`、`convert_vocal`、`cancel`、`shutdown` 命令。
+- stdin/stdout JSON Lines 单任务工作进程；新增 `render_cover`、`export_cover`，歌唱训练、转换、最终渲染和导出均使用严格字段白名单，客户端不能指定受控输入或模型路径。
 - 固定 GPT-SoVITS 提交 `d523079fc05d9a8028d6085bffe4a2757c32abb6` 与 V2ProPlus 推理接口。
 - 私有 Python 3.11、PyTorch 2.7.1+cu128、FFmpeg 和模型的一键安装/修复，不修改系统 PATH。
 - SQLite 任务/设置索引；可迁移 `project.json` 和 `raw/processed/datasets/checkpoints/exports` 项目结构。
@@ -54,10 +56,11 @@ $env:PYTHONPATH = "src"
 2. 可载入同名 LRC 或手动选择 LRC。波形按 FFmpeg 流式解码，最多保存 6000 个峰值。
 3. 点击“分离人声 / 伴奏”，确认歌曲处理与使用权利声明后选择 UVR5。普通分离 stem 标记为 `separated`，不是 AI 翻唱成品。
 4. 完成后选择已授权且具备“已验证”歌唱模型的声音，设置 Pitch 并点击“生成 AI 人声”。生成结果登记为项目 `CoverAsset`，重开后自动恢复真实波形。
-5. 原曲、原唱人声、伴奏和 AI 人声支持单轨切换试听、Mute/Solo 与同步 Seek；最终混音保持“未就绪”。
-6. manifest、stem、歌词和波形均保存在当前项目。源文件、模型、Index、Pitch 和输出哈希一致时直接复用缓存。
+5. 使用 Quick Mixer 实时试听 AI 人声、伴奏和可选原唱，所有播放器共享播放、暂停、Seek，并自动校正超过 50 ms 的漂移。
+6. 点击“生成最终翻唱”得到真实 `final_mix` 波形；相同资产与混音参数直接命中缓存。随后可导出 WAV、MP3 或两者及 AI provenance sidecar。
+7. manifest、stem、歌词、波形和最终混音均保存在当前项目，关闭并重开后可恢复。
 
-当前尚未实现：最终 AI Cover 混音、MP3 成品导出、AutoTune、RoFormer、和声分离、自动歌词、逐字歌词、云端服务。RVC 训练/推理仅在独立运行时及其必需模型资产完成安装、校验后可用；未就绪时不会生成假文件。
+当前尚未实现：AutoTune、RoFormer、和声分离、自动歌词、逐字歌词、云端服务、账号与支付。RVC 训练/推理仅在独立运行时及其必需模型资产完成安装、校验后可用；未就绪时不会生成假文件。
 
 ### 声音训练与文字生成
 
@@ -76,7 +79,7 @@ datasets/<snapshot_id>/{audio,dataset.list,manifest.json}
 %LOCALAPPDATA%/LocalVoiceStudio/training/<profile_id>/<snapshot_sha256>/features
 %LOCALAPPDATA%/LocalVoiceStudio/training/<profile_id>/<snapshot_sha256>/runs/<training_run_id>
 checkpoints/<profile_id>/<training_run_id>
-covers/<cover_id>/{manifest.json,source,stems,lyrics,waveform}
+covers/<cover_id>/{manifest.json,source,stems,lyrics,waveform,generated,exports}
 ```
 
 旧版 `project.json` 会无损迁移到项目 schema 4，并增加稳定 `project_uid`、训练步骤结果和持久化生成记录；冻结快照仍保持 schema 2 和原有哈希算法。旧绝对路径快照会把仍可找到的音频复制进快照 `audio` 目录并改写为相对路径，缺失文件会明确报错。缺失的授权记录不会被自动伪造。
