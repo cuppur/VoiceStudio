@@ -19,8 +19,8 @@ from .runtime import EngineRuntimeResolver
 from .text import split_text
 from .training import TrainingPipeline
 from .cover.separation import SongSeparationPipeline
-from .cover.mixing import CoverMixSettings, CoverMixer
-from .cover.exporting import CoverExporter
+from .cover.mixing import CoverMixSettings, CoverMixer, FFmpegMixBackend
+from .cover.exporting import CoverExporter, FFmpegExportBackend
 from .cover.application import CoverApplicationService
 from .cover.cancellation import CancellationToken
 from .cover.errors import CoverError, error_payload as cover_error_payload
@@ -466,7 +466,10 @@ class WorkerService:
         app = CoverApplicationService(Path(value["project_path"]), paths=self.paths)
         command = app.prepare_render(str(value["cover_id"]), str(value.get("profile_id", "")), raw_settings)
         settings = command.mix
-        self.mixer = CoverMixer(self.paths)
+        ffmpeg = EngineRuntimeResolver(self.paths).resolve_private_tool("ffmpeg")
+        if not ffmpeg:
+            raise RuntimeError("找不到受信任的 FFmpeg")
+        self.mixer = CoverMixer(self.paths, backend=FFmpegMixBackend(ffmpeg))
         try:
             self.emit(request_id, "progress", {"progress": .05, "stage": "validating", "message": "正在验证混音素材"})
             result = self.mixer.mix(
@@ -488,7 +491,10 @@ class WorkerService:
             existing_policy=str(value.get("existing_policy", "reject")),
             publication_rights_acknowledged=bool(value.get("publication_rights_acknowledged", False)),
         )
-        self.exporter = CoverExporter(self.paths)
+        ffmpeg = EngineRuntimeResolver(self.paths).resolve_private_tool("ffmpeg")
+        if not ffmpeg:
+            raise RuntimeError("找不到受信任的 FFmpeg")
+        self.exporter = CoverExporter(self.paths, backend=FFmpegExportBackend(ffmpeg))
         try:
             self.emit(request_id, "progress", {"progress": .05, "stage": "validating", "message": "正在验证导出信息"})
             result = self.exporter.export(

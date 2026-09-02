@@ -15,7 +15,8 @@ class FFmpegExportBackend:
 
     def encode(self, source: Path, target: Path, *, format: str, cancel: Any = None) -> Path:
         codec = "pcm_s16le" if format == "wav" else "libmp3lame"
-        args = [str(self.ffmpeg), "-y", "-i", str(source), "-ar", "48000", "-ac", "2", "-c:a", codec, str(target)]
+        args = [str(self.ffmpeg), "-y", "-i", str(source), "-ar", "48000", "-ac", "2", "-c:a", codec,
+                "-f", "wav" if format == "wav" else "mp3", str(target)]
         process = ManagedProcess(args, cancel=cancel)
         self.process = process
         try:
