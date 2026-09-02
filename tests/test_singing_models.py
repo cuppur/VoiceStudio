@@ -19,6 +19,7 @@ def _model(tmp_path, profile_id="profile"):
         checkpoint_sha256=digest(checkpoint),
         index_relative_path="models/model.index",
         index_sha256=digest(index),
+        trust_status="verified",
     )
 
 
@@ -38,6 +39,10 @@ def test_old_profile_payload_migrates_without_singing_fields():
     assert profile.singing_models == []
     assert profile.active_singing_model_id == ""
     assert profile.singing_status() == "not_ready"
+
+
+def test_new_singing_model_is_unverified_by_default():
+    assert SingingModelVersion().trust_status == "unverified"
 
 
 def test_singing_status_training_missing_and_untrusted(tmp_path):

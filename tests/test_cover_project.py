@@ -94,11 +94,22 @@ def test_paths_are_confined_and_output_hash_is_verifiable(tmp_path: Path):
 def test_rights_attestation_and_content_origin(tmp_path: Path):
     cover = CoverProject.create(tmp_path / "project")
     cover.content_origin = "separated"
-    cover.attest_rights(version=2, confirmed_at="2026-08-31T00:00:00+00:00")
+    cover.attest_rights(version=1, confirmed_at="2026-08-31T00:00:00+00:00")
     restored = CoverProject.load(tmp_path / "project", cover.id)
-    assert restored.rights_attestation_version == 2
+    assert restored.rights_attestation_version == 1
     assert restored.rights_confirmed and restored.rights_confirmed_at.startswith("2026-08-31")
+    assert len(restored.rights_attestation_text_hash) == 64
     assert restored.content_origin == "separated"
+    with pytest.raises(CoverProjectError, match="哈希"):
+        restored.attest_rights(text_hash="a" * 64)
+
+
+def test_confirmed_rights_manifest_rejects_wrong_version_or_hash(tmp_path: Path):
+    project = tmp_path / "project"; cover = CoverProject.create(project); cover.attest_rights()
+    payload = json.loads(cover.manifest_path.read_text(encoding="utf-8")); payload["rights_attestation_text_hash"] = "a" * 64
+    cover.manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(CoverProjectError, match="哈希"):
+        CoverProject.load(project, cover.id)
 
 
 def test_old_project_without_covers_is_compatible(tmp_path: Path):

@@ -129,7 +129,10 @@ class WorkerClient(QObject):
 
     def _finished(self, *_args) -> None:
         self._diagnostic(f"finished code={self.process.exitCode()} status={self.process.exitStatus()}")
-        self.ready = False; self.pending.clear(); self.ready_changed.emit(False)
+        pending = list(self.pending.items()); self.pending.clear()
+        for request_id, command in pending:
+            self.event.emit(request_id, "error", {"message": f"本地工作进程已退出（退出码 {self.process.exitCode()}）", "status": "worker_stopped", "command": command})
+        self.ready = False; self.ready_changed.emit(False)
         self.state_changed.emit("stopped")
 
     def _process_error(self, *_args) -> None:

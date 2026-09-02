@@ -353,6 +353,11 @@ class VoiceLibraryPage(QWidget):
 
 
 class TrainingPage(QWidget):
+    """Legacy compatibility page used only by older contract tests/tools.
+
+    The formal desktop product uses ``simple_pages.OneClickTrainingPage``.
+    Do not add or extend Singing Model product behavior here.
+    """
     job_created = Signal(object)
     profiles_changed = Signal()
     PROMPTS = [

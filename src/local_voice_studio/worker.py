@@ -78,10 +78,24 @@ class WorkerService:
         if message.type == "health":
             health = self.engine.gpu_health()
             integrity = EngineRuntimeResolver(self.paths).verify_install_manifest()
+            singing = self.singing_engine.readiness() if self.singing_engine is not None else None
+            singing_ready = bool(singing and singing.ready)
+            singing_errors = list(singing.errors) if singing else ["RVC 歌唱引擎未配置"]
+            singing_details = dict(singing.details or {}) if singing else {}
             health["runtime_integrity"] = integrity.valid
             health["runtime_integrity_errors"] = list(integrity.errors)
             health["compatible"] = bool(health.get("compatible") and integrity.valid)
-            self.emit(message.id, "result", {**health, "worker_python": sys.executable, "pid": os.getpid(), "engine": self.engine.readiness(), "gpu": health})
+            self.emit(message.id, "result", {
+                **health, "worker_python": sys.executable, "pid": os.getpid(), "engine": self.engine.readiness(), "gpu": health,
+                "rvc_ready": singing_ready,
+                "rmvpe_ready": singing_ready and not any("RMVPE" in item for item in singing_errors),
+                "hubert_ready": singing_ready and not any("HuBERT" in item for item in singing_errors),
+                "singing_ready": singing_ready,
+                "singing_errors": singing_errors,
+                "rvc_commit": singing_details.get("commit", getattr(getattr(self.singing_engine, "config", None), "commit", "")),
+                "rvc_torch_version": singing_details.get("torch_version", getattr(getattr(self.singing_engine, "config", None), "torch_version", "")),
+                "singing_details": singing_details,
+            })
         elif message.type == "load_profile":
             self.profile = message.payload
             try:
@@ -358,14 +372,38 @@ class WorkerService:
     def _singing(self, request_id: str) -> SingingPipeline:
         if self.singing_engine is None:
             raise RuntimeError("RVC 歌唱引擎尚未安装或未配置")
-        return SingingPipeline(self.singing_engine, progress=lambda value, message: self.emit(request_id, "progress", {"progress": value, "stage": "singing", "message": message}))
+        return SingingPipeline(
+            self.singing_engine,
+            projects_root=self.paths.projects_root,
+            progress=lambda value, message: self.emit(request_id, "progress", {"progress": value, "stage": "singing", "message": message}),
+        )
+
+    def _validated_singing_payload(self, payload: dict[str, Any], *, training: bool) -> dict[str, Any]:
+        project_value = str(payload.get("project_path", ""))
+        if not project_value:
+            raise ValueError("缺少 project_path")
+        project = ensure_within(self.paths.projects_root, Path(project_value))
+        if not project.is_dir() or not (project / "project.json").is_file():
+            raise ValueError("项目目录不存在或项目清单缺失")
+        forbidden = ({"dataset_dir", "training_dataset_sha256", "checkpoint_path", "index_path"}
+                     if training else {"source_path", "model_path", "output_path", "content_origin"})
+        supplied = sorted(key for key in forbidden if key in payload)
+        if supplied:
+            raise ValueError("客户端不得提供受控字段: " + ", ".join(supplied))
+        normalized = dict(payload)
+        normalized["project_path"] = str(project)
+        if training:
+            source_ids = normalized.get("source_asset_ids")
+            if not isinstance(source_ids, list) or not source_ids:
+                raise ValueError("歌唱模型训练至少需要一个 SourceAsset")
+        return normalized
 
     def _train_singing_model(self, request_id: str, payload: dict[str, Any]) -> None:
-        result = self._singing(request_id).train(payload, cancel=self.cancel_event)
+        result = self._singing(request_id).train(self._validated_singing_payload(payload, training=True), cancel=self.cancel_event)
         self.emit(request_id, "result", {"progress": 1.0, "model": result})
 
     def _convert_vocal(self, request_id: str, payload: dict[str, Any]) -> None:
-        result = self._singing(request_id).convert(payload, cancel=self.cancel_event)
+        result = self._singing(request_id).convert(self._validated_singing_payload(payload, training=False), cancel=self.cancel_event)
         self.emit(request_id, "result", {"progress": 1.0, **result})
 
 

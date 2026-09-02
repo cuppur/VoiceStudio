@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+from uuid import uuid4
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Qt, QUrl, Signal
@@ -168,18 +169,31 @@ class MaterialManagerDialog(QDialog):
 
 class OneClickTrainingPage(QWidget):
     profiles_changed = Signal(); job_created = Signal(object)
-    STEPS = ("检查素材", "清理切片", "识别文字", "确认数据", "训练模型", "验证并保存")
+    # These are the legacy narration/voice-data steps.  Singing training is
+    # deliberately presented in its own card above and does not pass through
+    # the transcription/review flow below.
+    STEPS = ("检查素材", "清理切片", "旁白识别", "确认数据", "训练模型", "验证并保存")
 
     def __init__(self, store: StudioStore, project: Path, client: WorkerClient):
         super().__init__(); self.store, self.project, self.client = store, project, client
         self.probes: list[AudioProbe] = []; self.scan_thread: ScanThread | None = None; self.workflow: TrainingWorkflow | None = None; self.draft: DatasetDraft | None = None; self._step_results: dict[int, str] = {}; self.review_indices: list[int] = []; self.review_position = 0
         self.controller = TrainingWorkflowController(store, project, client, self)
         self.controller.workflow_changed.connect(self._workflow_changed); self.controller.draft_ready.connect(self._show_draft); self.controller.profile_changed.connect(lambda _id: self._profiles_changed()); self.controller.job_created.connect(self.job_created)
+        self.singing_request = ""; client.event.connect(self._singing_event)
         self._build(); self._restore()
 
     def _build(self) -> None:
-        root = QVBoxLayout(self); title = QLabel("一键训练"); title.setObjectName("pageTitle"); root.addWidget(title); subtitle = QLabel("导入一批声音，VoiceStudio 会自动切片、识别、训练并验证。原文件永不覆盖。"); subtitle.setObjectName("hint"); root.addWidget(subtitle)
-        card = QGroupBox("创建或追加声音"); form = QFormLayout(card); self.name = QLineEdit("我的声音"); self.name.setPlaceholderText("例如：我的旁白声"); self.consent = QCheckBox("我确认这是本人声音，或已经取得明确授权"); form.addRow("声音名称", self.name); form.addRow("授权确认", self.consent); self.drop = DropArea(); self.drop.paths_dropped.connect(self._scan); form.addRow(self.drop)
+        outer = QVBoxLayout(self); scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame); content = QWidget(); root = QVBoxLayout(content); outer.addWidget(scroll); scroll.setWidget(content); self.content_scroll = scroll
+        title = QLabel("声音素材与歌唱模型"); title.setObjectName("pageTitle"); root.addWidget(title); subtitle = QLabel("上方独立训练歌唱模型；下方为可选的旁白 / 通用声音素材流程。两者互不混用，原文件永不覆盖。"); subtitle.setObjectName("hint"); subtitle.setWordWrap(True); root.addWidget(subtitle)
+        self.singing_card = QGroupBox("歌唱模型"); singing_form = QFormLayout(self.singing_card)
+        self.singing_profile = QComboBox(); self.singing_profile.currentIndexChanged.connect(self._refresh_singing_card)
+        self.singing_status = QLabel("未选择声音"); self.singing_status.setObjectName("statusChip")
+        self.singing_detail = QLabel("训练完成并通过验证后，才可在 AI 翻唱中使用。现在的训练流程会自动保存歌唱模型状态。"); self.singing_detail.setWordWrap(True); self.singing_detail.setObjectName("hint")
+        singing_form.addRow("声音配置", self.singing_profile); singing_form.addRow("状态", self.singing_status); singing_form.addRow(self.singing_detail)
+        singing_actions = QHBoxLayout(); self.singing_train_button = QPushButton("训练歌唱模型"); self.singing_train_button.setObjectName("primaryButton"); self.singing_train_button.clicked.connect(self._start_singing_training); singing_actions.addWidget(self.singing_train_button); self.singing_cancel_button = QPushButton("取消训练"); self.singing_cancel_button.clicked.connect(self._cancel_singing_training); self.singing_cancel_button.hide(); singing_actions.addWidget(self.singing_cancel_button); self.singing_manage_button = QPushButton("管理版本"); self.singing_manage_button.clicked.connect(self._manage_singing_versions); singing_actions.addWidget(self.singing_manage_button); singing_form.addRow(singing_actions)
+        self.singing_progress = QProgressBar(); self.singing_progress.setRange(0, 100); self.singing_progress.setValue(0); singing_form.addRow("训练进度", self.singing_progress); root.addWidget(self.singing_card)
+        self.singing_model_card = self.singing_card; self.singing_model_status = self.singing_status; self.singing_model_profile = self.singing_profile; self.train_singing = self.singing_train_button
+        card = QGroupBox("旁白 / 通用声音素材（可选）"); form = QFormLayout(card); self.name = QLineEdit("我的声音"); self.name.setPlaceholderText("例如：我的旁白声"); self.consent = QCheckBox("我确认这是本人声音，或已经取得明确授权"); form.addRow("声音名称", self.name); form.addRow("授权确认", self.consent); self.drop = DropArea(); self.drop.paths_dropped.connect(self._scan); form.addRow(self.drop)
         row = QHBoxLayout(); files = QPushButton("选择音频"); files.clicked.connect(self._files); folder = QPushButton("选择文件夹"); folder.clicked.connect(self._folder); manage = QPushButton("管理已导入素材"); manage.clicked.connect(self._manage_assets); row.addWidget(files); row.addWidget(folder); row.addWidget(manage); row.addStretch(); form.addRow(row); root.addWidget(card)
         self.material = QLabel("尚未导入素材"); self.material.setObjectName("hint"); root.addWidget(self.material)
         self.timeline = StepTimeline(self.STEPS); self.steps = self.timeline.labels; root.addWidget(self.timeline)
@@ -187,7 +201,87 @@ class OneClickTrainingPage(QWidget):
         self.review = QGroupBox("逐条试听并确认"); review_layout = QVBoxLayout(self.review); self.review_hint = QLabel("默认只审核异常片段；Space 播放，Enter 确认，Delete 排除，↑↓ 切换。"); self.review_hint.setObjectName("hint"); review_layout.addWidget(self.review_hint); self.review_card = ReviewSegmentCard(); self.review_card.changed.connect(self._review_changed); self.review_card.confirmed.connect(self._review_confirmed); self.review_card.navigate.connect(self._review_navigate); review_layout.addWidget(self.review_card)
         self.show_all = QCheckBox("查看全部片段表格"); self.show_all.toggled.connect(self._populate_review); review_layout.addWidget(self.show_all); self.table = QTableWidget(0, 5); self.table.setHorizontalHeaderLabels(["纳入", "片段", "时长", "识别文字", "问题"]); self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch); self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch); self.table.setVisible(False); review_layout.addWidget(self.table); self.review.setVisible(False); root.addWidget(self.review, 1)
         action_row = QHBoxLayout(); self.primary = QPushButton("导入素材"); self.primary.setObjectName("primaryButton"); self.primary.clicked.connect(self._primary_action); self.more = QPushButton("继续导入"); self.more.clicked.connect(self._files); self.record = QPushButton("录几句"); self.record.clicked.connect(self._record); self.cancel = QPushButton("取消当前任务"); self.cancel.clicked.connect(self._cancel); self.cancel.setVisible(False); action_row.addWidget(self.primary); action_row.addWidget(self.more); action_row.addWidget(self.record); action_row.addWidget(self.cancel); action_row.addStretch(); root.addLayout(action_row)
-        advanced = QGroupBox("高级 / 查看详情"); advanced.setCheckable(True); advanced.setChecked(False); advanced_layout = QVBoxLayout(advanced); self.smart = QCheckBox("智能优化（人声分离与降噪）"); self.smart.setChecked(bool(self.store.get_setting("smart_optimization", True))); advanced_layout.addWidget(self.smart); self.details = QPlainTextEdit(); self.details.setReadOnly(True); self.details.setMaximumHeight(100); advanced_layout.addWidget(self.details); fold_group(advanced); root.addWidget(advanced)
+        advanced = QGroupBox("高级 / 查看旁白流程详情"); advanced.setCheckable(True); advanced.setChecked(False); advanced_layout = QVBoxLayout(advanced); self.smart = QCheckBox("智能优化（人声分离与降噪）"); self.smart.setChecked(bool(self.store.get_setting("smart_optimization", True))); advanced_layout.addWidget(self.smart); self.details = QPlainTextEdit(); self.details.setReadOnly(True); self.details.setMaximumHeight(100); advanced_layout.addWidget(self.details); fold_group(advanced); root.addWidget(advanced); root.addStretch()
+        self._refresh_singing_profiles()
+
+    def _refresh_singing_profiles(self) -> None:
+        current = self.singing_profile.currentData(); self.singing_profile.clear()
+        for profile in self.store.list_profiles(self.project):
+            if not profile.archived: self.singing_profile.addItem(profile.name, profile.id)
+        if current:
+            index = self.singing_profile.findData(current)
+            if index >= 0: self.singing_profile.setCurrentIndex(index)
+        self._refresh_singing_card()
+
+    def _refresh_singing_card(self) -> None:
+        profile_id = self.singing_profile.currentData()
+        profile = next((item for item in self.store.list_profiles(self.project) if item.id == profile_id), None)
+        if not profile:
+            self.singing_status.setText("未选择声音"); return
+        try: state = profile.singing_status(self.project)
+        except TypeError: state = profile.singing_status()
+        assets = [item for item in self.store.list_source_assets(self.project, profile.id) if item.enabled and not item.duplicate_of]
+        duration = sum(item.duration_seconds for item in assets)
+        labels = {"ready": "就绪", "training": "训练中", "untrusted": "未验证", "verification_failed": "训练完成，但模型验证失败", "model_missing": "模型缺失", "not_ready": "未生成"}
+        self.singing_status.setText(labels.get(state, str(state)))
+        self.singing_detail.setText(f"可用于 AI 翻唱。训练素材 {len(assets)} 个，共 {duration:.1f} 秒。" if state == "ready" else f"训练素材 {len(assets)} 个，共 {duration:.1f} 秒；训练完成并通过验证后，才可在 AI 翻唱中使用。")
+        self.singing_train_button.setEnabled(not self.singing_request and bool(assets) and bool(profile.consent_confirmed))
+
+    def _start_singing_training(self) -> None:
+        profile_id = self.singing_profile.currentData()
+        profile = next((item for item in self.store.list_profiles(self.project) if item.id == profile_id), None)
+        if not profile: self.singing_status.setText("请先选择声音"); return
+        if not profile.consent_confirmed: self.singing_status.setText("未授权，无法训练"); return
+        assets = [item for item in self.store.list_source_assets(self.project, profile.id) if item.enabled and not item.duplicate_of]
+        if not assets: self.singing_status.setText("没有可用训练素材"); return
+        self.singing_request = uuid4().hex
+        payload = {"project_path": str(self.project), "profile_id": profile.id, "source_asset_ids": [item.id for item in assets], "training_run_id": uuid4().hex, "engine": "rvc_v2"}
+        try:
+            self.singing_request = self.client.send("train_singing_model", payload, request_id=self.singing_request)
+        except Exception as exc:
+            self.singing_request = ""; self.singing_status.setText("训练启动失败：" + str(exc)); self.singing_train_button.setEnabled(True); return
+        self.singing_train_button.setEnabled(False); self.singing_cancel_button.show(); self.singing_status.setText("训练中（0/8）"); self.singing_progress.setValue(0)
+
+    def _cancel_singing_training(self) -> None:
+        if not self.singing_request: return
+        self.singing_cancel_button.setEnabled(False); self.singing_status.setText("正在停止歌唱模型训练…")
+        try: self.client.send("cancel", {"target_request_id": self.singing_request})
+        except Exception as exc: self.singing_detail.setText(str(exc)); self.singing_cancel_button.setEnabled(True)
+
+    def _manage_singing_versions(self) -> None:
+        profile = next((item for item in self.store.list_profiles(self.project) if item.id == self.singing_profile.currentData()), None)
+        if not profile: return
+        dialog = QDialog(self); dialog.setWindowTitle(profile.name + " · 歌唱模型版本"); dialog.resize(760, 420); root = QVBoxLayout(dialog)
+        table = QTableWidget(len(profile.singing_models), 6); table.setHorizontalHeaderLabels(["版本", "创建时间", "训练时长", "数据 Hash", "状态", "当前"]); table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        table.setStyleSheet("QTableWidget { background: #121621; color: #f3f5ff; gridline-color: #30364a; } QHeaderView::section { background: #23283a; color: #f3f5ff; padding: 8px; border: 1px solid #30364a; }")
+        for row, model in enumerate(reversed(profile.singing_models)):
+            seconds = sum(float(item.get("duration_seconds", 0)) for item in model.training_lineage)
+            values = [model.id[:12], format_timestamp(model.created_at), f"{seconds:.1f} 秒", model.training_dataset_sha256[:12], model.trust_status, "是" if model.id == profile.active_singing_model_id else ""]
+            for column, value in enumerate(values): table.setItem(row, column, QTableWidgetItem(value))
+            table.item(row, 0).setData(Qt.UserRole, model.id)
+        root.addWidget(table); actions = QHBoxLayout(); activate = QPushButton("设为当前"); remove = QPushButton("删除非当前版本"); close = QPushButton("关闭"); actions.addWidget(activate); actions.addWidget(remove); actions.addStretch(); actions.addWidget(close); root.addLayout(actions)
+        def selected_model():
+            row = table.currentRow(); return next((item for item in profile.singing_models if row >= 0 and item.id == table.item(row, 0).data(Qt.UserRole)), None)
+        def set_active():
+            model = selected_model()
+            if not model: return
+            if model.trust_status != "verified": QMessageBox.warning(dialog, "VoiceStudio", "只有已验证模型可以设为当前版本"); return
+            profile.active_singing_model_id = model.id; self.store.save_profile(self.project, profile); dialog.accept()
+        def delete_version():
+            model = selected_model()
+            if not model or model.id == profile.active_singing_model_id: QMessageBox.warning(dialog, "VoiceStudio", "当前版本不能删除"); return
+            profile.singing_models = [item for item in profile.singing_models if item.id != model.id]; self.store.save_profile(self.project, profile); dialog.accept()
+        activate.clicked.connect(set_active); remove.clicked.connect(delete_version); close.clicked.connect(dialog.reject); dialog.exec(); self._refresh_singing_card()
+
+    def _singing_event(self, request_id: str, event: str, payload: dict) -> None:
+        if request_id != getattr(self, "singing_request", ""): return
+        if event == "progress":
+            progress = float(payload.get("progress", 0)); self.singing_progress.setValue(round(progress * 100 if progress <= 1 else progress)); self.singing_status.setText(str(payload.get("message") or "训练中")); self.singing_detail.setText(f"歌唱模型训练阶段：{payload.get('stage', '进行中')} · {payload.get('step', '8')} 阶段")
+        elif event == "result":
+            self.singing_request = ""; self.singing_train_button.setEnabled(True); self.singing_cancel_button.hide(); self.singing_cancel_button.setEnabled(True); self.singing_status.setText("就绪"); self.singing_progress.setValue(100); self.singing_detail.setText("歌唱模型已训练并通过验证，可用于 AI 翻唱。")
+            self._refresh_singing_profiles()
+        elif event == "error":
+            self.singing_request = ""; self.singing_train_button.setEnabled(True); self.singing_cancel_button.hide(); self.singing_cancel_button.setEnabled(True); self.singing_progress.setValue(0); self.singing_status.setText("已取消" if payload.get("status") == "cancelled" else "训练失败"); self.singing_detail.setText(str(payload.get("message") or "训练失败，请重试。"))
 
     def _files(self) -> None:
         values, _ = QFileDialog.getOpenFileNames(self, "批量选择声音素材", str(Path.cwd()), "音频 (*.wav *.flac *.mp3 *.m4a *.aac *.ogg)")
@@ -245,7 +339,7 @@ class OneClickTrainingPage(QWidget):
                 asset = SourceAsset(profile.id, probe.path, str(copied), probe.sha256, duration_seconds=probe.duration_seconds, sample_rate=probe.sample_rate, channels=probe.channels, codec=probe.codec, quality_flags=list(probe.quality_flags), enabled=True)
                 assets.append(asset); profile.source_asset_ids.append(asset.id)
             if assets: self.store.save_source_assets(self.project, assets)
-            self.store.save_profile(self.project, profile); self._profiles_changed()
+            self.store.save_profile(self.project, profile); self._profiles_changed(); self._refresh_singing_profiles()
             selected = [item.id for item in self.store.list_source_assets(self.project, profile.id) if item.enabled and not item.duplicate_of]
             self.workflow = self.controller.start(profile, selected, self.smart.isChecked())
         except Exception as exc: show_error(self, str(exc))
@@ -254,7 +348,7 @@ class OneClickTrainingPage(QWidget):
         if self.workflow and workflow.id != self.workflow.id: return
         changed_workflow = not self.workflow or workflow.id != self.workflow.id; self.workflow = workflow
         if changed_workflow: self._load_step_results(workflow)
-        self.progress.setValue(round(workflow.progress * 100)); self.status.setText(workflow.waiting_reason or workflow.error or workflow.message); self.details.appendPlainText(f"{workflow.stage.value}: {workflow.message or workflow.error}"); self.cancel.setVisible(workflow.status == WorkflowStatus.RUNNING)
+        self.progress.setValue(round(workflow.progress * 100)); self.status.setText(workflow.waiting_reason or workflow.error or workflow.message); self.details.appendPlainText(f"{workflow.stage.value}: {workflow.message or workflow.error}"); self.cancel.setVisible(workflow.status == WorkflowStatus.RUNNING); self._refresh_singing_profiles()
         stage_index = {WorkflowStage.IMPORTING: 0, WorkflowStage.PREPROCESSING: 1, WorkflowStage.REVIEW_REQUIRED: 3, WorkflowStage.FREEZING: 4, WorkflowStage.FEATURE_PREPARING: 4, WorkflowStage.TRAINING: 4, WorkflowStage.VERIFYING: 5, WorkflowStage.SAVED: 6}.get(workflow.stage, 0)
         if workflow.stage == WorkflowStage.TRAINING: self._set_step_result(4, "正在训练，完成后会自动验证")
         elif workflow.stage == WorkflowStage.VERIFYING: self._set_step_result(4, "模型训练完成"); self._set_step_result(5, "正在生成固定台词试听")
@@ -310,7 +404,7 @@ class OneClickTrainingPage(QWidget):
                 except (OSError, ValueError): pass
     def reset_for_profile(self, profile_id: str = "") -> None:
         profile = next((item for item in self.store.list_profiles(self.project) if item.id == profile_id), None)
-        self.review_card.release_resources(); self.workflow = None; self.draft = None; self.probes = []; self._step_results = {}; self.timeline.update_state(0, {}); self.review.setVisible(False); self.progress.setValue(0); self.name.setText(profile.name if profile else "我的声音"); self.consent.setChecked(bool(profile and profile.consent_confirmed)); self.primary.setText("导入素材"); self.primary.setEnabled(True)
+        self.review_card.release_resources(); self.workflow = None; self.draft = None; self.probes = []; self._step_results = {}; self.timeline.update_state(0, {}); self.review.setVisible(False); self.progress.setValue(0); self.name.setText(profile.name if profile else "我的声音"); self.consent.setChecked(bool(profile and profile.consent_confirmed)); self.primary.setText("导入素材"); self.primary.setEnabled(True); self._refresh_singing_profiles()
     def _profiles_changed(self) -> None: self.profiles_changed.emit()
     def _step_key(self, workflow: TrainingWorkflow | None = None) -> str:
         current = workflow or self.workflow; return f"ui.workflow_step_results.{current.id}" if current else ""
@@ -529,7 +623,7 @@ class SimpleSettingsPage(QWidget):
     def __init__(self, paths: AppPaths, store: StudioStore, project: Path, client: WorkerClient):
         super().__init__(); self.paths, self.store, self.project, self.client = paths, store, project, client; self.health_request = ""; self.raw = {}; root = QVBoxLayout(self); title = QLabel("设置"); title.setObjectName("pageTitle"); root.addWidget(title); self.health_card = QFrame(); self.health_card.setObjectName("healthCard"); health_layout = QHBoxLayout(self.health_card); text = QVBoxLayout(); top = QHBoxLayout(); self.health_title = QLabel("本地引擎"); self.health_title.setObjectName("cardTitle"); self.health_badge = QLabel("正在检测"); self.health_badge.setObjectName("statusChip"); top.addWidget(self.health_title); top.addWidget(self.health_badge); top.addStretch(); text.addLayout(top); self.health_detail = QLabel("正在检查显卡、CUDA、模型和 FFmpeg…"); self.health_detail.setObjectName("hint"); self.health_detail.setWordWrap(True); text.addWidget(self.health_detail); self.health_specs = QLabel(""); self.health_specs.setWordWrap(True); text.addWidget(self.health_specs); health_layout.addLayout(text, 1); actions = QVBoxLayout(); detect = QPushButton("重新检测"); detect.clicked.connect(self.check_health); repair = QPushButton("修复本地引擎"); repair.setObjectName("primaryButton"); repair.clicked.connect(self._repair); actions.addWidget(detect); actions.addWidget(repair); actions.addStretch(); health_layout.addLayout(actions); root.addWidget(self.health_card)
         common = QGroupBox("普通设置"); form = QFormLayout(common); self.output = QLineEdit(str(store.get_setting("default_output_dir", str(project / "exports")))); browse = QPushButton("选择…"); browse.clicked.connect(self._browse); row = QHBoxLayout(); row.addWidget(self.output); row.addWidget(browse); self.smart = QCheckBox("默认开启智能优化"); self.smart.setChecked(bool(store.get_setting("smart_optimization", True))); self.smart.toggled.connect(lambda value: store.set_setting("smart_optimization", value)); disk = shutil.disk_usage(paths.data_root); self.disk = QLabel(f"可用 {disk.free / 1024**3:.1f} GB / 共 {disk.total / 1024**3:.1f} GB"); cache = QPushButton("清理缓存"); cache.clicked.connect(self._clean_cache); form.addRow("默认输出目录", row); form.addRow("声音处理", self.smart); form.addRow("磁盘空间", self.disk); form.addRow("缓存", cache); root.addWidget(common)
-        singing = QGroupBox("歌唱引擎状态"); singing_form = QFormLayout(singing); self.rvc_status = QLabel("正在检测"); self.rmvpe_status = QLabel("正在检测"); self.gpu_status = QLabel("正在检测"); singing_form.addRow("RVC v2", self.rvc_status); singing_form.addRow("RMVPE", self.rmvpe_status); singing_form.addRow("GPU", self.gpu_status); root.addWidget(singing)
+        singing = QGroupBox("歌唱转换引擎"); singing_form = QFormLayout(singing); self.rvc_status = QLabel("正在检测"); self.rmvpe_status = QLabel("正在检测"); self.hubert_status = QLabel("正在检测"); self.singing_runtime = QLabel("正在检测"); self.gpu_status = QLabel("正在检测"); singing_form.addRow("RVC v2", self.rvc_status); singing_form.addRow("RMVPE", self.rmvpe_status); singing_form.addRow("HuBERT", self.hubert_status); singing_form.addRow("运行环境", self.singing_runtime); singing_form.addRow("GPU", self.gpu_status); root.addWidget(singing)
         advanced = QGroupBox("高级 / 原始诊断"); advanced.setCheckable(True); advanced.setChecked(False); advanced_layout = QFormLayout(advanced); advanced_layout.addRow("私有 Python", QLabel(str(paths.private_python))); advanced_layout.addRow("模型目录", QLabel(str(paths.models_root))); self.report = QPlainTextEdit(); self.report.setReadOnly(True); advanced_layout.addRow(self.report); copy = QPushButton("复制诊断"); copy.clicked.connect(lambda: QApplication.clipboard().setText(self.report.toPlainText())); advanced_layout.addRow(copy); fold_group(advanced); root.addWidget(advanced); root.addStretch(); client.event.connect(self._event); self.check_health()
     def check_health(self) -> None:
         self.health_badge.setText("正在检测"); self.health_badge.setObjectName("statusChip")
@@ -543,6 +637,8 @@ class SimpleSettingsPage(QWidget):
         gpu = str(payload.get("gpu_name") or "未检测到可用 GPU"); cuda = str(payload.get("cuda_version") or "-"); acceleration = "GPU 加速已启用" if payload.get("tensor_test_passed") else "GPU 加速未就绪"; models = "模型完整" if payload.get("models_ready") else "模型不完整"
         self.rvc_status.setText("已就绪" if payload.get("rvc_ready") else "未安装 / 未就绪")
         self.rmvpe_status.setText("已就绪" if payload.get("rmvpe_ready") else "未安装 / 未就绪")
+        self.hubert_status.setText("已验证" if payload.get("hubert_ready") else "未安装 / 未就绪")
+        self.singing_runtime.setText(f"Python 3.11 / Torch {payload.get('rvc_torch_version') or '-'}")
         self.gpu_status.setText(gpu + (" · CUDA 可用" if payload.get("tensor_test_passed") else " · 不可用"))
         integrity = "完整性已验证" if payload.get("runtime_integrity") else "完整性需修复"
         issue = str(payload.get("message") or "") or "；".join(payload.get("runtime_integrity_errors") or []) or "引擎或显卡检测未通过"

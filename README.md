@@ -6,7 +6,8 @@
 
 - PySide6 原生中文工作台，包含 AI 翻唱、文字生成、我的声音、训练声音、设置与全局任务中心。
 - AI 翻唱工作台已实现歌曲导入、项目内不可变源文件副本、SHA-256 校验、流式波形、LRC 歌词、歌曲权利声明、UVR5 人声/伴奏分离、五轨时间线、单轨试听、Mute/Solo、同步 Seek、取消、缓存与重开恢复。
-- Singing Model 能力层已接入独立锁定的 RVC v2/RMVPE 运行时协议：授权 VoiceProfile 可训练并验证歌唱模型，已分离 Vocal 可生成带 `ai_generated` 标识的 AI Vocal 资产，模型、索引、输入与输出均记录 SHA-256 并支持缓存和取消。
+- Singing Model 产品链已接入独立锁定的 RVC v2/RMVPE/HuBERT 运行时：正式“一键训练”页面只接受当前声音的 SourceAsset ID，由 Worker 在项目内构建不可变训练快照；RVC 模型经受限加载、Index 校验和授权短音频真实推理验证后才可启用。
+- 正式 AI 翻唱页面可从已分离 Vocal 生成带 `ai_generated` 标识的 AI Vocal，支持真实波形、Seek、原唱/AI 人声 A/B 单轨试听、Pitch、缓存、取消与重开恢复。
 - 导入音频和麦克风录音统一保存为 `SourceAsset`；SHA-256 去重、解码、声道、响度、削波和长静音检查，原始文件永不覆盖。
 - 声音配置可在尚无参考转写时保存；状态、素材、零样本参考、数据集快照及 GPT/SoVITS 检查点持久化，并同步刷新三个页面。
 - 中文/英文混合长文本安全分段、可恢复任务记录、WAV 分段和 WAV/320 kbps MP3 合并输出。
@@ -16,7 +17,7 @@
 - 训练结果保存为 `ModelVersion`。候选模型通过真实加载及固定中文/中英混合 WAV 验证后自动启用，旧活动版本始终保留并可回退。
 - 60 秒训练门槛只统计“已人工确认、文本非空、纳入训练且无质量问题”的切片，不统计原文件总时长。
 - 真实临时试听调用 GPT-SoVITS 并用 QMediaPlayer 自动播放，只写入 `%LOCALAPPDATA%\LocalVoiceStudio\cache\preview` 的 WAV，不生成 MP3。
-- stdin/stdout JSON Lines GPU 工作进程；`health`、`load_profile`、`synthesize`、`prepare_dataset`、`train`、`separate_song`、`cancel`、`shutdown` 命令。
+- stdin/stdout JSON Lines 单 GPU 工作进程；`health`、`load_profile`、`synthesize`、`prepare_dataset`、`train`、`separate_song`、`train_singing_model`、`convert_vocal`、`cancel`、`shutdown` 命令。
 - 固定 GPT-SoVITS 提交 `d523079fc05d9a8028d6085bffe4a2757c32abb6` 与 V2ProPlus 推理接口。
 - 私有 Python 3.11、PyTorch 2.7.1+cu128、FFmpeg 和模型的一键安装/修复，不修改系统 PATH。
 - SQLite 任务/设置索引；可迁移 `project.json` 和 `raw/processed/datasets/checkpoints/exports` 项目结构。
@@ -52,10 +53,11 @@ $env:PYTHONPATH = "src"
 1. 在“AI 翻唱”导入本地 WAV、MP3 或 FLAC；程序复制源歌曲到 `covers/<cover_id>/source/`，原文件永不修改。
 2. 可载入同名 LRC 或手动选择 LRC。波形按 FFmpeg 流式解码，最多保存 6000 个峰值。
 3. 点击“分离人声 / 伴奏”，确认歌曲处理与使用权利声明后选择 UVR5。普通分离 stem 标记为 `separated`，不是 AI 翻唱成品。
-4. 完成后可在原曲、原唱人声、伴奏三轨之间独立试听，使用 Mute/Solo 并同步 Seek；AI 人声和最终混音保持“未就绪”。
-5. manifest、stem、歌词和波形均保存在当前项目，重开后自动恢复。源文件、模型和输出哈希一致时直接复用分离缓存。
+4. 完成后选择已授权且具备“已验证”歌唱模型的声音，设置 Pitch 并点击“生成 AI 人声”。生成结果登记为项目 `CoverAsset`，重开后自动恢复真实波形。
+5. 原曲、原唱人声、伴奏和 AI 人声支持单轨切换试听、Mute/Solo 与同步 Seek；最终混音保持“未就绪”。
+6. manifest、stem、歌词和波形均保存在当前项目。源文件、模型、Index、Pitch 和输出哈希一致时直接复用缓存。
 
-当前尚未实现：最终自动混音、RoFormer、自动歌词、逐字歌词与 AI 翻唱成品导出。RVC 训练/推理仅在独立运行时及其必需模型资产完成安装、校验后可用；未就绪时不会生成假文件。
+当前尚未实现：最终 AI Cover 混音、MP3 成品导出、AutoTune、RoFormer、和声分离、自动歌词、逐字歌词、云端服务。RVC 训练/推理仅在独立运行时及其必需模型资产完成安装、校验后可用；未就绪时不会生成假文件。
 
 ### 声音训练与文字生成
 

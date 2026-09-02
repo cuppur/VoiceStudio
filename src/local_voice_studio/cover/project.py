@@ -11,6 +11,9 @@ from uuid import uuid4
 
 from ..paths import ensure_within, validate_id, validate_sha256
 
+RIGHTS_ATTESTATION_TEXT = "我确认自己拥有或已经获得处理、使用该音频所需的权利，并理解公开传播或商业发行可能需要额外取得歌曲、录音等相关授权。"
+RIGHTS_ATTESTATION_TEXT_HASH = hashlib.sha256(RIGHTS_ATTESTATION_TEXT.encode("utf-8")).hexdigest()
+
 
 class CoverProjectError(ValueError):
     """Invalid or unsafe cover-project data."""
@@ -118,6 +121,7 @@ class CoverProject:
     waveform_path: str = ""
     waveform_paths: dict[str, str] = field(default_factory=dict)
     rights_attestation_version: int = 1
+    rights_attestation_text_hash: str = ""
     rights_confirmed: bool = False
     rights_confirmed_at: str = ""
     content_origin: str = "original"
@@ -138,6 +142,13 @@ class CoverProject:
         self.content_origin = content_origin(self.content_origin)
         if self.rights_attestation_version < 1:
             raise CoverProjectError("rights_attestation_version 必须为正整数")
+        if self.rights_attestation_text_hash:
+            validate_sha256(self.rights_attestation_text_hash, field="rights_attestation_text_hash")
+        if self.rights_confirmed and (
+            self.rights_attestation_version != 1
+            or self.rights_attestation_text_hash != RIGHTS_ATTESTATION_TEXT_HASH
+        ):
+            raise CoverProjectError("歌曲权利声明版本或文本哈希不匹配")
         normalized_assets: list[CoverAsset] = []
         for asset in self.assets:
             normalized_assets.append(asset if isinstance(asset, CoverAsset) else CoverAsset.from_dict(asset))
@@ -260,6 +271,7 @@ class CoverProject:
             "source_audio": self.source_relative_path,
             "source_audio_sha256": self.source_sha256,
             "rights_attestation_version": self.rights_attestation_version,
+            "rights_attestation_text_hash": self.rights_attestation_text_hash,
             "rights_confirmed": self.rights_confirmed,
             "rights_confirmed_at": self.rights_confirmed_at,
             "content_origin": self.content_origin,
@@ -356,13 +368,16 @@ class CoverProject:
         self.waveform_paths[str(track)] = relative
         self.save()
 
-    def attest_rights(self, confirmed: bool = True, *, version: int | None = None, confirmed_at: str | None = None) -> None:
+    def attest_rights(self, confirmed: bool = True, *, version: int | None = None, confirmed_at: str | None = None, text_hash: str = "") -> None:
         if version is not None:
             if int(version) < 1:
                 raise CoverProjectError("rights_attestation_version 必须为正整数")
             self.rights_attestation_version = int(version)
         self.rights_confirmed = bool(confirmed)
         self.rights_confirmed_at = (confirmed_at or _now()) if self.rights_confirmed else ""
+        if self.rights_confirmed and text_hash and text_hash != RIGHTS_ATTESTATION_TEXT_HASH:
+            raise CoverProjectError("歌曲权利声明文本哈希不匹配")
+        self.rights_attestation_text_hash = RIGHTS_ATTESTATION_TEXT_HASH if self.rights_confirmed else ""
         self.save()
 
     def register_output(self, path: Path, name: str | None = None) -> str:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import shutil
 from pathlib import Path
 
@@ -23,7 +24,11 @@ class _LoadThread(QThread):
         super().__init__(parent); self.index, self.audio, self.lrc, self.paths, self.cache_dir = index, Path(audio), lrc, paths, cache_dir
     def run(self):
         try:
+            if self.isInterruptionRequested():
+                raise InterruptedError("音频读取已取消")
             value = SongSession.load(self.audio, lrc_path=self.lrc, paths=self.paths, cache_dir=self.cache_dir, cancel=self.isInterruptionRequested)
+            if self.isInterruptionRequested():
+                raise InterruptedError("音频读取已取消")
             self.loaded.emit(self.index, value)
         except Exception as exc: self.failed.emit(self.index, str(exc))
 
@@ -67,9 +72,10 @@ class CoverPage(QWidget):
         self.progress = TaskProgress(); self.progress.hide(); left.addWidget(self.progress)
         actions = QHBoxLayout(); self.separate_button = QPushButton("分离人声 / 伴奏"); self.separate_button.clicked.connect(self.separate_song); actions.addWidget(self.separate_button)
         self.cancel_button = QPushButton("取消分离"); self.cancel_button.clicked.connect(self.cancel_separation); self.cancel_button.hide(); actions.addWidget(self.cancel_button); actions.addStretch()
-        self.cover_button = QPushButton("生成 AI 人声"); self.cover_button.setEnabled(False); self.cover_button.clicked.connect(self.generate_ai_vocal); actions.addWidget(self.cover_button); left.addLayout(actions)
+        self.cover_button = QPushButton("生成 AI 人声"); self.cover_button.setEnabled(False); self.cover_button.clicked.connect(self.generate_ai_vocal); actions.addWidget(self.cover_button)
+        self.cancel_ai_button = QPushButton("取消 AI 生成"); self.cancel_ai_button.clicked.connect(self.cancel_ai_vocal); self.cancel_ai_button.hide(); actions.addWidget(self.cancel_ai_button); left.addLayout(actions)
         panel = QFrame(); panel.setObjectName("coverSettings"); panel.setFixedWidth(270); form = QFormLayout(panel); form.addRow(QLabel("翻唱设置"))
-        self.profile_combo = VoiceSelector(); self.profile_combo.voice_selected.connect(self._profile_selected); form.addRow("目标声音", self.profile_combo)
+        self.profile_combo = VoiceSelector(project_root=self.project); self.profile_combo.voice_selected.connect(self._profile_selected); form.addRow("目标声音", self.profile_combo)
         self.pitch = QSpinBox(); self.pitch.setRange(-12, 12); self.pitch.setSuffix(" 半音"); form.addRow("音调", self.pitch)
         self.rights_state = QLabel("歌曲权利：未确认"); self.rights_state.setWordWrap(True); form.addRow(self.rights_state)
         self.uvr_status = QLabel(); self.uvr_status.setObjectName("muted"); self.uvr_status.setWordWrap(True); form.addRow("伴奏分离", self.uvr_status)
@@ -81,7 +87,7 @@ class CoverPage(QWidget):
 
     def set_song(self, path):
         try:
-            self.cover_project = CoverProject.create(self.project, title=Path(path).stem); copied = self.cover_project.copy_source(Path(path)); self.track_paths = {0: str(copied)}; lrc = Path(path).with_suffix(".lrc"); destination = None
+            self.cover_project = CoverProject.create(self.project, title=Path(path).stem); self.rights_state.setText("歌曲权利：未确认"); copied = self.cover_project.copy_source(Path(path)); self.track_paths = {0: str(copied)}; lrc = Path(path).with_suffix(".lrc"); destination = None
             if lrc.is_file(): destination = self.cover_project.root / "lyrics" / "lyrics.lrc"; shutil.copy2(lrc, destination); self.cover_project.set_lyrics(destination)
             self._reset_tracks(); self._load_track(0, copied, destination)
         except Exception as exc: self.song_meta.setText("导入失败：" + str(exc))
@@ -99,6 +105,7 @@ class CoverPage(QWidget):
 
     def _loaded(self, index, session):
         self.sessions[index] = session; self.track_paths[index] = session.audio_path; duration = round(session.metadata.duration_seconds * 1000); self.stems[index].set_waveform(session.peaks, duration); self.stems[index].set_status(TrackStatus.READY)
+        if index == 3: self.stems[index].name_label.setText("AI 人声  AI生成")
         if index == 0:
             self.song_title.setText(self.cover_project.title if self.cover_project else Path(session.audio_path).stem); m = session.metadata; self.song_meta.setText(f"{Path(session.audio_path).suffix.upper().lstrip('.')} · {m.duration_seconds:.1f}s · {m.sample_rate} Hz · {m.channels}ch")
             self.lyrics.set_lyrics(session.lyrics); self.lyric_status.setText("已载入 LRC" if session.lyrics else "未载入")
@@ -118,7 +125,7 @@ class CoverPage(QWidget):
             destination = self.cover_project.root / "lyrics" / "lyrics.lrc"; shutil.copy2(path, destination); self.cover_project.set_lyrics(destination); self.lyrics.set_lyrics(parse_lrc(destination.read_text(encoding="utf-8-sig", errors="replace"))); self.lyric_status.setText("已手动载入 LRC")
 
     def refresh_profiles(self):
-        try: self.profile_combo.set_profiles(self.store.list_profiles(self.project))
+        try: self.profile_combo.project_root = self.project; self.profile_combo.set_profiles(self.store.list_profiles(self.project))
         except (AttributeError, OSError, TypeError): self.profile_combo.set_profiles([])
         self._update_cover_button()
 
@@ -131,21 +138,24 @@ class CoverPage(QWidget):
         except (AttributeError, OSError, TypeError): return None
 
     def _update_cover_button(self):
-        profile = self._selected_profile(); ready = bool(profile and getattr(profile, "consent_confirmed", False))
+        vocal = self.cover_project.get_asset(role="vocal") if self.cover_project else None
+        vocal_path = self.cover_project.root / vocal.relative_path if vocal else None
+        vocal_valid = bool(vocal and vocal.content_origin == "separated" and vocal_path and vocal_path.is_file() and vocal.sha256 == hashlib.sha256(vocal_path.read_bytes()).hexdigest())
+        profile = self._selected_profile(); ready = bool(self.cover_project and self.cover_project.rights_confirmed and vocal_valid and profile and getattr(profile, "consent_confirmed", False) and not getattr(profile, "archived", False) and self.worker and not self._separation_request and not self._ai_request)
         if profile and hasattr(profile, "singing_status"):
-            try: ready = ready and profile.singing_status() == "ready"
-            except TypeError: ready = ready and profile.singing_status(None) == "ready"
-        self.cover_button.setEnabled(bool(self.cover_project and getattr(self.cover_project, "vocal_path", "") and ready and not self._separation_request))
+            try: ready = ready and profile.singing_status(self.project) == "ready"
+            except TypeError: ready = ready and profile.singing_status() == "ready"
+        self.cover_button.setEnabled(ready)
 
     def generate_ai_vocal(self):
         profile = self._selected_profile()
         if not self.cover_project or not profile: self.song_meta.setText("请选择已授权且已验证歌唱模型的声音"); return
-        try: status = profile.singing_status()
-        except TypeError: status = profile.singing_status(None)
+        try: status = profile.singing_status(self.project)
+        except TypeError: status = profile.singing_status()
         if status != "ready": self.song_meta.setText("目标声音的歌唱模型尚未就绪或未验证"); return
         if not self.worker: self.song_meta.setText("本地 Worker 未连接"); return
-        payload = {"project_path": str(self.project), "cover_id": self.cover_project.id, "source_relative_path": self.cover_project.vocal_path, "source_sha256": self.cover_project.source_sha256, "profile_id": profile.id, "singing_model_id": profile.active_singing_model_id, "content_origin": "ai_generated"}
-        self.cover_button.setText("AI 人声生成中…"); self.cover_button.setEnabled(False); self.song_meta.setText("正在生成 AI 人声")
+        payload = {"project_path": str(self.project), "cover_id": self.cover_project.id, "profile_id": profile.id, "singing_model_id": profile.active_singing_model_id, "pitch_shift": self.pitch.value()}
+        self.cover_button.setText("AI 人声生成中…"); self.cover_button.setEnabled(False); self.cancel_ai_button.setEnabled(True); self.cancel_ai_button.show(); self.song_meta.setText("正在生成 AI 人声")
         try: self._ai_request = self.worker.send("convert_vocal", payload)
         except Exception as exc: self._ai_failed(str(exc))
 
@@ -153,7 +163,7 @@ class CoverPage(QWidget):
         self.runtime_status = UVR5RuntimeStatus.detect(self.paths); self.uvr_status.setText("UVR5 已就绪" if self.runtime_status.ready else ("UVR5 文件损坏" if self.runtime_status.status == "corrupt" else ("UVR5 Hash 不匹配" if self.runtime_status.status == "hash_mismatch" else "UVR5 未安装"))); self.separate_button.setEnabled(self.runtime_status.ready)
 
     def _confirm_rights(self):
-        if self.cover_project and self.cover_project.rights_confirmed: return True
+        if self.cover_project and self.cover_project.rights_confirmed and self.cover_project.rights_attestation_text_hash: return True
         answer = QMessageBox.question(self, "歌曲权利确认", RIGHTS_TEXT + "\n\n这只是您的权利声明，VoiceStudio 不会替您取得版权。", QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
         if answer != QMessageBox.Yes: return False
         self.cover_project.attest_rights(True, version=1); self.rights_state.setText("歌曲权利：已确认"); return True
@@ -186,7 +196,9 @@ class CoverPage(QWidget):
         if request_id == self._ai_request:
             if event == "progress": self.song_meta.setText(str(payload.get("message", "正在生成 AI 人声")))
             elif event == "result":
-                self._ai_request = ""; self.cover_button.setText("生成 AI 人声"); self._load_track(3, Path(payload.get("ai_vocal_path") or payload["output_path"])); self.song_meta.setText("AI 人声已生成 · AI生成"); self._update_cover_button()
+                self._ai_request = ""; self.cover_button.setText("生成 AI 人声"); self.cancel_ai_button.hide(); self.cover_project = CoverProject.load(self.project, self.cover_project.id); self.rights_state.setText("歌曲权利：已确认" if self.cover_project.rights_confirmed else "歌曲权利：未确认"); ai_asset = self.cover_project.get_asset(str(payload.get("asset_id", ""))) or self.cover_project.get_asset(role="ai_vocal"); ai_path = self.cover_project.root / ai_asset.relative_path if ai_asset else None
+                if not ai_asset or not ai_path.is_file(): self._ai_failed("生成结果未登记为项目资产"); return
+                self._load_track(3, ai_path); self.song_meta.setText("AI 人声已生成 · " + ("已复用缓存" if payload.get("cache_hit") else "AI生成")); self._update_cover_button()
             elif event == "error": self._ai_failed(str(payload.get("message", "生成失败")))
             return
         if not self._separation_request or request_id != self._separation_request: return
@@ -196,13 +208,19 @@ class CoverPage(QWidget):
         elif event == "error": self._separation_failed(str(payload.get("message", "分离失败")))
 
     def _ai_failed(self, message):
-        self._ai_request = ""; self.cover_button.setText("生成 AI 人声"); self.song_meta.setText("AI 人声生成失败：" + message); self._update_cover_button()
+        self._ai_request = ""; self.cover_button.setText("生成 AI 人声"); self.cancel_ai_button.hide(); self.cancel_ai_button.setEnabled(True); self.song_meta.setText("AI 人声生成失败：" + message); self._update_cover_button()
+
+    def cancel_ai_vocal(self):
+        if self._ai_request and self.worker:
+            self.cancel_ai_button.setEnabled(False); self.song_meta.setText("正在停止 AI 人声生成…")
+            try: self.worker.send("cancel", {"target_request_id": self._ai_request})
+            except Exception as exc: self._ai_failed(str(exc))
 
     def _separation_failed(self, message):
         self._separation_request = ""; self.separate_button.setEnabled(self.runtime_status.ready); self.cancel_button.hide(); self.cancel_button.setEnabled(True); self.stems[1].set_status(TrackStatus.ERROR); self.stems[2].set_status(TrackStatus.ERROR); self.song_meta.setText(message)
 
     def _track_mix_changed(self, changed):
-        solos = [i for i, track in enumerate(self.stems[:3]) if track.solo.isChecked() and i in self.track_paths]; target = solos[0] if solos else (changed if changed in self.track_paths else self._selected_track); self._select_track(target); current = self.stems[self._selected_track]; self.audio_output.setVolume(0 if current.mute.isChecked() else current.volume.value() / 100)
+        solos = [i for i, track in enumerate(self.stems[:4]) if track.solo.isChecked() and i in self.track_paths]; target = solos[0] if solos else (changed if changed in self.track_paths else self._selected_track); self._select_track(target); current = self.stems[self._selected_track]; self.audio_output.setVolume(0 if current.mute.isChecked() else current.volume.value() / 100)
 
     def _select_track(self, index, preserve=True):
         if index not in self.track_paths: return
@@ -217,6 +235,8 @@ class CoverPage(QWidget):
         for track in self.stems: track.set_position(value)
         self.lyrics.set_position(value); self.transport.set_timeline(value, self.player.duration())
     def release_resources(self):
-        for thread in tuple(self._threads): thread.requestInterruption(); thread.wait()
+        for thread in tuple(self._threads):
+            thread.requestInterruption()
+            if not thread.wait(5000) and thread.isRunning(): thread.terminate(); thread.wait(1000)
         self.player.stop(); self.player.setSource(QUrl()); self.player.setAudioOutput(None)
     def closeEvent(self, event): self.release_resources(); super().closeEvent(event)

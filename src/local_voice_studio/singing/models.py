@@ -34,9 +34,11 @@ class SingingModelVersion:
     index_relative_path: str = ""
     index_sha256: str = ""
     training_dataset_sha256: str = ""
+    training_dataset_id: str = ""
     training_source_asset_ids: list[str] = field(default_factory=list)
+    training_lineage: list[dict[str, Any]] = field(default_factory=list)
     origin: str = "trained-local"
-    trust_status: str = "verified"
+    trust_status: str = "unverified"
     created_at: str = field(default_factory=_utc_now)
 
     def to_dict(self) -> dict[str, Any]:
@@ -47,11 +49,14 @@ class SingingModelVersion:
         value = value if isinstance(value, dict) else {}
         allowed = cls.__dataclass_fields__
         source_ids = value.get("training_source_asset_ids", [])
+        lineage = value.get("training_lineage", [])
         if not isinstance(source_ids, list):
             source_ids = list(source_ids) if source_ids else []
+        if not isinstance(lineage, list): lineage = []
         return cls(
-            **{key: item for key, item in value.items() if key in allowed and key != "training_source_asset_ids"},
+            **{key: item for key, item in value.items() if key in allowed and key not in {"training_source_asset_ids", "training_lineage"}},
             training_source_asset_ids=[str(item) for item in source_ids],
+            training_lineage=[dict(item) for item in lineage if isinstance(item, dict)],
         )
 
     @staticmethod
@@ -86,10 +91,12 @@ class SingingModelVersion:
         if checkpoint is None or not checkpoint.is_file():
             return False
         index = self._safe_path(project_root, self.index_relative_path)
-        return not self.index_relative_path or (index is not None and index.is_file())
+        return index is not None and index.is_file()
 
     def hashes_match(self, project_root: Path | None = None) -> bool:
         """Verify declared file digests (empty digests mean legacy/unpinned)."""
+        if len(self.checkpoint_sha256) != 64 or len(self.index_sha256) != 64:
+            return False
         return self._matches(project_root, self.checkpoint_relative_path, self.checkpoint_sha256) and self._matches(
             project_root, self.index_relative_path, self.index_sha256
         )

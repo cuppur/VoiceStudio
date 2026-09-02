@@ -181,6 +181,8 @@ class VoiceProfile:
         if not self.singing_models:
             return "not_ready"
         if not self.active_singing_model_id:
+            if self.singing_models[-1].trust_status == "verification_failed":
+                return "verification_failed"
             return "not_ready"
         active = next((item for item in self.singing_models if item.id == self.active_singing_model_id), None)
         if active is None:

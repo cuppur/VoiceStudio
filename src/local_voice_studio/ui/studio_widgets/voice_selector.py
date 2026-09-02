@@ -7,8 +7,11 @@ from PySide6.QtWidgets import QComboBox, QWidget
 class VoiceSelector(QComboBox):
     voice_selected = Signal(object)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, project_root=None, parent: QWidget | None = None) -> None:
+        if isinstance(project_root, QWidget) and parent is None:
+            parent, project_root = project_root, None
         super().__init__(parent)
+        self.project_root = project_root
         self.currentIndexChanged.connect(self._emit_if_allowed)
 
     def _emit_if_allowed(self, index: int) -> None:
@@ -29,15 +32,16 @@ class VoiceSelector(QComboBox):
             singing_status = ""
             if hasattr(profile, "singing_status"):
                 try:
-                    singing_status = str(profile.singing_status())
+                    singing_status = str(profile.singing_status(self.project_root))
                 except TypeError:
-                    singing_status = str(profile.singing_status(None))
-            allowed = consent_confirmed and not archived
-            capability = {"ready": "歌唱模型就绪", "training": "歌唱模型训练中", "untrusted": "歌唱模型未验证", "model_missing": "歌唱模型缺失"}.get(singing_status, "歌唱模型未生成")
-            label = f"{name} · {'可用' if allowed else ('已归档' if archived else '未授权')} · {capability}"
+                    singing_status = str(profile.singing_status())
+            allowed = consent_confirmed and not archived and singing_status in {"", "ready"}
+            capability = {"ready": "歌唱模型就绪", "training": "歌唱模型训练中", "untrusted": "歌唱模型未验证", "verification_failed": "歌唱模型验证失败", "model_missing": "歌唱模型缺失"}.get(singing_status, "歌唱模型未生成")
+            label = f"{name} · {'可用' if allowed else ('已归档' if archived else ('未授权' if not consent_confirmed else '不可用'))} · {capability}"
             self.addItem(label, identifier)
             index = self.count() - 1
             if not allowed:
                 item = self.model().item(index)
                 item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
-                item.setData("已归档声音不可用" if archived else "请先确认授权", Qt.ToolTipRole)
+                reason = "已归档声音不可用" if archived else ("请先确认授权" if not consent_confirmed else "歌唱模型尚未验证或文件不可用")
+                item.setData(reason, Qt.ToolTipRole)
