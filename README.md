@@ -8,8 +8,9 @@
 - AI 翻唱工作台已按正式 HTML 视觉基线重构，并实现歌曲导入、项目内不可变源文件副本、SHA-256 校验、流式波形、LRC 歌词、歌曲权利声明、UVR5 人声/伴奏分离、五轨时间线、实时多源试听、Mute/Solo、同步 Seek、取消、缓存与重开恢复。
 - Singing Model 产品链已接入独立锁定的 RVC v2/RMVPE/HuBERT 运行时：正式“一键训练”页面只接受当前声音的 SourceAsset ID，由 Worker 在项目内构建不可变训练快照；RVC 模型经受限加载、Index 校验和授权短音频真实推理验证后才可启用。
 - 正式 AI 翻唱页面可从已分离 Vocal 生成带 `ai_generated` 标识的 AI Vocal，支持真实波形、Seek、原唱/AI 人声 A/B 单轨试听、Pitch、缓存、取消与重开恢复。
-- Quick Mixer 支持 AI 人声、伴奏和可选原唱人声增益；最终渲染在 Worker 后台统一转换为 48 kHz 立体声，执行响度标准化、防削波限制、缓存和原子发布，并登记 `final_mix` CoverAsset。
+- Quick Mixer 支持 AI 人声、伴奏和可选原唱人声增益；最终渲染在 Worker 后台统一转换为 48 kHz 立体声，执行混音归一化、防削波限制、缓存和原子发布，并登记 `final_mix` CoverAsset。
 - 成品 Export Dialog 支持 WAV、320 kbps MP3 或同时导出，绝不静默覆盖文件；每次导出同时生成 `.voicestudio.json`，记录 AI 生成标识、歌曲权利声明、声音/模型、混音参数及输出 SHA-256。
+- Cover 工程已分为 Application Command、Domain、Preview Controller、Mix/Export Service 与基础设施适配层；旧版 CoverProject 和 Worker JSONL 接口保持兼容。
 - 导入音频和麦克风录音统一保存为 `SourceAsset`；SHA-256 去重、解码、声道、响度、削波和长静音检查，原始文件永不覆盖。
 - 声音配置可在尚无参考转写时保存；状态、素材、零样本参考、数据集快照及 GPT/SoVITS 检查点持久化，并同步刷新三个页面。
 - 中文/英文混合长文本安全分段、可恢复任务记录、WAV 分段和 WAV/320 kbps MP3 合并输出。

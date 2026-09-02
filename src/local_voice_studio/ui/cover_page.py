@@ -1,21 +1,25 @@
 from __future__ import annotations
 
 import hashlib
-import math
 import shutil
 from pathlib import Path
 
 from PySide6.QtCore import QThread, QTimer, Qt, QUrl, Signal
-from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox, QVBoxLayout, QWidget
 
 from ..cover import CoverProject
+from ..cover.application import CoverApplicationService
+from ..cover.mixing import CoverMixSettings, GainScale
+from ..cover.preview import PlaybackMode, PreviewMixPlanner, PreviewTrack, TrackRole
 from ..cover.separation import UVR5RuntimeStatus
 from .cover_session import SongSession, parse_lrc
+from .audio import PreviewAudioController
 from .studio_widgets import LyricView, QuickMixerPanel, StemTrackWidget, TaskProgress, TrackStatus, TransportWidget, VoiceSelector
 
 RIGHTS_TEXT = "我确认自己拥有或已经获得处理、使用该音频所需的权利，并理解公开传播或商业发行可能需要额外取得歌曲、录音等相关授权。"
 TRACK_NAMES = ("原曲", "原唱人声", "伴奏", "AI 人声", "最终混音")
+TRACK_ROLES = (TrackRole.ORIGINAL, TrackRole.VOCAL, TrackRole.INSTRUMENTAL, TrackRole.AI_VOCAL, TrackRole.FINAL_MIX)
 STAGE_INDEX = {"validating": 0, "preparing_model": 1, "separating": 2, "generating_waveforms": 3, "saving_project": 4}
 
 
@@ -82,14 +86,15 @@ class CoverPage(QWidget):
     export_requested = Signal()
     def __init__(self, paths, store, project, worker=None, parent=None):
         super().__init__(parent); self.setObjectName("coverPage"); self.paths, self.store, self.project, self.worker = paths, store, Path(project), worker
-        self.cover_project = None; self.sessions = {}; self.track_paths = {}; self._threads = set(); self._separation_request = ""; self._ai_request = ""; self._render_request = ""; self._export_request = ""; self._last_export_payload = {}; self._selected_track = 0
-        self.audio_output = QAudioOutput(self); self.audio_output.setVolume(.75); self.player = QMediaPlayer(self); self.player.setAudioOutput(self.audio_output)
-        self.aux_players = {}; self.aux_outputs = {}
-        for index in (1, 2):
-            output = QAudioOutput(self); player = QMediaPlayer(self); player.setAudioOutput(output); self.aux_outputs[index] = output; self.aux_players[index] = player
+        self.cover_project = None; self.sessions = {}; self.track_paths = {}; self._threads = set(); self._separation_request = ""; self._ai_request = ""; self._render_request = ""; self._export_request = ""; self._last_export_payload = {}; self._selected_track = 0; self._playback_mode = PlaybackMode.MIX_PREVIEW
+        self.cover_service = CoverApplicationService(self.project, paths=self.paths, store=self.store)
+        self.preview_controller = PreviewAudioController.create_qt(self, drift_tolerance_ms=50)
         self.sync_timer = QTimer(self); self.sync_timer.setInterval(750); self.sync_timer.timeout.connect(self._resync_preview)
         self._build(); self.refresh_profiles(); self.refresh_runtime_status(); self.restore_cover()
-        self.player.positionChanged.connect(self._position); self.player.durationChanged.connect(lambda v: self.transport.set_timeline(self.player.position(), v)); self.player.playbackStateChanged.connect(lambda s: self.transport.set_playing(s == QMediaPlayer.PlayingState))
+        for role, channel in self.preview_controller.channels.items():
+            channel.player.positionChanged.connect(lambda value, r=role: self._on_player_position(r, value))
+            channel.player.durationChanged.connect(lambda _value: self.transport.set_timeline(self._position_ms(), self._timeline_duration()))
+            channel.player.playbackStateChanged.connect(lambda state, r=role: self._on_playback_state(r, state))
 
     def _build(self):
         root = QVBoxLayout(self); root.setContentsMargins(22, 18, 22, 14); root.setSpacing(12)
@@ -110,19 +115,24 @@ class CoverPage(QWidget):
             track.solo_changed.connect(lambda _v, i=index: self._track_mix_changed(i)); track.mute_changed.connect(lambda _v, i=index: self._track_mix_changed(i)); track.volume_changed.connect(lambda _v, i=index: self._track_mix_changed(i)); self.stems.append(track); tracks_layout.addWidget(track)
         timeline_layout.addWidget(tracks, 1); left.addWidget(timeline, 1)
         lower = QHBoxLayout(); lower.setSpacing(12)
-        lyrics_card = QFrame(); lyrics_card.setObjectName("lyricsCard"); lyrics_layout = QVBoxLayout(lyrics_card); lyrics_layout.setContentsMargins(0, 0, 0, 0); lyric_header = QHBoxLayout(); lyric_header.setContentsMargins(14, 0, 10, 0); lyric_header.addWidget(_label("同步歌词", "cardTitle")); lyric_header.addStretch(); self.lyric_status = QLabel("未载入"); self.lyric_status.setObjectName("muted"); lyric_header.addWidget(self.lyric_status); self.lyric_import = QPushButton("导入 LRC"); self.lyric_import.setObjectName("miniButton"); self.lyric_import.clicked.connect(self.import_lyrics); lyric_header.addWidget(self.lyric_import); lyrics_layout.addLayout(lyric_header); self.lyrics = LyricView(); self.lyrics.seek_requested.connect(self.player.setPosition); lyrics_layout.addWidget(self.lyrics, 1); lower.addWidget(lyrics_card, 1)
-        self.mixer = QuickMixerPanel(); self.mixer.volume_changed.connect(self._mixer_volume_changed); lower.addWidget(self.mixer); left.addLayout(lower, 1)
+        lyrics_card = QFrame(); lyrics_card.setObjectName("lyricsCard"); lyrics_layout = QVBoxLayout(lyrics_card); lyrics_layout.setContentsMargins(0, 0, 0, 0); lyric_header = QHBoxLayout(); lyric_header.setContentsMargins(14, 0, 10, 0); lyric_header.addWidget(_label("同步歌词", "cardTitle")); lyric_header.addStretch(); self.lyric_status = QLabel("未载入"); self.lyric_status.setObjectName("muted"); lyric_header.addWidget(self.lyric_status); self.lyric_import = QPushButton("导入 LRC"); self.lyric_import.setObjectName("miniButton"); self.lyric_import.clicked.connect(self.import_lyrics); lyric_header.addWidget(self.lyric_import); lyrics_layout.addLayout(lyric_header); self.lyrics = LyricView(); self.lyrics.seek_requested.connect(self._seek_all); lyrics_layout.addWidget(self.lyrics, 1); lower.addWidget(lyrics_card, 1)
+        self.mixer = QuickMixerPanel(); self.mixer.volume_changed.connect(self._mixer_volume_changed)
+        # Keep the compact mixer and timeline controls on one dB/slider scale;
+        # the original vocal lane is intentionally silent by default.
+        for track_index, mixer_index in ((3, 0), (2, 1), (1, 2)):
+            self.stems[track_index].set_volume(self.mixer.sliders[mixer_index].value())
+        lower.addWidget(self.mixer); left.addLayout(lower, 1)
         center.addWidget(self._build_settings_panel()); root.addLayout(center, 1)
         self.progress = TaskProgress(); self.progress.hide(); root.addWidget(self.progress)
         actions = QHBoxLayout(); actions.setSpacing(8); self.cancel_button = QPushButton("取消分离"); self.cancel_button.clicked.connect(self.cancel_separation); self.cancel_button.hide(); actions.addWidget(self.cancel_button); self.cancel_ai_button = QPushButton("取消 AI 生成"); self.cancel_ai_button.clicked.connect(self.cancel_ai_vocal); self.cancel_ai_button.hide(); actions.addWidget(self.cancel_ai_button); self.cancel_final_button = QPushButton("取消最终处理"); self.cancel_final_button.clicked.connect(self.cancel_final_task); self.cancel_final_button.hide(); actions.addWidget(self.cancel_final_button); actions.addStretch(); root.addLayout(actions)
-        self.transport = TransportWidget(); self.transport.setObjectName("globalTransport"); self.transport.play_requested.connect(self.toggle_playback); self.transport.seek_relative_requested.connect(lambda d: self._seek_all(max(0, min(self.player.duration(), self.player.position() + d)))); self.transport.timeline.sliderMoved.connect(self._seek_all); self.transport.volume_changed.connect(self._set_master_volume); root.addWidget(self.transport)
+        self.transport = TransportWidget(); self.transport.setObjectName("globalTransport"); self.transport.play_requested.connect(self.toggle_playback); self.transport.seek_relative_requested.connect(lambda d: self._seek_all(max(0, min(self._timeline_duration(), self._position_ms() + d)))); self.transport.timeline.sliderMoved.connect(self._seek_all); self.transport.volume_changed.connect(self._set_master_volume); root.addWidget(self.transport)
 
     def _build_settings_panel(self):
         panel = QFrame(); panel.setObjectName("coverSettings"); panel.setMinimumWidth(286); panel.setMaximumWidth(340); form = QVBoxLayout(panel); form.setContentsMargins(16, 14, 16, 14); form.setSpacing(9)
         form.addWidget(_label("目标声音", "sectionLabel")); self.profile_combo = VoiceSelector(project_root=self.project); self.profile_combo.voice_selected.connect(self._profile_selected); form.addWidget(self.profile_combo)
         self.voice_capabilities = QLabel("✓ AI 翻唱    ✓ 本地处理"); self.voice_capabilities.setObjectName("capabilities"); form.addWidget(self.voice_capabilities)
         form.addWidget(_label("翻唱设置", "cardTitle")); pitch_row = QHBoxLayout(); pitch_row.addWidget(QLabel("音调")); self.pitch = QSpinBox(); self.pitch.setRange(-12, 12); self.pitch.setSuffix(" 半音"); pitch_row.addWidget(self.pitch); form.addLayout(pitch_row)
-        self.normalize_toggle = QCheckBox("响度标准化"); self.normalize_toggle.setChecked(True); self.normalize_toggle.setObjectName("settingToggle"); form.addWidget(self.normalize_toggle)
+        self.normalize_toggle = QCheckBox("混音归一化"); self.normalize_toggle.setChecked(True); self.normalize_toggle.setObjectName("settingToggle"); form.addWidget(self.normalize_toggle)
         self.limiter_toggle = QCheckBox("防削波限制器"); self.limiter_toggle.setChecked(True); self.limiter_toggle.setObjectName("settingToggle"); form.addWidget(self.limiter_toggle)
         form.addStretch(); self.rights_state = QLabel("歌曲权利：未确认"); self.rights_state.setWordWrap(True); self.rights_state.setObjectName("rightsState"); form.addWidget(self.rights_state); self.uvr_status = QLabel(); self.uvr_status.setObjectName("muted"); self.uvr_status.setWordWrap(True); form.addWidget(self.uvr_status); note = QLabel("本地处理 · 不上传音频\n普通分离音轨不是 AI 翻唱成品"); note.setObjectName("settingsNote"); note.setWordWrap(True); form.addWidget(note)
         self.cover_button = QPushButton("开始 AI 翻唱"); self.cover_button.setObjectName("primaryButton"); self.cover_button.setMinimumHeight(42); self.cover_button.setEnabled(False); self.cover_button.clicked.connect(self.generate_ai_vocal); form.addWidget(self.cover_button)
@@ -137,9 +147,16 @@ class CoverPage(QWidget):
     def request_final_render(self) -> None:
         profile = self._selected_profile()
         if not self.worker or not self.cover_project or not profile: return
-        def db(value): return "-inf" if value <= 0 else round(20 * math.log10(value / 80), 2)
-        settings = {"ai_gain_db": db(self.mixer.sliders[0].value()), "instrumental_gain_db": db(self.mixer.sliders[1].value()), "original_vocal_gain_db": db(self.mixer.sliders[2].value()), "master_gain_db": 0.0, "normalize": self.normalize_toggle.isChecked(), "limiter": self.limiter_toggle.isChecked(), "fade_in_ms": 0, "fade_out_ms": 0}
-        payload = {"project_path": str(self.project), "cover_id": self.cover_project.id, "profile_id": profile.id, "singing_model_id": profile.active_singing_model_id, "mix_settings": settings}
+        settings = CoverMixSettings(
+            ai_gain_db=GainScale.slider_to_db(self.mixer.sliders[0].value()),
+            instrumental_gain_db=GainScale.slider_to_db(self.mixer.sliders[1].value()),
+            original_vocal_gain_db=GainScale.slider_to_db(self.mixer.sliders[2].value()),
+            master_gain_db=0.0, normalize=self.normalize_toggle.isChecked(), limiter=self.limiter_toggle.isChecked(),
+        )
+        try:
+            payload = self.cover_service.create_render_command(self.cover_project.id, profile.id, settings).to_worker_payload()
+        except Exception as exc:
+            self._render_failed(str(exc)); return
         self.render_requested.emit(payload); self.render_button.setEnabled(False); self.render_button.setText("正在生成最终翻唱…"); self.cancel_final_button.show(); self.progress.show(); self.progress.set_stage(0)
         try: self._render_request = self.worker.send("render_cover", payload)
         except Exception as exc: self._render_failed(str(exc))
@@ -150,7 +167,14 @@ class CoverPage(QWidget):
         if not final: return
         dialog = ExportDialog(self.cover_project.title, self)
         if dialog.exec() != QDialog.Accepted: return
-        payload = {"project_path": str(self.project), "cover_id": self.cover_project.id, "final_asset_id": final.id, "format": dialog.format.currentData(), "file_name": dialog.file_name.text().strip(), "destination": dialog.destination.text(), "existing_policy": "reject", "publication_rights_acknowledged": True}
+        try:
+            payload = self.cover_service.create_export_command(
+                self.cover_project.id, final_asset_id=final.id, format=dialog.format.currentData(),
+                file_name=dialog.file_name.text().strip(), destination=Path(dialog.destination.text()),
+                existing_policy="reject", publication_rights_acknowledged=dialog.rights.isChecked(),
+            ).to_worker_payload()
+        except Exception as exc:
+            QMessageBox.warning(self, "无法准备导出", str(exc)); return
         self._last_export_payload = dict(payload); self.export_requested.emit(); self.export_button.setEnabled(False); self.export_button.setText("正在导出…"); self.cancel_final_button.show()
         try: self._export_request = self.worker.send("export_cover", payload)
         except Exception as exc: self._export_failed(str(exc))
@@ -228,7 +252,12 @@ class CoverPage(QWidget):
         except TypeError: status = profile.singing_status()
         if status != "ready": self.song_meta.setText("目标声音的歌唱模型尚未就绪或未验证"); return
         if not self.worker: self.song_meta.setText("本地 Worker 未连接"); return
-        payload = {"project_path": str(self.project), "cover_id": self.cover_project.id, "profile_id": profile.id, "singing_model_id": profile.active_singing_model_id, "pitch_shift": self.pitch.value()}
+        try:
+            payload = self.cover_service.create_ai_vocal_command(
+                self.cover_project.id, profile.id, pitch_shift=self.pitch.value()
+            ).to_worker_payload()
+        except Exception as exc:
+            self.song_meta.setText(str(exc)); return
         self.cover_button.setText("AI 人声生成中…"); self.cover_button.setEnabled(False); self.cancel_ai_button.setEnabled(True); self.cancel_ai_button.show(); self.song_meta.setText("正在生成 AI 人声")
         try: self._ai_request = self.worker.send("convert_vocal", payload)
         except Exception as exc: self._ai_failed(str(exc))
@@ -260,7 +289,10 @@ class CoverPage(QWidget):
         if not self.cover_project or not self.worker: self.song_meta.setText("请先导入歌曲"); return
         self.refresh_runtime_status()
         if not self.runtime_status.ready or SeparationDialog(self.runtime_status, self).exec() != QDialog.Accepted or not self._confirm_rights(): return
-        payload = {"project_path": str(self.project), "cover_id": self.cover_project.id, "source_relative_path": self.cover_project.source_relative_path, "source_sha256": self.cover_project.source_sha256, "mode": "uvr5"}
+        try:
+            payload = self.cover_service.create_separation_command(self.cover_project.id, mode="uvr5").to_worker_payload()
+        except Exception as exc:
+            self._separation_failed(str(exc)); return
         self.stems[1].set_status(TrackStatus.PROCESSING); self.stems[2].set_status(TrackStatus.PROCESSING); self.progress.show(); self.progress.set_stage(0); self.separate_button.setEnabled(False); self.cancel_button.show()
         try: self._separation_request = self.worker.send("separate_song", payload)
         except Exception as exc: self._separation_failed(str(exc))
@@ -327,53 +359,109 @@ class CoverPage(QWidget):
     def _separation_failed(self, message):
         self._separation_request = ""; self.separate_button.setEnabled(self.runtime_status.ready); self.cancel_button.hide(); self.cancel_button.setEnabled(True); self.stems[1].set_status(TrackStatus.ERROR); self.stems[2].set_status(TrackStatus.ERROR); self.song_meta.setText(message)
 
-    def _track_mix_changed(self, changed):
-        solos = [i for i, track in enumerate(self.stems[:4]) if track.solo.isChecked() and i in self.track_paths]; target = solos[0] if solos else (changed if changed in self.track_paths else self._selected_track); self._select_track(target); current = self.stems[self._selected_track]; self.audio_output.setVolume(0 if current.mute.isChecked() else current.volume.value() / 100)
+    def _track_role(self, index: int) -> TrackRole:
+        return TRACK_ROLES[max(0, min(len(TRACK_ROLES) - 1, int(index)))]
+
+    def _position_ms(self) -> int:
+        return int(self.preview_controller.master_position_ms)
+
+    def _timeline_duration(self) -> int:
+        return max((int(session.metadata.duration_seconds * 1000) for session in self.sessions.values()), default=int(getattr(self.cover_project, "duration_ms", 0) if self.cover_project else 0))
+
+    def _preview_plan(self, mode: PlaybackMode | None = None):
+        tracks = {}
+        for index, path in self.track_paths.items():
+            if index < 0 or index >= len(self.stems):
+                continue
+            role = self._track_role(index)
+            stem = self.stems[index]
+            gain_db = GainScale.slider_to_db(stem.volume.value())
+            tracks[role] = PreviewTrack(
+                role, path=str(path), duration_ms=self._timeline_duration(),
+                gain=GainScale.db_to_linear(gain_db), muted=stem.mute.isChecked(), solo=stem.solo.isChecked(),
+            )
+        selected = self._track_role(self._selected_track)
+        return PreviewMixPlanner(tracks).plan(selected, mode or self._playback_mode)
+
+    def _refresh_preview_plan(self, mode: PlaybackMode | None = None, preserve_position: bool = True) -> None:
+        was_playing = self.preview_controller.playing
+        position = self._position_ms() if preserve_position else 0
+        self.preview_controller.apply_plan(self._preview_plan(mode))
+        self.preview_controller.seek(position)
         self._apply_preview_gains()
+        if was_playing:
+            self.preview_controller.play()
+
+    def _track_mix_changed(self, changed):
+        solos = [i for i, track in enumerate(self.stems[:4]) if track.solo.isChecked() and i in self.track_paths]
+        if solos:
+            self._playback_mode = PlaybackMode.SOLO_TRACK
+            self._selected_track = solos[0]
+        else:
+            self._playback_mode = PlaybackMode.MIX_PREVIEW
+            if changed in self.track_paths:
+                self._selected_track = changed
+        self._refresh_preview_plan()
 
     def _select_track(self, index, preserve=True):
-        if index not in self.track_paths: return
-        position, playing = self.player.position(), self.player.playbackState() == QMediaPlayer.PlayingState; self._selected_track = index; self.player.setSource(QUrl.fromLocalFile(self.track_paths[index]))
-        preview = index in {1, 2, 3} and all(item in self.track_paths for item in (2, 3))
-        for aux_index, aux in self.aux_players.items():
-            if preview and aux_index in self.track_paths: aux.setSource(QUrl.fromLocalFile(self.track_paths[aux_index])); aux.setPosition(position)
-            else: aux.stop(); aux.setSource(QUrl())
-        self._apply_preview_gains()
-        if preserve: self.player.setPosition(position)
-        if playing:
-            self.player.play()
-            if preview:
-                for aux in self.aux_players.values(): aux.play()
+        if index not in self.track_paths:
+            return
+        self._selected_track = int(index)
+        self._refresh_preview_plan(preserve_position=preserve)
 
     def toggle_playback(self):
-        if self.player.playbackState() == QMediaPlayer.PlayingState:
-            self.player.pause(); [player.pause() for player in self.aux_players.values()]; self.sync_timer.stop()
-        elif self._selected_track in self.track_paths:
-            self.player.play()
-            if self._selected_track in {1, 2, 3} and all(item in self.track_paths for item in (2, 3)):
-                [player.play() for player in self.aux_players.values() if player.source().isValid()]; self.sync_timer.start()
+        if self.preview_controller.playing:
+            self.preview_controller.pause(); self.sync_timer.stop(); return
+        if self._selected_track not in self.track_paths:
+            return
+        if self._selected_track == 4:
+            self._playback_mode = PlaybackMode.FINAL_MIX
+        elif all(item in self.track_paths for item in (2, 3)) and not any(track.solo.isChecked() for track in self.stems[:4]):
+            self._playback_mode = PlaybackMode.MIX_PREVIEW
+        else:
+            self._playback_mode = PlaybackMode.SOLO_TRACK
+        self._refresh_preview_plan()
+        self.preview_controller.play()
+        if len(self.preview_controller.plan.active_tracks if self.preview_controller.plan else ()) > 1:
+            self.sync_timer.start()
+
     def _seek_all(self, value):
-        self.player.setPosition(int(value)); [player.setPosition(int(value)) for player in self.aux_players.values() if player.source().isValid()]
+        self.preview_controller.seek(int(value)); self._position(int(value))
+
     def _set_master_volume(self, value):
-        self.audio_output.setVolume(value / 100); self._apply_preview_gains(value / 100)
+        self._apply_preview_gains(value)
+
     def _apply_preview_gains(self, master=None):
-        master = self.transport.volume.value() / 100 if master is None and hasattr(self, "transport") else (master if master is not None else .8)
-        solos = {i for i, track in enumerate(self.stems[:4]) if track.solo.isChecked()}
-        for index, output in [(self._selected_track, self.audio_output), *self.aux_outputs.items()]:
-            if index < 0 or index >= len(self.stems): continue
-            track = self.stems[index]; audible = (not solos or index in solos) and not track.mute.isChecked()
-            output.setVolume(master * track.volume.value() / 100 if audible else 0)
+        slider = self.transport.volume.value() if master is None and hasattr(self, "transport") else (80 if master is None else int(round(float(master) * 100)))
+        master_linear = GainScale.db_to_linear(GainScale.slider_to_db(slider))
+        solos = {self._track_role(i) for i, track in enumerate(self.stems[:4]) if track.solo.isChecked()}
+        for index, path in self.track_paths.items():
+            role = self._track_role(index); stem = self.stems[index]
+            gain = GainScale.db_to_linear(GainScale.slider_to_db(stem.volume.value()))
+            audible = not stem.mute.isChecked() and (not solos or role in solos)
+            self.preview_controller.set_gain(role, master_linear * gain if audible else 0.0)
+
+    def _on_player_position(self, role: TrackRole, value: int) -> None:
+        if self.preview_controller.master_role in (None, role):
+            self.preview_controller.master_position_ms = int(value)
+            self._position(int(value))
+
+    def _on_playback_state(self, role: TrackRole, state) -> None:
+        if self.preview_controller.master_role in (None, role):
+            self.transport.set_playing(state == QMediaPlayer.PlayingState)
+
     def _resync_preview(self):
-        position = self.player.position()
-        for player in self.aux_players.values():
-            if player.source().isValid() and abs(player.position() - position) >= 50: player.setPosition(position)
+        self.preview_controller.resync()
+
     def _position(self, value):
         for track in self.stems: track.set_position(value)
-        self.lyrics.set_position(value); self.transport.set_timeline(value, self.player.duration())
+        self.lyrics.set_position(value); self.transport.set_timeline(value, self._timeline_duration())
+
     def release_resources(self):
         for thread in tuple(self._threads):
             thread.requestInterruption()
             if not thread.wait(5000) and thread.isRunning(): thread.terminate(); thread.wait(1000)
-        self.sync_timer.stop(); self.player.stop(); self.player.setSource(QUrl()); self.player.setAudioOutput(None)
-        for player in self.aux_players.values(): player.stop(); player.setSource(QUrl()); player.setAudioOutput(None)
+        self.sync_timer.stop(); self.preview_controller.stop()
+        for channel in self.preview_controller.channels.values():
+            channel.player.setSource(QUrl()); channel.player.setAudioOutput(None)
     def closeEvent(self, event): self.release_resources(); super().closeEvent(event)

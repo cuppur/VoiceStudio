@@ -4,6 +4,7 @@ import hashlib
 import json
 import shutil
 from dataclasses import dataclass, field
+from enum import Enum
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
 from typing import Any
@@ -25,6 +26,8 @@ def content_origin(value: str) -> str:
     Keep this contract deliberately small so separated stems cannot be
     mistaken for a future AI-generated export.
     """
+    if isinstance(value, Enum):
+        value = value.value
     normalized = str(value).strip().lower().replace(" ", "_")
     allowed = {"original", "separated", "ai_generated"}
     if normalized not in allowed:
@@ -69,6 +72,8 @@ class CoverAsset:
             validate_id(self.id, legacy=True, field="asset_id")
         except ValueError as exc:
             raise CoverProjectError(str(exc)) from exc
+        if isinstance(self.role, Enum):
+            self.role = str(self.role.value)
         if self.role not in ASSET_ROLES:
             raise CoverProjectError(f"不支持的资产角色: {self.role}")
         self.content_origin = content_origin(self.content_origin)
@@ -314,6 +319,8 @@ class CoverProject:
         return destination
 
     def set_stem(self, name: str, path: Path) -> None:
+        if isinstance(name, Enum):
+            name = str(name.value)
         relative = self._relative_owned(path)
         if name == "vocal": self.vocal_path = relative; origin = "separated"
         elif name == "instrumental": self.instrumental_path = relative; origin = "separated"
@@ -350,6 +357,8 @@ class CoverProject:
     def get_asset(self, identifier: str | None = None, *, role: str | None = None) -> CoverAsset | None:
         """Return an asset by ID, or the newest asset with the given role."""
         identifier = role if role is not None else identifier
+        if isinstance(identifier, Enum):
+            identifier = str(identifier.value)
         if identifier is None:
             return None
         exact = next((asset for asset in self.assets if asset.id == identifier), None)

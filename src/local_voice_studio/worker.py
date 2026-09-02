@@ -21,6 +21,9 @@ from .training import TrainingPipeline
 from .cover.separation import SongSeparationPipeline
 from .cover.mixing import CoverMixSettings, CoverMixer
 from .cover.exporting import CoverExporter
+from .cover.application import CoverApplicationService
+from .cover.cancellation import CancellationToken
+from .cover.errors import CoverError, error_payload as cover_error_payload
 from .singing.pipeline import SingingPipeline
 from .singing.rvc import RVCConfig, RVCEngine
 
@@ -36,6 +39,7 @@ class WorkerService:
         self.current_request_id = ""
         self._request_context: dict[str, Any] = {}
         self.cancel_event = threading.Event()
+        self.cancel_token = CancellationToken(self.cancel_event)
         self.write_lock = threading.Lock()
         self.shutdown_event = threading.Event()
         self.separation: SongSeparationPipeline | None = None
@@ -165,6 +169,7 @@ class WorkerService:
             }[message.type]
             self.current_request_id = message.id
             self._request_context = {key: message.payload[key] for key in ("workflow_id", "stage", "attempt", "overall_progress") if key in message.payload}
+            self._request_context["command"] = message.type
             self.current_thread = threading.Thread(target=self._run_guarded, args=(message.id, target, message.payload), daemon=True)
             self.current_thread.start()
 
@@ -218,7 +223,14 @@ class WorkerService:
         except Exception as exc:
             traceback.print_exc(file=sys.stderr)
             event = "cancelled" if self.cancel_event.is_set() else "failed"
-            self.emit(request_id, "error", {"message": str(exc), "exception": type(exc).__name__, "status": event})
+            error_payload = {"message": str(exc), "exception": type(exc).__name__, "status": event}
+            if isinstance(exc, CoverError):
+                error_payload.update(cover_error_payload(exc))
+            if request_id and self._request_context.get("command") in {"separate_song", "convert_vocal", "render_cover", "export_cover"}:
+                command = self._request_context["command"]
+                error_payload.setdefault("code", f"cover.{command}.failed")
+                error_payload.setdefault("recoverable", event != "cancelled")
+            self.emit(request_id, "error", error_payload)
         finally:
             if self.current_request_id == request_id:
                 self.current_request_id = ""
@@ -365,6 +377,17 @@ class WorkerService:
         if str(payload.get("mode", "uvr5")) != "uvr5":
             raise ValueError("当前阶段只支持 UVR5 分离")
         project = ensure_within(self.paths.projects_root, Path(str(payload.get("project_path", ""))))
+        # Application service resolves the project-owned source and rights
+        # gate before the infrastructure pipeline receives any paths.
+        try:
+            command = CoverApplicationService(project, paths=self.paths).prepare_separation(str(payload.get("cover_id", "")), mode="uvr5")
+        except FileNotFoundError:
+            # Keep the low-level worker contract usable for migration probes
+            # that exercise dispatch before a CoverProject manifest exists.
+            from .cover.application.commands import PrepareSeparationCommand
+            command = PrepareSeparationCommand(str(project), str(payload.get("cover_id", "")),
+                                                str(payload.get("source_relative_path", "")),
+                                                str(payload.get("source_sha256", "")), "uvr5")
         cover_id = str(payload.get("cover_id", ""))
         source_relative_path = str(payload.get("source_relative_path", ""))
         source_sha256 = str(payload.get("source_sha256", ""))
@@ -374,9 +397,9 @@ class WorkerService:
         self.separation = pipeline
         try:
             result = pipeline.separate(
-                cover_id,
-                source_relative_path,
-                source_sha256,
+                command.cover_id,
+                command.source_relative_path,
+                command.source_sha256,
                 cancel=self.cancel_event,
                 progress=lambda value, stage, message: self.emit(request_id, "progress", {"progress": value, "stage": stage, "message": message}),
             )
@@ -440,14 +463,16 @@ class WorkerService:
         raw_settings = value.get("mix_settings") or {}
         if not isinstance(raw_settings, dict):
             raise ValueError("mix_settings 必须是对象")
-        settings = CoverMixSettings(**raw_settings)
+        app = CoverApplicationService(Path(value["project_path"]), paths=self.paths)
+        command = app.prepare_render(str(value["cover_id"]), str(value.get("profile_id", "")), raw_settings)
+        settings = command.mix
         self.mixer = CoverMixer(self.paths)
         try:
             self.emit(request_id, "progress", {"progress": .05, "stage": "validating", "message": "正在验证混音素材"})
             result = self.mixer.mix(
-                Path(value["project_path"]), str(value["cover_id"]), settings,
-                profile_id=str(value.get("profile_id", "")), model_id=str(value.get("singing_model_id", "")),
-                cancel=self.cancel_event,
+                Path(command.project_id), command.cover_id, settings,
+                profile_id=command.profile_id, model_id=command.singing_model_id,
+                cancel=self.cancel_token,
             )
             self.emit(request_id, "result", {"progress": 1.0, "stage": "complete", **result})
         finally:
@@ -455,15 +480,23 @@ class WorkerService:
 
     def _export_cover(self, request_id: str, payload: dict[str, Any]) -> None:
         value = self._validated_cover_payload(payload, export=True)
+        app = CoverApplicationService(Path(value["project_path"]), paths=self.paths)
+        command = app.prepare_export(
+            str(value["cover_id"]), final_asset_id=str(value.get("final_asset_id", "")),
+            format=str(value.get("format", "wav")), file_name=str(value.get("file_name", "")),
+            destination=Path(str(value.get("destination", ""))),
+            existing_policy=str(value.get("existing_policy", "reject")),
+            publication_rights_acknowledged=bool(value.get("publication_rights_acknowledged", False)),
+        )
         self.exporter = CoverExporter(self.paths)
         try:
             self.emit(request_id, "progress", {"progress": .05, "stage": "validating", "message": "正在验证导出信息"})
             result = self.exporter.export(
-                Path(value["project_path"]), str(value["cover_id"]),
-                format=str(value.get("format", "wav")), destination=Path(str(value.get("destination", ""))),
-                file_name=str(value.get("file_name", "")), final_asset_id=str(value.get("final_asset_id", "")),
-                existing=str(value.get("existing_policy", "reject")), cancel=self.cancel_event,
-                publication_rights_ack=bool(value.get("publication_rights_acknowledged", False)),
+                Path(command.project_id), command.cover_id,
+                format=command.format, destination=command.destination,
+                file_name=command.file_name, final_asset_id=command.final_asset_id,
+                existing=command.existing_policy, cancel=self.cancel_token,
+                publication_rights_ack=command.publication_rights_acknowledged,
             )
             self.emit(request_id, "result", {"progress": 1.0, "stage": "complete", **result})
         finally:

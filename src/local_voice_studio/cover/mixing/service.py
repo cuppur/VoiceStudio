@@ -1,47 +1,24 @@
 """Project-owned, deterministic final mixing."""
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import subprocess
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from ..audio import probe_audio, sha256_file
-from ..paths import AppPaths, ensure_within, validate_id
-from .project import CoverAsset, CoverProject, RIGHTS_ATTESTATION_TEXT_HASH
+from ...audio import probe_audio, sha256_file
+from ...paths import AppPaths, ensure_within, validate_id
+from ..project import CoverAsset, CoverProject, RIGHTS_ATTESTATION_TEXT_HASH
+from .models import CoverMixSettings, MixInput
+from .cache import MixCacheKey
+from .validation import MixValidator
 
-
-@dataclass(frozen=True)
-class CoverMixSettings:
-    ai_gain_db: float = 0.0
-    instrumental_gain_db: float = 0.0
-    original_vocal_gain_db: float = float("-inf")
-    master_gain_db: float = 0.0
-    normalize: bool = True
-    limiter: bool = True
-    fade_in_ms: int = 0
-    fade_out_ms: int = 0
-    alignment_tolerance_ms: int = 250
-    version: str = "cover-mix-v1"
-
-    def __post_init__(self) -> None:
-        for name in ("ai_gain_db", "instrumental_gain_db", "original_vocal_gain_db", "master_gain_db"):
-            value = getattr(self, name)
-            if value == "-inf": object.__setattr__(self, name, float("-inf")); value = float("-inf")
-            if value != float("-inf") and not -60 <= float(value) <= 24: raise ValueError("增益必须在 -60 到 24 dB 之间")
-        if self.alignment_tolerance_ms < 0 or self.alignment_tolerance_ms > 1000: raise ValueError("对齐容差无效")
-
-    def canonical(self) -> dict[str, Any]:
-        value = asdict(self)
-        for key, item in value.items():
-            if isinstance(item, float) and item == float("-inf"): value[key] = "-inf"
-        return value
-
-    def sha256(self) -> str:
-        return hashlib.sha256(json.dumps(self.canonical(), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+def _probe_audio(*args, **kwargs):
+    # Resolve through the public package so legacy monkeypatches remain valid.
+    import sys
+    return sys.modules[__package__.rsplit(".", 1)[0] + ".mixing"].probe_audio(*args, **kwargs)
 
 
 def _cancelled(cancel: Any) -> bool:
@@ -59,7 +36,7 @@ class CoverMixer:
             else: self.process.terminate()
 
     def _ffmpeg(self) -> Path:
-        from ..runtime import EngineRuntimeResolver
+        from ...runtime import EngineRuntimeResolver
         found = EngineRuntimeResolver(self.paths).resolve_private_tool("ffmpeg")
         if not found: raise RuntimeError("找不到受信任的 FFmpeg")
         return found
@@ -67,6 +44,7 @@ class CoverMixer:
     def mix(self, project: Path, cover_id: str, settings: CoverMixSettings | None = None, *, profile_manifest: Mapping[str, Any] | None = None, profile_id: str = "", model_id: str = "", rights_confirmed: bool | None = None, consent_confirmed: bool | None = None, cancel: Any = None, output_id: str | None = None, force: bool = False) -> dict[str, Any]:
         settings = settings or CoverMixSettings()
         project = ensure_within(self.paths.projects_root, Path(project)); cover = CoverProject.load(project, cover_id)
+        MixValidator(cover).require_rights()
         if rights_confirmed is None: rights_confirmed = cover.rights_confirmed and cover.rights_attestation_text_hash == RIGHTS_ATTESTATION_TEXT_HASH
         if not rights_confirmed: raise PermissionError("混音前必须确认歌曲处理权利")
         if profile_manifest is None:
@@ -91,16 +69,20 @@ class CoverMixer:
             chosen.append(("vocal", vocal, settings.original_vocal_gain_db))
         selected = [(role, asset, gain) for role, asset, gain in chosen if gain != float("-inf")]
         inputs: list[tuple[str, CoverAsset, Path, float]] = []
+        probes: dict[Path, Any] = {}
         for role, asset, gain in selected:
             path = ensure_within(cover.root, cover.root / asset.relative_path)
             if not path.is_file() or not asset.sha256 or sha256_file(path) != asset.sha256: raise ValueError(f"输入资产缺失或 Hash 不匹配: {role}")
-            probe = probe_audio(path, cancel=cancel)
+            probe = _probe_audio(path, cancel=cancel)
             if probe.duration_seconds <= 1: raise ValueError(f"输入音频时长异常: {path.name}")
+            probes[path] = probe
             inputs.append((role, asset, path, gain))
-        input_duration = max(probe_audio(item[2]).duration_seconds for item in inputs)
-        if abs(probe_audio(inputs[0][2]).duration_seconds - probe_audio(inputs[1][2]).duration_seconds) > 1.0: raise ValueError("AI 人声与伴奏时长差异超过 1 秒")
-        key_material = {"settings": settings.canonical(), "assets": [(r, a.id, a.sha256) for r, a, _, _ in inputs]}
-        cache_key = hashlib.sha256(json.dumps(key_material, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        input_duration = max(probes[item[2]].duration_seconds for item in inputs)
+        if abs(probes[inputs[0][2]].duration_seconds - probes[inputs[1][2]].duration_seconds) > 1.0: raise ValueError("AI 人声与伴奏时长差异超过 1 秒")
+        # Cache identity is independent of provenance and includes each input
+        # hash, semantic role, gain and mixer engine version.
+        cache_inputs = [MixInput(r, a.id, path, a.sha256, gain) for r, a, path, gain in inputs]
+        cache_key = MixCacheKey.build(cache_inputs, settings, settings.version)
         cached = next((a for a in reversed(cover.assets) if a.role == "final_mix" and a.producer_version == cache_key), None)
         invalid_cached_path: Path | None = None
         if cached and not force:
@@ -133,7 +115,7 @@ class CoverMixer:
                 if cancel is not None and hasattr(cancel, "wait"): cancel.wait(.1)
             if self.process.returncode: raise RuntimeError("FFmpeg 混音失败")
             if not staging.is_file() or staging.stat().st_size < 44: raise RuntimeError("混音未生成有效 WAV")
-            rendered = probe_audio(staging, cancel=cancel)
+            rendered = _probe_audio(staging, cancel=cancel)
             if rendered.sample_rate != 48000 or rendered.channels != 2 or rendered.duration_seconds <= 1:
                 raise RuntimeError("最终混音不是有效的 48 kHz 立体声 WAV")
             staging.replace(output)

@@ -3,10 +3,12 @@ from __future__ import annotations
 import json, os, re, subprocess
 from pathlib import Path
 from typing import Any
-from ..audio import sha256_file, probe_audio
-from ..paths import AppPaths, ensure_within, validate_id
-from ..runtime import EngineRuntimeResolver
-from .project import CoverProject, RIGHTS_ATTESTATION_TEXT_HASH
+from ...audio import sha256_file, probe_audio
+from ...paths import AppPaths, ensure_within, validate_id
+from ...runtime import EngineRuntimeResolver
+from ..project import CoverProject, RIGHTS_ATTESTATION_TEXT_HASH
+from .manifest import ProvenanceManifestBuilder
+from .models import ExportFormat, ExportRequest, OverwritePolicy
 
 def _cancelled(cancel: Any) -> bool:
     return bool(cancel() if callable(cancel) else cancel and cancel.is_set())
@@ -18,8 +20,14 @@ class CoverExporter:
             if os.name == "nt": subprocess.run(["taskkill", "/PID", str(self.process.pid), "/T", "/F"], capture_output=True)
             else: self.process.terminate()
     def export(self, project: Path, cover_id: str, *, format: str = "both", output_id: str | None = None, destination: Path | None = None, file_name: str | None = None, final_asset_id: str | None = None, existing: str | None = None, cancel: Any = None, rights_confirmed: bool | None = None, publication_rights_ack: bool = False, profile_id: str = "", model_id: str = "", mix_settings: Any = None) -> dict[str, Any]:
-        if format not in {"wav", "mp3", "both"}: raise ValueError("format 必须是 wav、mp3 或 both")
-        if existing not in {"reject", "replace"}: raise ValueError("existing policy 必须显式指定 reject 或 replace")
+        try:
+            request = ExportRequest(ExportFormat(format), str(file_name or ""), Path(destination or ""), OverwritePolicy(existing), bool(publication_rights_ack))
+        except ValueError as exc:
+            raise ValueError("导出格式或覆盖策略无效") from exc
+        format = request.format.value
+        existing = request.overwrite_policy.value
+        if not request.publication_rights_acknowledged:
+            raise PermissionError("导出前必须确认公开发布权利")
         project = ensure_within(self.paths.projects_root, Path(project)); cover = CoverProject.load(project, cover_id)
         if rights_confirmed is None: rights_confirmed = cover.rights_confirmed and cover.rights_attestation_text_hash == RIGHTS_ATTESTATION_TEXT_HASH
         if not rights_confirmed or not publication_rights_ack: raise PermissionError("导出前必须确认歌曲处理与公开发布权利")
@@ -90,7 +98,17 @@ class CoverExporter:
             if sidecar_backup.exists(): sidecar_backup.replace(sidecar)
             raise
         stored_settings = source.metadata.get("settings", {}) if isinstance(source.metadata, dict) else {}
-        payload = {"schema_version": 1, "generator": "VoiceStudio", "asset_id": source.id, "cover_id": cover.id, "voice_profile_id": profile_id or source.metadata.get("profile_id", ""), "singing_model_id": model_id or source.model_id, "content_origin": "ai_generated", "ai_generated": True, "rights_confirmed": True, "publication_rights_ack": True, "rights_attestation_text_hash": cover.rights_attestation_text_hash, "inputs": source.source_asset_ids, "mix_settings": getattr(mix_settings, "canonical", lambda: mix_settings)() if mix_settings is not None else stored_settings, "outputs": [{"path": p.name, "sha256": sha256_file(p)} for p in produced]}
+        payload = ProvenanceManifestBuilder.build(
+            asset_id=source.id, cover_id=cover.id,
+            voice_profile_id=profile_id or source.metadata.get("profile_id", ""),
+            singing_model_id=model_id or source.model_id,
+            content_origin="ai_generated", ai_generated=True,
+            rights_confirmed=True, rights_attestation_text_hash=cover.rights_attestation_text_hash,
+            publication_rights_ack=True, input_asset_ids=list(source.source_asset_ids),
+            inputs=list(source.source_asset_ids),
+            mix_settings=getattr(mix_settings, "canonical", lambda: mix_settings)() if mix_settings is not None else stored_settings,
+            outputs=[{"path": p.name, "format": p.suffix.lstrip("."), "sha256": sha256_file(p)} for p in produced],
+        )
         temporary = sidecar.with_suffix(sidecar.suffix + ".tmp")
         try:
             temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"); temporary.replace(sidecar)
