@@ -12,6 +12,7 @@ from ...audio import probe_audio, sha256_file
 from ...paths import AppPaths, ensure_within, validate_id
 from ..project import CoverAsset, CoverProject, RIGHTS_ATTESTATION_TEXT_HASH
 from .models import CoverMixSettings, MixInput
+from .backend import FFmpegMixBackend
 from .cache import MixCacheKey
 from .validation import MixValidator
 
@@ -26,11 +27,14 @@ def _cancelled(cancel: Any) -> bool:
 
 
 class CoverMixer:
-    def __init__(self, paths: AppPaths | None = None):
+    def __init__(self, paths: AppPaths | None = None, *, backend: FFmpegMixBackend | None = None):
         self.paths = paths or AppPaths.default()
+        self.backend = backend
         self.process: subprocess.Popen | None = None
 
     def cancel(self) -> None:
+        if self.backend is not None:
+            self.backend.cancel()
         if self.process and self.process.poll() is None:
             if os.name == "nt": subprocess.run(["taskkill", "/PID", str(self.process.pid), "/T", "/F"], capture_output=True)
             else: self.process.terminate()
@@ -95,7 +99,9 @@ class CoverMixer:
         if output.exists():
             if invalid_cached_path == output: output.unlink()
             else: raise FileExistsError("输出资产已存在，请显式指定新的 output_id")
-        args = [str(self._ffmpeg()), "-y"]
+        ffmpeg = (Path(getattr(self.backend, "ffmpeg", "ffmpeg"))
+                  if self.backend is not None else self._ffmpeg())
+        args = [str(ffmpeg), "-y"]
         for _, _, path, _ in inputs: args += ["-i", str(path)]
         filters = []
         for i, (role, _, _, gain) in enumerate(inputs): filters.append(f"[{i}:a]aformat=sample_rates=48000:channel_layouts=stereo,volume={gain}dB[a{i}]")
@@ -109,11 +115,14 @@ class CoverMixer:
         args += ["-filter_complex", ";".join(filters), "-map", "[out]", "-c:a", "pcm_s16le", "-f", "wav", str(staging)]
         try:
             if _cancelled(cancel): raise RuntimeError("混音已取消")
-            self.process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-            while self.process.poll() is None:
-                if _cancelled(cancel): self.cancel(); raise RuntimeError("混音已取消")
-                if cancel is not None and hasattr(cancel, "wait"): cancel.wait(.1)
-            if self.process.returncode: raise RuntimeError("FFmpeg 混音失败")
+            if self.backend is not None:
+                self.backend.render(cache_inputs, settings, staging, cancel=cancel)
+            else:
+                self.process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                while self.process.poll() is None:
+                    if _cancelled(cancel): self.cancel(); raise RuntimeError("混音已取消")
+                    if cancel is not None and hasattr(cancel, "wait"): cancel.wait(.1)
+                if self.process.returncode: raise RuntimeError("FFmpeg 混音失败")
             if not staging.is_file() or staging.stat().st_size < 44: raise RuntimeError("混音未生成有效 WAV")
             rendered = _probe_audio(staging, cancel=cancel)
             if rendered.sample_rate != 48000 or rendered.channels != 2 or rendered.duration_seconds <= 1:

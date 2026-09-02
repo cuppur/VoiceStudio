@@ -9,13 +9,17 @@ from ...runtime import EngineRuntimeResolver
 from ..project import CoverProject, RIGHTS_ATTESTATION_TEXT_HASH
 from .manifest import ProvenanceManifestBuilder
 from .models import ExportFormat, ExportRequest, OverwritePolicy
+from .backend import FFmpegExportBackend
 
 def _cancelled(cancel: Any) -> bool:
     return bool(cancel() if callable(cancel) else cancel and cancel.is_set())
 
 class CoverExporter:
-    def __init__(self, paths: AppPaths | None = None): self.paths = paths or AppPaths.default(); self.process = None
+    def __init__(self, paths: AppPaths | None = None, *, backend: FFmpegExportBackend | None = None):
+        self.paths = paths or AppPaths.default(); self.process = None; self.backend = backend
     def cancel(self):
+        if self.backend is not None:
+            self.backend.cancel()
         if self.process and self.process.poll() is None:
             if os.name == "nt": subprocess.run(["taskkill", "/PID", str(self.process.pid), "/T", "/F"], capture_output=True)
             else: self.process.terminate()
@@ -48,7 +52,9 @@ class CoverExporter:
         paths = [folder / f"{output_id}.wav", folder / f"{output_id}.mp3"] if format == "both" else [folder / f"{output_id}.{format}"]
         sidecar = paths[0].with_name(paths[0].stem + ".voicestudio.json")
         if existing == "reject" and any(p.exists() for p in [*paths, sidecar]): raise FileExistsError("导出文件已存在")
-        ffmpeg = EngineRuntimeResolver(self.paths).resolve_private_tool("ffmpeg")
+        ffmpeg = (Path(getattr(self.backend, "ffmpeg", "ffmpeg"))
+                  if self.backend is not None
+                  else EngineRuntimeResolver(self.paths).resolve_private_tool("ffmpeg"))
         if not ffmpeg: raise RuntimeError("找不到受信任的 FFmpeg")
         produced = []; stagings = []
         for target in paths:
@@ -59,11 +65,14 @@ class CoverExporter:
             args += ["-f", "wav" if target.suffix == ".wav" else "mp3", str(staging)]
             if _cancelled(cancel): raise RuntimeError("导出已取消")
             try:
-                self.process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-                while self.process.poll() is None:
-                    if _cancelled(cancel): self.cancel(); raise RuntimeError("导出已取消")
-                    if hasattr(cancel, "wait"): cancel.wait(.1)
-                if self.process.returncode: raise RuntimeError("FFmpeg 导出失败")
+                if self.backend is not None:
+                    self.backend.encode(source_path, staging, format=target.suffix.lstrip("."), cancel=cancel)
+                else:
+                    self.process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                    while self.process.poll() is None:
+                        if _cancelled(cancel): self.cancel(); raise RuntimeError("导出已取消")
+                        if hasattr(cancel, "wait"): cancel.wait(.1)
+                    if self.process.returncode: raise RuntimeError("FFmpeg 导出失败")
                 # Re-open the staged file through the same trusted probe used
                 # for imported audio.  FFmpeg exit code alone does not prove a
                 # playable, non-empty file was published.
