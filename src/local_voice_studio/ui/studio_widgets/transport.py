@@ -1,7 +1,19 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSlider, QWidget
+
+
+def _icon(name: str) -> QIcon:
+    if getattr(sys, "frozen", False):
+        path = Path(getattr(sys, "_MEIPASS")) / "local_voice_studio" / "ui" / "resources" / "icons" / name
+    else:
+        path = Path(__file__).parents[1] / "resources" / "icons" / name
+    return QIcon(str(path))
 
 
 class TransportWidget(QWidget):
@@ -13,9 +25,9 @@ class TransportWidget(QWidget):
         super().__init__(parent)
         self.setObjectName("transportWidget")
         layout = QHBoxLayout(self)
-        self.play_button = QPushButton("▶")
-        self.back_button = QPushButton("−10s")
-        self.forward_button = QPushButton("+10s")
+        self.play_button = QPushButton(); self.play_button.setIcon(_icon("play.svg")); self.play_button.setToolTip("播放 / 暂停")
+        self.back_button = QPushButton(); self.back_button.setIcon(_icon("back.svg")); self.back_button.setToolTip("后退 10 秒")
+        self.forward_button = QPushButton(); self.forward_button.setIcon(_icon("forward.svg")); self.forward_button.setToolTip("前进 10 秒")
         self.timeline = QSlider(Qt.Horizontal)
         self.timeline.setRange(0, 0)
         self.volume = QSlider(Qt.Horizontal)
@@ -35,7 +47,7 @@ class TransportWidget(QWidget):
         self.volume.valueChanged.connect(self.volume_changed)
 
     def set_playing(self, playing: bool) -> None:
-        self.play_button.setText("❚❚" if playing else "▶")
+        self.play_button.setIcon(_icon("pause.svg" if playing else "play.svg"))
 
     def set_timeline(self, position_ms: int, duration_ms: int) -> None:
         duration = max(0, int(duration_ms))
