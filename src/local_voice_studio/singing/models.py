@@ -17,6 +17,42 @@ from uuid import uuid4
 from ..paths import ensure_within
 
 
+@dataclass(frozen=True)
+class RVCInferenceSettings:
+    """Validated, cacheable product settings for one RVC conversion."""
+
+    transpose: int = 0
+    index_rate: float = 0.75
+    protect: float = 0.33
+    filter_radius: int = 3
+    f0_method: str = "rmvpe"
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "RVCInferenceSettings":
+        raw = payload.get("inference_settings", {})
+        values = dict(raw) if isinstance(raw, dict) else {}
+        transpose = int(values.get("transpose", payload.get("pitch_shift", payload.get("transpose", 0))))
+        index_rate = float(values.get("index_rate", payload.get("index_rate", cls.index_rate)))
+        protect = float(values.get("protect", payload.get("protect", cls.protect)))
+        filter_radius = int(values.get("filter_radius", payload.get("filter_radius", cls.filter_radius)))
+        f0_method = str(values.get("f0_method", payload.get("f0_method", cls.f0_method))).strip().lower()
+        if not -12 <= transpose <= 12: raise ValueError("变调必须在 -12 到 +12 半音之间")
+        if not 0.0 <= index_rate <= 1.0: raise ValueError("音色相似度必须在 0 到 1 之间")
+        if not 0.0 <= protect <= 1.0: raise ValueError("辅音保护必须在 0 到 1 之间")
+        if not 0 <= filter_radius <= 7: raise ValueError("滤波半径必须在 0 到 7 之间")
+        if f0_method not in {"auto", "rmvpe"}: raise ValueError("不支持的 F0 方法")
+        return cls(transpose, index_rate, protect, filter_radius, f0_method)
+
+    def canonical(self) -> dict[str, Any]:
+        return {"transpose": self.transpose, "index_rate": self.index_rate, "protect": self.protect,
+                "filter_radius": self.filter_radius, "f0_method": self.f0_method}
+
+    def to_payload(self) -> dict[str, Any]:
+        return {"transpose": self.transpose, "pitch_shift": self.transpose, "index_rate": self.index_rate,
+                "protect": self.protect, "filter_radius": self.filter_radius, "f0_method": self.f0_method,
+                "inference_settings": self.canonical()}
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 

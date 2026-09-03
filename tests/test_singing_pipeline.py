@@ -192,3 +192,12 @@ def test_ai_vocal_cache_pitch_and_lineage(tmp_path):
     ai.content_origin = "original"; restored.save()
     regenerated = pipeline.convert({"project_path": str(project), "profile_id": "profile", "cover_id": cover.id, "singing_model_id": model["id"], "pitch_shift": 0, "output_id": "after-tamper"})
     assert regenerated["cache_hit"] is False and regenerated["asset_id"] == "after-tamper"
+
+
+def test_ai_vocal_cache_includes_rvc_product_settings(tmp_path):
+    project, cover = _fixture(tmp_path); engine = FakeSingingEngine(); pipeline = SingingPipeline(engine, projects_root=tmp_path)
+    model = pipeline.train({"project_path": str(project), "profile_id": "profile", "training_run_id": "settings", "source_asset_ids": ["asset"], "engine": "rvc_v2"})
+    base = {"project_path": str(project), "profile_id": "profile", "cover_id": cover.id, "singing_model_id": model["id"]}
+    first = pipeline.convert(base)
+    changed = pipeline.convert({**base, "index_rate": 0.6})
+    assert first["cache_hit"] is False and changed["cache_hit"] is False

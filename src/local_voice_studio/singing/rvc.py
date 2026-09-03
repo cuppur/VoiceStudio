@@ -214,7 +214,7 @@ class RVCEngine:
     def convert(self, payload: Mapping[str, Any], cancel: Any = None) -> Path:
         out = Path(str(payload["output_path"]))
         bridge = Path(__file__).with_name("rvc_bridge.py")
-        cmd = [str(self.config.python), str(bridge), "--input", str(payload["input_path"]), "--model", str(payload["model_path"]), "--index", str(payload.get("index_path", "")), "--pitch", str(payload.get("pitch_shift", payload.get("transpose", 0))), "--output", str(out)]
+        cmd = [str(self.config.python), str(bridge), "--input", str(payload["input_path"]), "--model", str(payload["model_path"]), "--index", str(payload.get("index_path", "")), "--pitch", str(payload.get("pitch_shift", payload.get("transpose", 0))), "--index-rate", str(payload.get("index_rate", 0.75)), "--protect", str(payload.get("protect", 0.33)), "--filter-radius", str(payload.get("filter_radius", 3)), "--f0-method", str(payload.get("f0_method", "rmvpe")), "--output", str(out)]
         self._run(cmd, self.config.engine_root, cancel)
         if not out.is_file() or not out.stat().st_size: raise RuntimeError("RVC 转换未生成输出音频")
         return out

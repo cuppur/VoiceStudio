@@ -21,6 +21,10 @@ def main() -> int:
     parser.add_argument("--index", default="")
     parser.add_argument("--output", default="")
     parser.add_argument("--pitch", type=int, default=0)
+    parser.add_argument("--index-rate", type=float, default=0.75)
+    parser.add_argument("--protect", type=float, default=0.33)
+    parser.add_argument("--filter-radius", type=int, default=3)
+    parser.add_argument("--f0-method", choices=("auto", "rmvpe"), default="rmvpe")
     parser.add_argument("--verify-model", action="store_true")
     parser.add_argument("--prepare-checkpoint", action="store_true")
     parser.add_argument("--sample-rate", default="48k")
@@ -70,7 +74,7 @@ def main() -> int:
         vc = VC(config)
         if vc.get_vc(model.name, 0.5, 0.33) is None:
             raise RuntimeError("RVC 模型加载失败")
-        _status, audio = vc.vc_single(0, args.test_input, args.pitch, "rmvpe", safe_index, 0.75, 0, 1.0, 0.33)
+        _status, audio = vc.vc_single(0, args.test_input, args.pitch, args.f0_method, safe_index, args.index_rate, args.filter_radius, 1.0, args.protect)
         if audio is None:
             raise RuntimeError("RVC 未生成音频")
         sample_rate, samples = audio
@@ -109,8 +113,8 @@ def main() -> int:
     if loaded is None:
         raise RuntimeError("RVC 模型加载失败")
     _status, audio = vc.vc_single(
-        0, args.input, args.pitch, "rmvpe", safe_index,
-        0.75, 0, 1.0, 0.33,
+        0, args.input, args.pitch, args.f0_method, safe_index,
+        args.index_rate, args.filter_radius, 1.0, args.protect,
     )
     if audio is None:
         raise RuntimeError("RVC 未生成音频")

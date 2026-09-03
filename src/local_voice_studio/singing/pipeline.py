@@ -17,7 +17,7 @@ from typing import Any, Callable, Mapping
 from ..cover.project import CoverProject, CoverAsset, RIGHTS_ATTESTATION_TEXT_HASH, content_origin
 from ..paths import AppPaths, ensure_within, validate_id, validate_sha256
 from ..runtime import EngineRuntimeResolver
-from .models import SingingModelVersion
+from .models import RVCInferenceSettings, SingingModelVersion
 from .dataset import SourceAssetDatasetBuilder
 from .verification import SingingModelVerifier
 
@@ -221,9 +221,9 @@ class SingingPipeline:
         model = SingingModelVersion.from_dict(model_data)
         if model.profile_id != profile["id"] or model.trust_status != "verified" or not model.files_available(project) or not model.hashes_match(project):
             raise ValueError("歌唱模型不可用或未通过完整性验证")
-        pitch = int(payload.get("pitch_shift", payload.get("transpose", 0)))
-        if pitch < -12 or pitch > 12: raise ValueError("变调必须在 -12 到 +12 半音之间")
-        cache_key = hashlib.sha256((source.sha256 + model.checkpoint_sha256 + model.index_sha256 + model.engine_version + str(pitch) + str(payload.get("inference_settings", "rmvpe"))).encode()).hexdigest()
+        settings = RVCInferenceSettings.from_payload(dict(payload))
+        cache_material = json.dumps(settings.canonical(), sort_keys=True, separators=(",", ":"))
+        cache_key = hashlib.sha256((source.sha256 + model.checkpoint_sha256 + model.index_sha256 + model.engine_version + cache_material).encode()).hexdigest()
         cached = next((a for a in reversed(cover.assets) if a.role == "ai_vocal" and a.content_origin == "ai_generated" and a.producer == "rvc_v2" and a.source_asset_ids == [source.id] and a.model_id == model.id and a.model_sha256 == model.checkpoint_sha256 and a.producer_version == cache_key), None)
         if cached:
             cached_path = ensure_within(cover.root, cover.root / cached.relative_path)
@@ -239,7 +239,7 @@ class SingingPipeline:
             raise ValueError("输出资产已存在")
         self.progress(0.1, "准备 AI 人声转换")
         try:
-            produced = ensure_within(cover.root, Path(self.engine.convert({**dict(payload), "input_path": str(source_path), "model_path": str(ensure_within(project, project / model.checkpoint_relative_path)), "index_path": str(ensure_within(project, project / model.index_relative_path)), "output_path": str(staging)}, cancel=cancel)))
+            produced = ensure_within(cover.root, Path(self.engine.convert({**dict(payload), **settings.to_payload(), "input_path": str(source_path), "model_path": str(ensure_within(project, project / model.checkpoint_relative_path)), "index_path": str(ensure_within(project, project / model.index_relative_path)), "output_path": str(staging)}, cancel=cancel)))
             if cancel is not None and cancel.is_set():
                 raise RuntimeError("任务已取消")
             if produced != staging or not staging.is_file() or not staging.stat().st_size:
