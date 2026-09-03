@@ -26,6 +26,7 @@ def main() -> int:
     parser.add_argument("--protect", type=float, default=0.33)
     parser.add_argument("--filter-radius", type=int, default=3)
     parser.add_argument("--f0-method", choices=("auto", "rmvpe"), default="rmvpe")
+    parser.add_argument("--postprocess", choices=("off", "light"), default="light")
     parser.add_argument("--verify-model", action="store_true")
     parser.add_argument("--prepare-checkpoint", action="store_true")
     parser.add_argument("--sample-rate", default="48k")
@@ -148,10 +149,39 @@ def main() -> int:
     if audio is None:
         raise RuntimeError("RVC 未生成音频")
     sample_rate, samples = audio
+    if args.postprocess == "light":
+        samples = _light_postprocess(samples, sample_rate)
     output = Path(args.output).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     sf.write(output, samples, sample_rate, subtype="PCM_16")
     return 0
+
+
+def _light_postprocess(samples, sample_rate: int):
+    """Conservative vocal polish: high-pass, de-ess, gentle compression, limiter."""
+    import numpy as np
+    from scipy.signal import butter, sosfilt
+
+    audio = np.asarray(samples, dtype=np.float32)
+    if audio.ndim == 1:
+        channels = audio[:, None]
+    elif audio.ndim == 2:
+        channels = audio
+    else:
+        raise RuntimeError("RVC 输出声道形状无效")
+    nyquist = sample_rate / 2.0
+    highpass = butter(2, min(80.0 / nyquist, 0.99), btype="highpass", output="sos")
+    polished = sosfilt(highpass, channels, axis=0).astype(np.float32)
+    deess = butter(2, min(5000.0 / nyquist, 0.99), btype="highpass", output="sos")
+    sibilance = sosfilt(deess, polished, axis=0)
+    attenuation = np.clip((np.abs(sibilance) - 0.08) / 0.20, 0.0, 0.35)
+    polished *= 1.0 - attenuation
+    magnitude = np.abs(polished)
+    threshold = 10.0 ** (-12.0 / 20.0)
+    compressed = np.where(magnitude > threshold, threshold + (magnitude - threshold) / 3.0, magnitude)
+    polished = np.copysign(compressed, polished)
+    polished = np.clip(polished, -0.95, 0.95)
+    return polished[:, 0] if audio.ndim == 1 else polished
 
 
 if __name__ == "__main__":
