@@ -92,7 +92,7 @@ class CoverPage(QWidget):
     export_requested = Signal()
     def __init__(self, paths, store, project, worker=None, parent=None):
         super().__init__(parent); self.setObjectName("coverPage"); self.paths, self.store, self.project, self.worker = paths, store, Path(project), worker
-        self.cover_project = None; self.sessions = {}; self.track_paths = {}; self._threads = set(); self._separation_request = ""; self._ai_request = ""; self._render_request = ""; self._export_request = ""; self._last_export_payload = {}; self._selected_track = 0; self._playback_mode = PlaybackMode.MIX_PREVIEW
+        self.cover_project = None; self.sessions = {}; self.track_paths = {}; self._threads = set(); self._separation_request = ""; self._cleanup_request = ""; self._pending_ai_payload = {}; self._ai_request = ""; self._render_request = ""; self._export_request = ""; self._last_export_payload = {}; self._selected_track = 0; self._playback_mode = PlaybackMode.MIX_PREVIEW
         self.cover_service = CoverApplicationService(self.project, paths=self.paths, store=self.store)
         self.preview_controller = PreviewAudioController.create_qt(self, drift_tolerance_ms=50)
         self.sync_timer = QTimer(self); self.sync_timer.setInterval(750); self.sync_timer.timeout.connect(self._resync_preview)
@@ -168,6 +168,7 @@ class CoverPage(QWidget):
         form.addWidget(_label("目标声音", "sectionLabel")); self.profile_combo = VoiceSelector(project_root=self.project); self.profile_combo.voice_selected.connect(self._profile_selected); form.addWidget(self.profile_combo)
         self.voice_capabilities = QLabel("✓ AI 翻唱    ✓ 本地处理"); self.voice_capabilities.setObjectName("capabilities"); form.addWidget(self.voice_capabilities)
         form.addWidget(_label("翻唱设置", "cardTitle")); pitch_row = QHBoxLayout(); pitch_row.addWidget(QLabel("音调")); self.pitch = QSpinBox(); self.pitch.setRange(-12, 12); self.pitch.setSuffix(" 半音"); pitch_row.addWidget(self.pitch); form.addLayout(pitch_row)
+        self.cleanup_toggle = QCheckBox("人声降噪（可选）"); self.cleanup_toggle.setChecked(False); self.cleanup_toggle.setObjectName("settingToggle"); form.addWidget(self.cleanup_toggle)
         self.normalize_toggle = QCheckBox("混音归一化"); self.normalize_toggle.setChecked(True); self.normalize_toggle.setObjectName("settingToggle"); form.addWidget(self.normalize_toggle)
         self.limiter_toggle = QCheckBox("防削波限制器"); self.limiter_toggle.setChecked(True); self.limiter_toggle.setObjectName("settingToggle"); form.addWidget(self.limiter_toggle)
         form.addStretch(); self.rights_state = QLabel("歌曲权利：未确认"); self.rights_state.setWordWrap(True); self.rights_state.setObjectName("rightsState"); form.addWidget(self.rights_state); self.uvr_status = QLabel(); self.uvr_status.setObjectName("muted"); self.uvr_status.setWordWrap(True); form.addWidget(self.uvr_status); note = QLabel("本地处理 · 不上传音频\n普通分离音轨不是 AI 翻唱成品"); note.setObjectName("settingsNote"); note.setWordWrap(True); form.addWidget(note)
@@ -277,7 +278,7 @@ class CoverPage(QWidget):
         vocal = self.cover_project.get_asset(role="vocal") if self.cover_project else None
         vocal_path = self.cover_project.root / vocal.relative_path if vocal else None
         vocal_valid = bool(vocal and vocal.content_origin == "separated" and vocal_path and vocal_path.is_file() and vocal.sha256 == hashlib.sha256(vocal_path.read_bytes()).hexdigest())
-        profile = self._selected_profile(); ready = bool(self.cover_project and self.cover_project.rights_confirmed and vocal_valid and profile and getattr(profile, "consent_confirmed", False) and getattr(profile, "consent_record", "") and getattr(profile, "consent_confirmed_at", "") and not getattr(profile, "archived", False) and self.worker and not self._separation_request and not self._ai_request)
+        profile = self._selected_profile(); ready = bool(self.cover_project and self.cover_project.rights_confirmed and vocal_valid and profile and getattr(profile, "consent_confirmed", False) and getattr(profile, "consent_record", "") and getattr(profile, "consent_confirmed_at", "") and not getattr(profile, "archived", False) and self.worker and not self._separation_request and not self._cleanup_request and not self._ai_request)
         if profile and hasattr(profile, "singing_status"):
             try: ready = ready and profile.singing_status(self.project) == "ready"
             except TypeError: ready = ready and profile.singing_status() == "ready"
@@ -296,7 +297,17 @@ class CoverPage(QWidget):
             ).to_worker_payload()
         except Exception as exc:
             self.song_meta.setText(str(exc)); return
-        self.cover_button.setText("AI 人声生成中…"); self.cover_button.setEnabled(False); self.cancel_ai_button.setEnabled(True); self.cancel_ai_button.show(); self.song_meta.setText("正在生成 AI 人声")
+        self.cover_button.setEnabled(False); self.cancel_ai_button.setEnabled(True); self.cancel_ai_button.show()
+        if self.cleanup_toggle.isChecked():
+            try:
+                cleanup = self.cover_service.create_vocal_cleanup_command(self.cover_project.id, {"mode": "denoise"}).to_worker_payload()
+            except Exception as exc:
+                self._ai_failed(str(exc)); return
+            self._pending_ai_payload = payload; self.cover_button.setText("人声清理中…"); self.song_meta.setText("正在清理已分离人声")
+            try: self._cleanup_request = self.worker.send("cleanup_vocal", cleanup)
+            except Exception as exc: self._ai_failed(str(exc))
+            return
+        self.cover_button.setText("AI 人声生成中…"); self.song_meta.setText("正在生成 AI 人声")
         try: self._ai_request = self.worker.send("convert_vocal", payload)
         except Exception as exc: self._ai_failed(str(exc))
 
@@ -316,8 +327,9 @@ class CoverPage(QWidget):
         covers = self._list_cover_projects()
         if not covers: return
         self.cover_project = max(covers, key=lambda item: item.updated_at); self.rights_state.setText("歌曲权利：已确认" if self.cover_project.rights_confirmed else "歌曲权利：未确认"); self.track_paths = {}; source = self.cover_project.root / self.cover_project.source_relative_path; lrc = self.cover_project.root / self.cover_project.lyrics_path if self.cover_project.lyrics_path else None; self._reset_tracks(); self._load_track(0, source, lrc)
-        for index, relative in ((1, self.cover_project.vocal_path), (2, self.cover_project.instrumental_path)):
-            if relative: self._load_track(index, self.cover_project.root / relative)
+        for index, role in ((1, "vocal"), (2, "instrumental")):
+            asset = self.cover_project.get_asset(role=role)
+            if asset: self._load_track(index, self.cover_project.root / asset.relative_path)
         ai_asset = self.cover_project.get_asset(role="ai_vocal") if hasattr(self.cover_project, "get_asset") else None
         if ai_asset: self._load_track(3, self.cover_project.root / ai_asset.relative_path)
         final_asset = self.cover_project.get_asset(role="final_mix")
@@ -345,6 +357,19 @@ class CoverPage(QWidget):
             self.worker.send("cancel", {"target_request_id": self._separation_request})
 
     def handle_worker_event(self, request_id, event, payload):
+        if request_id == self._cleanup_request:
+            if event == "result":
+                self._cleanup_request = ""; self.cover_project = self._load_cover_project(self.cover_project.id)
+                asset = self.cover_project.get_asset(str(payload.get("asset_id", "")))
+                if not asset:
+                    self._ai_failed("清理结果未登记为项目资产"); return
+                self._load_track(1, self.cover_project.root / asset.relative_path)
+                self.cover_button.setText("AI 人声生成中…"); self.song_meta.setText("人声清理完成，正在生成 AI 人声")
+                try: self._ai_request = self.worker.send("convert_vocal", self._pending_ai_payload)
+                except Exception as exc: self._ai_failed(str(exc))
+            elif event == "error":
+                self._ai_failed(str(payload.get("message", "人声清理失败")))
+            return
         if request_id == self._render_request:
             if event == "progress": self.song_meta.setText(str(payload.get("message", "正在生成最终翻唱")))
             elif event == "result":
@@ -366,7 +391,7 @@ class CoverPage(QWidget):
         if request_id == self._ai_request:
             if event == "progress": self.song_meta.setText(str(payload.get("message", "正在生成 AI 人声")))
             elif event == "result":
-                self._ai_request = ""; self.cover_button.setText("生成 AI 人声"); self.cancel_ai_button.hide(); self.cover_project = self._load_cover_project(self.cover_project.id); self.rights_state.setText("歌曲权利：已确认" if self.cover_project.rights_confirmed else "歌曲权利：未确认"); ai_asset = self.cover_project.get_asset(str(payload.get("asset_id", ""))) or self.cover_project.get_asset(role="ai_vocal"); ai_path = self.cover_project.root / ai_asset.relative_path if ai_asset else None
+                self._ai_request = ""; self._pending_ai_payload = {}; self.cover_button.setText("生成 AI 人声"); self.cancel_ai_button.hide(); self.cover_project = self._load_cover_project(self.cover_project.id); self.rights_state.setText("歌曲权利：已确认" if self.cover_project.rights_confirmed else "歌曲权利：未确认"); ai_asset = self.cover_project.get_asset(str(payload.get("asset_id", ""))) or self.cover_project.get_asset(role="ai_vocal"); ai_path = self.cover_project.root / ai_asset.relative_path if ai_asset else None
                 if not ai_asset or not ai_path.is_file(): self._ai_failed("生成结果未登记为项目资产"); return
                 self._load_track(3, ai_path); self.song_meta.setText("AI 人声已生成 · " + ("已复用缓存" if payload.get("cache_hit") else "AI生成")); self.render_button.setEnabled(True); self._update_cover_button()
             elif event == "error": self._ai_failed(str(payload.get("message", "生成失败")))
@@ -378,7 +403,7 @@ class CoverPage(QWidget):
         elif event == "error": self._separation_failed(str(payload.get("message", "分离失败")))
 
     def _ai_failed(self, message):
-        self._ai_request = ""; self.cover_button.setText("生成 AI 人声"); self.cancel_ai_button.hide(); self.cancel_ai_button.setEnabled(True); self.song_meta.setText("AI 人声生成失败：" + message); self._update_cover_button()
+        self._cleanup_request = ""; self._pending_ai_payload = {}; self._ai_request = ""; self.cover_button.setText("生成 AI 人声"); self.cancel_ai_button.hide(); self.cancel_ai_button.setEnabled(True); self.song_meta.setText("AI 人声生成失败：" + message); self._update_cover_button()
 
     def _render_failed(self, message):
         self._render_request = ""; self.render_button.setText("生成最终翻唱"); self.render_button.setEnabled(bool(self.cover_project and self.cover_project.get_asset(role="ai_vocal"))); self.cancel_final_button.hide(); self.cancel_final_button.setEnabled(True); self.progress.hide(); self.song_meta.setText("最终混音失败：" + message)
@@ -393,9 +418,10 @@ class CoverPage(QWidget):
             self.worker.send("cancel", {"target_request_id": target})
 
     def cancel_ai_vocal(self):
-        if self._ai_request and self.worker:
+        target = self._cleanup_request or self._ai_request
+        if target and self.worker:
             self.cancel_ai_button.setEnabled(False); self.song_meta.setText("正在停止 AI 人声生成…")
-            try: self.worker.send("cancel", {"target_request_id": self._ai_request})
+            try: self.worker.send("cancel", {"target_request_id": target})
             except Exception as exc: self._ai_failed(str(exc))
 
     def _separation_failed(self, message):

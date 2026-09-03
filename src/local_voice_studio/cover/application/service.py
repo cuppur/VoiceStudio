@@ -22,7 +22,8 @@ from ..project import CoverProject, RIGHTS_ATTESTATION_TEXT_HASH
 from ..models import CoverAssetRole, ContentOrigin
 from ..errors import (AssetValidationError, ConsentRequiredError,
                       ModelNotReadyError, RightsRequiredError)
-from .commands import ExportCoverCommand, PrepareAIVocalCommand, PrepareRenderCommand, PrepareSeparationCommand
+from .commands import ExportCoverCommand, PrepareAIVocalCommand, PrepareRenderCommand, PrepareSeparationCommand, PrepareVocalCleanupCommand
+from ..cleanup import VocalCleanupSettings
 from .results import CoverStateResult
 
 
@@ -82,6 +83,20 @@ class CoverApplicationService:
         return PrepareAIVocalCommand(str(self.project), cover.id, profile.id, model.id, int(pitch_shift))
 
     create_ai_vocal_command = prepare_ai_vocal
+
+    def prepare_vocal_cleanup(self, cover_id: str, settings: dict[str, Any]) -> PrepareVocalCleanupCommand:
+        cover = self._cover(cover_id)
+        if not cover.rights_confirmed or cover.rights_attestation_text_hash != RIGHTS_ATTESTATION_TEXT_HASH:
+            raise RightsRequiredError("开始人声清理前必须确认歌曲处理权利")
+        source = cover.get_asset(role="vocal")
+        if not source or source.content_origin != ContentOrigin.SEPARATED:
+            raise AssetValidationError("人声清理需要已分离的人声")
+        normalized = VocalCleanupSettings.from_payload({"cleanup_settings": settings}).canonical()
+        if not normalized["denoise"]:
+            raise AssetValidationError("请先启用人声降噪")
+        return PrepareVocalCleanupCommand(str(self.project), cover.id, normalized)
+
+    create_vocal_cleanup_command = prepare_vocal_cleanup
 
     def prepare_render(self, cover_id: str, profile_id: str, mix_state: CoverMixSettings | dict[str, Any] | None = None) -> PrepareRenderCommand:
         cover = self._cover(cover_id); profile = self._profile(profile_id)

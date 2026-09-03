@@ -26,6 +26,7 @@ class RVCInferenceSettings:
     protect: float = 0.33
     filter_radius: int = 3
     f0_method: str = "rmvpe"
+    pitch_backend_version: str = "rvc-rmvpe-v1"
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "RVCInferenceSettings":
@@ -45,7 +46,8 @@ class RVCInferenceSettings:
 
     def canonical(self) -> dict[str, Any]:
         return {"transpose": self.transpose, "index_rate": self.index_rate, "protect": self.protect,
-                "filter_radius": self.filter_radius, "f0_method": self.f0_method}
+                "filter_radius": self.filter_radius, "f0_method": self.f0_method,
+                "pitch_backend_version": self.pitch_backend_version}
 
     def to_payload(self) -> dict[str, Any]:
         return {"transpose": self.transpose, "pitch_shift": self.transpose, "index_rate": self.index_rate,

@@ -221,7 +221,15 @@ class SingingPipeline:
         if model.profile_id != profile["id"] or model.trust_status != "verified" or not model.files_available(project) or not model.hashes_match(project):
             raise ValueError("歌唱模型不可用或未通过完整性验证")
         settings = RVCInferenceSettings.from_payload(dict(payload))
-        cache_material = json.dumps(settings.canonical(), sort_keys=True, separators=(",", ":"))
+        cache_material = json.dumps({
+            "inference": settings.canonical(),
+            "source_vocal": {
+                "sha256": source.sha256,
+                "cleanup_engine": source.producer if source.producer != "separation" else "",
+                "cleanup_engine_version": source.producer_version if source.producer != "separation" else "",
+                "cleanup_model_sha256": source.model_sha256 if source.producer != "separation" else "",
+            },
+        }, sort_keys=True, separators=(",", ":"))
         cache_key = hashlib.sha256((source.sha256 + model.checkpoint_sha256 + model.index_sha256 + model.engine_version + cache_material).encode()).hexdigest()
         cached = next((a for a in reversed(cover.assets) if a.role == "ai_vocal" and a.content_origin == "ai_generated" and a.producer == "rvc_v2" and a.source_asset_ids == [source.id] and a.model_id == model.id and a.model_sha256 == model.checkpoint_sha256 and a.producer_version == cache_key), None)
         if cached:

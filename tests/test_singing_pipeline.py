@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from local_voice_studio.cover.project import CoverProject
+from local_voice_studio.cover.project import CoverAsset, CoverProject
 from local_voice_studio.singing.pipeline import SingingPipeline
 from local_voice_studio.singing.rvc import RVCEngine, RVCConfig
 
@@ -200,4 +200,19 @@ def test_ai_vocal_cache_includes_rvc_product_settings(tmp_path):
     base = {"project_path": str(project), "profile_id": "profile", "cover_id": cover.id, "singing_model_id": model["id"]}
     first = pipeline.convert(base)
     changed = pipeline.convert({**base, "index_rate": 0.6})
+    assert first["cache_hit"] is False and changed["cache_hit"] is False
+
+
+def test_ai_vocal_cache_includes_cleanup_engine_lineage(tmp_path):
+    project, cover = _fixture(tmp_path); pipeline = SingingPipeline(FakeSingingEngine(), projects_root=tmp_path)
+    model = pipeline.train({"project_path": str(project), "profile_id": "profile", "training_run_id": "cleanup", "source_asset_ids": ["asset"], "engine": "rvc_v2"})
+    vocal = cover.root / "stems" / "vocals.wav"; cleaned = cover.root / "stems" / "cleanup.wav"; cleaned.write_bytes(vocal.read_bytes())
+    digest = hashlib.sha256(cleaned.read_bytes()).hexdigest()
+    cover.add_asset(CoverAsset("cleaned", "vocal", "stems/cleanup.wav", digest, "separated", "ffmpeg-afftdn", "cleanup-one", source_asset_ids=["vocal"]))
+    base = {"project_path": str(project), "profile_id": "profile", "cover_id": cover.id, "singing_model_id": model["id"]}
+    first = pipeline.convert(base)
+    restored = CoverProject.load(project, cover.id); assert restored.get_asset(first["asset_id"]).source_asset_ids == ["cleaned"]
+    restored.get_asset("cleaned").producer_version = "cleanup-two"; restored.save()
+    assert CoverProject.load(project, cover.id).get_asset("cleaned").producer_version == "cleanup-two"
+    changed = pipeline.convert({**base, "output_id": "cleanup-lineage-two"})
     assert first["cache_hit"] is False and changed["cache_hit"] is False

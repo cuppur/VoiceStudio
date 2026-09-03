@@ -60,6 +60,22 @@ class PrepareAIVocalCommand:
 
 
 @dataclass(frozen=True)
+class PrepareVocalCleanupCommand:
+    project_path: Path | str
+    cover_id: str
+    cleanup_settings: dict[str, Any]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "project_path", Path(self.project_path))
+
+    def to_payload(self) -> dict[str, Any]:
+        return {"project_path": str(self.project_path), "cover_id": self.cover_id,
+                "cleanup_settings": dict(self.cleanup_settings)}
+
+    to_worker_payload = to_payload
+
+
+@dataclass(frozen=True)
 class PrepareRenderCommand:
     project_path: Path | str
     cover_id: str

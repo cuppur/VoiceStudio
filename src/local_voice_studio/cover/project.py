@@ -356,7 +356,16 @@ class CoverProject:
 
     def get_asset(self, identifier: str | None = None, *, role: str | None = None) -> CoverAsset | None:
         """Return an asset by ID, or the newest asset with the given role."""
-        identifier = role if role is not None else identifier
+        if role is not None:
+            requested_role = str(role.value) if isinstance(role, Enum) else str(role)
+            if requested_role in ASSET_ROLES:
+                for asset in reversed(self.assets):
+                    if asset.role == requested_role:
+                        return asset
+                return None
+            # Preserve the early compatibility spelling where callers passed
+            # an asset ID through ``role`` before role-aware assets existed.
+            identifier = requested_role
         if isinstance(identifier, Enum):
             identifier = str(identifier.value)
         if identifier is None:

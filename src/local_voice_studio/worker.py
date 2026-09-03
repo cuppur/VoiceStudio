@@ -19,6 +19,7 @@ from .runtime import EngineRuntimeResolver
 from .text import split_text
 from .training import TrainingPipeline
 from .cover.separation import SongSeparationPipeline
+from .cover.cleanup import VocalCleanupService, VocalCleanupSettings
 from .cover.mixing import CoverMixSettings, CoverMixer, FFmpegMixBackend
 from .cover.exporting import CoverExporter, FFmpegExportBackend
 from .cover.application import CoverApplicationService
@@ -43,6 +44,7 @@ class WorkerService:
         self.write_lock = threading.Lock()
         self.shutdown_event = threading.Event()
         self.separation: SongSeparationPipeline | None = None
+        self.cleanup: VocalCleanupService | None = None
         self.mixer: CoverMixer | None = None
         self.exporter: CoverExporter | None = None
         if singing_engine is None:
@@ -129,6 +131,8 @@ class WorkerService:
                 cancel = getattr(self.separation, "cancel", None)
                 if callable(cancel):
                     cancel()
+            if self.cleanup is not None:
+                self.cleanup.cancel()
             if self.singing_engine is not None:
                 stop = getattr(self.singing_engine, "cancel", None)
                 if callable(stop):
@@ -144,6 +148,8 @@ class WorkerService:
                 cancel = getattr(self.separation, "cancel", None)
                 if callable(cancel):
                     cancel()
+            if self.cleanup is not None:
+                self.cleanup.cancel()
             if self.singing_engine is not None:
                 stop = getattr(self.singing_engine, "cancel", None)
                 if callable(stop):
@@ -162,6 +168,7 @@ class WorkerService:
                 "prepare_dataset": self._prepare_dataset,
                 "train": self._train,
                 "separate_song": self._separate_song,
+                "cleanup_vocal": self._cleanup_vocal,
                 "train_singing_model": self._train_singing_model,
                 "convert_vocal": self._convert_vocal,
                 "render_cover": self._render_cover,
@@ -231,7 +238,7 @@ class WorkerService:
             error_payload = {"message": str(exc), "exception": type(exc).__name__, "status": event}
             if isinstance(exc, CoverError):
                 error_payload.update(cover_error_payload(exc))
-            if request_id and self._request_context.get("command") in {"separate_song", "convert_vocal", "render_cover", "export_cover"}:
+            if request_id and self._request_context.get("command") in {"separate_song", "cleanup_vocal", "convert_vocal", "render_cover", "export_cover"}:
                 command = self._request_context["command"]
                 error_payload.setdefault("code", "cover.cancelled" if cancelled else f"cover.{command}.failed")
                 error_payload.setdefault("recoverable", True if cancelled else False)
@@ -403,6 +410,20 @@ class WorkerService:
             self.emit(request_id, "result", {"progress": 1.0, **result})
         finally:
             self.separation = None
+
+    def _cleanup_vocal(self, request_id: str, payload: dict[str, Any]) -> None:
+        project = ensure_within(self.paths.projects_root, Path(str(payload.get("project_path", ""))))
+        command = CoverApplicationService(project, paths=self.paths).prepare_vocal_cleanup(
+            str(payload.get("cover_id", "")), dict(payload.get("cleanup_settings", {}))
+        )
+        pipeline = VocalCleanupService(project, paths=self.paths)
+        self.cleanup = pipeline
+        try:
+            settings = VocalCleanupSettings.from_payload({"cleanup_settings": command.cleanup_settings})
+            result = pipeline.cleanup(command.cover_id, settings, cancel=self.cancel_event)
+            self.emit(request_id, "result", {"progress": 1.0, **result})
+        finally:
+            self.cleanup = None
 
     def _singing(self, request_id: str) -> SingingPipeline:
         if self.singing_engine is None:

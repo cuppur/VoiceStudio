@@ -5,7 +5,7 @@ worker commands.  Domain and infrastructure modules remain usable without Qt.
 """
 
 from .commands import (
-    ExportCoverCommand, PrepareAIVocalCommand, PrepareRenderCommand,
+    ExportCoverCommand, PrepareAIVocalCommand, PrepareRenderCommand, PrepareVocalCleanupCommand,
     PrepareSeparationCommand, SeparateSongCommand, ConvertVocalCommand,
     RenderCoverCommand,
 )
@@ -15,7 +15,7 @@ from .service import CoverApplicationService
 
 __all__ = [
     "CoverApplicationService", "PrepareSeparationCommand",
-    "PrepareAIVocalCommand", "PrepareRenderCommand", "ExportCoverCommand",
+    "PrepareAIVocalCommand", "PrepareVocalCleanupCommand", "PrepareRenderCommand", "ExportCoverCommand",
     "SeparateSongCommand", "ConvertVocalCommand", "RenderCoverCommand",
     "CoverStateResult", "OperationResult", "SeparateSongResult",
     "ConvertVocalResult", "RenderCoverResult", "ExportCoverResult",

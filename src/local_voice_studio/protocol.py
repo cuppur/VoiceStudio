@@ -7,7 +7,7 @@ from uuid import uuid4
 
 
 
-COMMANDS = {"health", "load_profile", "synthesize", "prepare_dataset", "train", "separate_song", "train_singing_model", "convert_vocal", "render_cover", "export_cover", "cancel", "shutdown"}
+COMMANDS = {"health", "load_profile", "synthesize", "prepare_dataset", "train", "separate_song", "cleanup_vocal", "train_singing_model", "convert_vocal", "render_cover", "export_cover", "cancel", "shutdown"}
 EVENTS = {"ready", "progress", "result", "error"}
 
 # Product commands use positive allowlists.  Paths and hashes which can be
@@ -29,6 +29,7 @@ PAYLOAD_FIELDS: dict[str, frozenset[str]] = {
     "separate_song": frozenset({
         "project_path", "cover_id", "source_relative_path", "source_sha256", "mode",
     }),
+    "cleanup_vocal": frozenset({"project_path", "cover_id", "cleanup_settings"}),
 }
 
 
