@@ -5,7 +5,7 @@ a = Analysis(
     ['launcher.py'],
     pathex=['src'],
     binaries=[],
-    datas=[('scripts', 'scripts'), ('manifests', 'manifests'), ('locks', 'locks'), ('src/local_voice_studio', 'worker_source/local_voice_studio'), ('src/local_voice_studio/ui/theme', 'local_voice_studio/ui/theme')],
+    datas=[('scripts', 'scripts'), ('manifests', 'manifests'), ('locks', 'locks'), ('src/local_voice_studio', 'worker_source/local_voice_studio'), ('src/local_voice_studio/ui/theme', 'local_voice_studio/ui/theme'), ('src/local_voice_studio/ui/resources/icons', 'local_voice_studio/ui/resources/icons')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

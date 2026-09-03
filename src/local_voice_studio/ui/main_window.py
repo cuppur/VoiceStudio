@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QUrl
-from PySide6.QtGui import QCloseEvent, QDesktopServices, QTextCursor
+from PySide6.QtGui import QCloseEvent, QDesktopServices, QIcon, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
     QGroupBox, QPlainTextEdit, QProgressBar, QPushButton, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
@@ -92,19 +92,29 @@ class SetupDialog(QDialog):
 
 class MainWindow(QMainWindow):
     def __init__(self, paths: AppPaths, store: StudioStore):
-        super().__init__(); self.paths, self.store = paths, store; self.setWindowTitle("VoiceStudio · 本地 AI 声音创作工作室"); self.resize(1440, 900); self.setMinimumSize(1180, 700)
+        super().__init__(); self.paths, self.store = paths, store; self.setWindowTitle("VoiceStudio · 本地 AI 声音创作工作室"); self.resize(1440, 900); self.setMinimumSize(1280, 720)
         self.session = ProjectSession(store, self); self.project = self.session.current
         self.client = WorkerClient(paths, self); self._build(); self.session.project_changed.connect(self._switch_project); self.client.start(); self.statusBar().showMessage("本地工作进程正在启动……")
         self.client.state_changed.connect(self._state); self.client.event.connect(self._worker_event)
 
     def _build(self) -> None:
         central = QWidget(); root = QHBoxLayout(central); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0); self.setCentralWidget(central)
-        sidebar = QWidget(); sidebar.setObjectName("sidebar"); sidebar.setFixedWidth(204); side_layout = QVBoxLayout(sidebar); side_layout.setContentsMargins(0, 0, 0, 0); brand = QLabel("VoiceStudio"); brand.setObjectName("brand"); side_layout.addWidget(brand); brand_sub = QLabel("LOCAL AI AUDIO STUDIO"); brand_sub.setObjectName("brandSub"); side_layout.addWidget(brand_sub); self.project_button = QToolButton(); self.project_button.setObjectName("projectPicker"); self.project_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon); self.project_button.setPopupMode(QToolButton.InstantPopup); self.project_menu = QMenu(self.project_button); self.project_menu.aboutToShow.connect(self._refresh_project_menu); self.project_button.setMenu(self.project_menu); side_layout.addWidget(self.project_button)
+        sidebar = QWidget(); sidebar.setObjectName("sidebar"); sidebar.setFixedWidth(220); side_layout = QVBoxLayout(sidebar); side_layout.setContentsMargins(0, 0, 0, 0); brand = QLabel("VoiceStudio"); brand.setObjectName("brand"); side_layout.addWidget(brand); brand_sub = QLabel("LOCAL AI AUDIO STUDIO"); brand_sub.setObjectName("brandSub"); side_layout.addWidget(brand_sub); self.project_button = QToolButton(); self.project_button.setObjectName("projectPicker"); self.project_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon); self.project_button.setPopupMode(QToolButton.InstantPopup); self.project_menu = QMenu(self.project_button); self.project_menu.aboutToShow.connect(self._refresh_project_menu); self.project_button.setMenu(self.project_menu); side_layout.addWidget(self.project_button)
         self.navigation = QListWidget(); self.navigation.setObjectName("navigation"); self.navigation.setFrameShape(QListWidget.NoFrame); side_layout.addWidget(self.navigation); task_center = QPushButton("任务中心"); task_center.setObjectName("sidebarButton"); task_center.clicked.connect(self._open_task_center); side_layout.addWidget(task_center); version = QLabel("GPT-SoVITS V2ProPlus\n完全本地 · 无遥测"); version.setObjectName("sidebarFoot"); side_layout.addWidget(version); root.addWidget(sidebar)
         self.stack = QStackedWidget(); root.addWidget(self.stack, 1)
-        for name in ("♫  AI 翻唱", "▤  文字生成", "●  我的声音", "＋  训练声音", "⚙  设置"): self.navigation.addItem(QListWidgetItem(name))
+        for icon, name in (("cover.svg", "AI 翻唱"), ("generate.svg", "文字生成"), ("voices.svg", "我的声音"), ("training.svg", "训练声音"), ("settings.svg", "设置")):
+            item = QListWidgetItem(self._navigation_icon(icon), name)
+            self.navigation.addItem(item)
         self.navigation.currentRowChanged.connect(self.stack.setCurrentIndex); self.navigation.setCurrentRow(0)
         self._build_project_pages(); self._update_project_button()
+
+    @staticmethod
+    def _navigation_icon(name: str) -> QIcon:
+        if getattr(sys, "frozen", False):
+            path = Path(getattr(sys, "_MEIPASS")) / "local_voice_studio" / "ui" / "resources" / "icons" / name
+        else:
+            path = Path(__file__).with_name("resources") / "icons" / name
+        return QIcon(str(path))
 
     def _build_project_pages(self) -> None:
         row = max(0, self.navigation.currentRow())

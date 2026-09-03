@@ -35,9 +35,8 @@ QMainWindow, QStackedWidget, #workspace { background: #0D0F14; }
 #navigation::item:selected { background: #24283A; color: #AEB7FF; border-left: 3px solid #7381FF; }
 #pageTitle { font-size: 25px; font-weight: 700; color: #F5F7FA; }
 #hint, #muted { color: #9299A8; }
-#songTitle { font-size: 25px; font-weight: 700; color: #F5F7FA; }
 #studioCard, #coverSettings, #stemTrack, #lyricView { background: #151821; border: 1px solid #222733; border-radius: 12px; }
-#cardTitle, #dialogTitle { font-size: 17px; font-weight: 700; color: #F5F7FA; }
+#dialogTitle { font-size: 17px; font-weight: 700; color: #F5F7FA; }
 #cardTitleSmall { font-size: 13px; font-weight: 700; color: #E8EAF0; }
 #statusChip { color: #AEB7FF; background: #22273A; border-radius: 9px; padding: 3px 9px; }
 #dangerChip { color: #FFB4B4; background: #3A2428; border-radius: 9px; padding: 3px 9px; }
