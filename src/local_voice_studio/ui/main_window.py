@@ -6,10 +6,10 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QUrl
-from PySide6.QtGui import QCloseEvent, QDesktopServices, QIcon, QTextCursor
+from PySide6.QtGui import QCloseEvent, QDesktopServices, QIcon, QPainter, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
-    QGroupBox, QPlainTextEdit, QProgressBar, QPushButton, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
+    QGroupBox, QPlainTextEdit, QProgressBar, QPushButton, QStackedWidget, QStyledItemDelegate, QStyleOptionViewItem, QToolButton, QVBoxLayout, QWidget,
 )
 
 from ..paths import AppPaths
@@ -100,7 +100,7 @@ class MainWindow(QMainWindow):
     def _build(self) -> None:
         central = QWidget(); root = QHBoxLayout(central); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0); self.setCentralWidget(central)
         sidebar = QWidget(); sidebar.setObjectName("sidebar"); sidebar.setFixedWidth(220); side_layout = QVBoxLayout(sidebar); side_layout.setContentsMargins(0, 0, 0, 0); brand = QLabel("VoiceStudio"); brand.setObjectName("brand"); side_layout.addWidget(brand); brand_sub = QLabel("LOCAL AI AUDIO STUDIO"); brand_sub.setObjectName("brandSub"); side_layout.addWidget(brand_sub); self.project_button = QToolButton(); self.project_button.setObjectName("projectPicker"); self.project_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon); self.project_button.setPopupMode(QToolButton.InstantPopup); self.project_menu = QMenu(self.project_button); self.project_menu.aboutToShow.connect(self._refresh_project_menu); self.project_button.setMenu(self.project_menu); side_layout.addWidget(self.project_button)
-        self.navigation = QListWidget(); self.navigation.setObjectName("navigation"); self.navigation.setFrameShape(QListWidget.NoFrame); side_layout.addWidget(self.navigation); task_center = QPushButton("任务中心"); task_center.setObjectName("sidebarButton"); task_center.clicked.connect(self._open_task_center); side_layout.addWidget(task_center); version = QLabel("GPT-SoVITS V2ProPlus\n完全本地 · 无遥测"); version.setObjectName("sidebarFoot"); side_layout.addWidget(version); root.addWidget(sidebar)
+        self.navigation = QListWidget(); self.navigation.setObjectName("navigation"); self.navigation.setFrameShape(QListWidget.NoFrame); self.navigation.setItemDelegate(_NavigationDelegate(self.navigation)); side_layout.addWidget(self.navigation); task_center = QPushButton("任务中心"); task_center.setObjectName("sidebarButton"); task_center.clicked.connect(self._open_task_center); side_layout.addWidget(task_center); version = QLabel("GPT-SoVITS V2ProPlus\n完全本地 · 无遥测"); version.setObjectName("sidebarFoot"); side_layout.addWidget(version); root.addWidget(sidebar)
         workspace = QWidget(); workspace.setObjectName("workspace"); workspace_layout = QVBoxLayout(workspace); workspace_layout.setContentsMargins(0, 0, 0, 0); workspace_layout.setSpacing(0)
         topbar = QFrame(); topbar.setObjectName("topbar"); topbar_layout = QHBoxLayout(topbar); topbar_layout.setContentsMargins(26, 0, 26, 0); topbar_layout.setSpacing(8)
         topbar_layout.addWidget(QLabel("创作")); topbar_layout.addWidget(QLabel("›")); current_title = QLabel("AI 翻唱工作台"); current_title.setObjectName("topbarTitle"); topbar_layout.addWidget(current_title); topbar_layout.addStretch()
@@ -196,3 +196,27 @@ class MainWindow(QMainWindow):
 
 
 STYLE = load_theme()
+
+
+class _NavigationDelegate(QStyledItemDelegate):
+    """Keep the existing five-row navigation API while showing groups."""
+
+    _groups = {0: "创作", 2: "声音", 4: "工具"}
+
+    def sizeHint(self, option: QStyleOptionViewItem, index):
+        size = super().sizeHint(option, index)
+        if index.row() in self._groups:
+            size.setHeight(size.height() + 28)
+        return size
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
+        group = self._groups.get(index.row())
+        item_option = QStyleOptionViewItem(option)
+        if group:
+            painter.save()
+            painter.setPen("#697180")
+            painter.setFont(option.font)
+            painter.drawText(option.rect.adjusted(18, 3, -10, -9), Qt.AlignLeft | Qt.AlignVCenter, group)
+            painter.restore()
+            item_option.rect = option.rect.adjusted(0, 28, 0, 0)
+        super().paint(painter, item_option, index)
