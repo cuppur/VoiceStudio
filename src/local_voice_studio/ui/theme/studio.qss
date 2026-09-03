@@ -22,6 +22,11 @@ QMainWindow, QStackedWidget, #workspace { background: #0D0F14; }
 #coverPage QSlider::groove:horizontal { height: 3px; background: #273041; border-radius: 2px; }
 #coverPage QSlider::handle:horizontal { width: 12px; margin: -5px 0; border-radius: 6px; background: #8A82FF; border: 1px solid #A8A0FF; }
 #coverPage QSpinBox, #coverPage QComboBox { background: #0C121B; border: 1px solid #273142; border-radius: 8px; padding: 6px; }
+#voiceSelector { background: #0C121B; border: 1px solid #33415F; border-radius: 12px; padding: 6px 10px; }
+#voiceSelector:hover, #voiceSelector:focus { border-color: #6877F1; }
+#voiceSelectorValue { background: transparent; border: 0; padding: 0; color: #F5F7FA; line-height: 18px; }
+#voiceSelector::drop-down { width: 28px; border: 0; }
+#voiceSelector QAbstractItemView { background: #111620; border: 1px solid #33415F; selection-background-color: #24283A; outline: 0; }
 #sidebar { background: #11141B; border-right: 1px solid #20242E; }
 #topbar { min-height: 72px; background: rgba(9, 11, 16, 220); border-bottom: 1px solid #131924; }
 #topbar QLabel { color: #7D8799; font-size: 12px; }

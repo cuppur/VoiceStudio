@@ -1,7 +1,36 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QComboBox, QWidget
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import QComboBox, QListView, QStyle, QStyledItemDelegate, QWidget
+
+
+class _VoiceCardDelegate(QStyledItemDelegate):
+    """Render voice choices as compact two-line cards in the popup."""
+
+    def paint(self, painter, option, index) -> None:
+        item = index.model().item(index.row())
+        if item is None:
+            return super().paint(painter, option, index)
+        painter.save()
+        if option.state & QStyle.State_Selected:
+            painter.fillRect(option.rect, "#24283A")
+        elif option.state & QStyle.State_MouseOver:
+            painter.fillRect(option.rect, "#191D26")
+        name, *details = str(item.text()).split(" · ")
+        painter.setPen("#F5F7FA" if item.flags() & Qt.ItemIsEnabled else "#626A78")
+        title_font = QFont(option.font); title_font.setBold(True)
+        painter.setFont(title_font)
+        painter.drawText(option.rect.adjusted(14, 7, -10, -24), Qt.AlignLeft | Qt.AlignVCenter, name)
+        painter.setFont(option.font)
+        painter.setPen("#9299A8" if item.flags() & Qt.ItemIsEnabled else "#555C68")
+        painter.drawText(option.rect.adjusted(14, 27, -10, -5), Qt.AlignLeft | Qt.AlignVCenter, " · ".join(details))
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        size.setHeight(max(54, size.height()))
+        return size
 
 
 class VoiceSelector(QComboBox):
@@ -12,11 +41,27 @@ class VoiceSelector(QComboBox):
             parent, project_root = project_root, None
         super().__init__(parent)
         self.project_root = project_root
+        self.setObjectName("voiceSelector")
+        self.setMinimumHeight(58)
+        self.setView(QListView())
+        self.view().setItemDelegate(_VoiceCardDelegate(self.view()))
+        self.view().setSpacing(2)
+        self.setEditable(True)
+        self.lineEdit().setReadOnly(True)
+        self.lineEdit().setObjectName("voiceSelectorValue")
         self.currentIndexChanged.connect(self._emit_if_allowed)
+        self.currentIndexChanged.connect(self._update_card_text)
 
     def _emit_if_allowed(self, index: int) -> None:
         if index >= 0 and self.model().item(index).flags() & Qt.ItemIsEnabled:
             self.voice_selected.emit(self.itemData(index))
+
+    def _update_card_text(self, index: int) -> None:
+        if index < 0:
+            self.lineEdit().clear()
+            return
+        parts = self.itemText(index).split(" · ")
+        self.lineEdit().setText("\n".join((parts[0], " · ".join(parts[1:]))))
 
     def set_profiles(self, profiles) -> None:
         self.clear()
