@@ -39,12 +39,23 @@ def test_export_probe_parses_strict_audio_fields(monkeypatch, tmp_path):
     assert info.channels == 2
     assert info.codec_name == "mp3"
     assert info.bit_rate == 320000
-    assert "-show_entries" in FakeProcess.seen
+    assert FakeProcess.seen[FakeProcess.seen.index("-show_entries") + 1] == "stream=codec_name,sample_rate,channels:format=duration,bit_rate"
 
 
 @pytest.mark.parametrize("payload", [b"not json", b'{"streams": []}', b'{"streams":[{}],"format":{}}'])
 def test_export_probe_rejects_non_json_or_incomplete(monkeypatch, tmp_path, payload):
     FakeProcess.payload = payload
+    monkeypatch.setattr("local_voice_studio.cover.exporting.audio_probe.ManagedProcess", FakeProcess)
+    with pytest.raises(ValueError):
+        ExportAudioProbe(tmp_path / "ffprobe").probe(tmp_path / "x.wav")
+
+
+@pytest.mark.parametrize("duration", ["NaN", "Infinity", "-Infinity"])
+def test_export_probe_rejects_non_finite_duration(monkeypatch, tmp_path, duration):
+    FakeProcess.payload = good_payload()
+    payload = json.loads(FakeProcess.payload.decode())
+    payload["format"]["duration"] = duration
+    FakeProcess.payload = json.dumps(payload).encode()
     monkeypatch.setattr("local_voice_studio.cover.exporting.audio_probe.ManagedProcess", FakeProcess)
     with pytest.raises(ValueError):
         ExportAudioProbe(tmp_path / "ffprobe").probe(tmp_path / "x.wav")

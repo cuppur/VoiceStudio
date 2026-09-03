@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -34,7 +35,7 @@ class ExportAudioProbe:
 
     def probe(self, path: Path, *, cancel: Any = None) -> ExportAudioInfo:
         command = [str(self.ffprobe), "-v", "error", "-select_streams", "a:0",
-                   "-show_entries", "stream=codec_name,sample_rate,channels,bit_rate:format=duration,bit_rate",
+                   "-show_entries", "stream=codec_name,sample_rate,channels:format=duration,bit_rate",
                    "-of", "json", str(path)]
         process = ManagedProcess(command, cancel=cancel, capture_stdout=True)
         self.process = process
@@ -68,12 +69,12 @@ class ExportAudioProbe:
             codec = str(stream["codec_name"])
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("ffprobe 缺少音频字段") from exc
-        raw_bitrate = stream.get("bit_rate", fmt.get("bit_rate"))
+        raw_bitrate = fmt.get("bit_rate")
         try:
             bitrate = int(raw_bitrate) if raw_bitrate not in (None, "", "N/A") else None
         except (TypeError, ValueError) as exc:
             raise ValueError("ffprobe 比特率无效") from exc
-        if duration <= 0 or rate <= 0 or channels <= 0 or not codec:
+        if not math.isfinite(duration) or duration <= 0 or rate <= 0 or channels <= 0 or not codec:
             raise ValueError("ffprobe 音频字段无效")
         return ExportAudioInfo(duration, rate, channels, codec, bitrate)
 
