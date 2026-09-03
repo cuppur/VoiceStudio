@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from ...audio import AudioProbe, probe_audio
+from .audio_probe import ExportAudioInfo, ExportAudioProbe
 from ..cancellation import as_cancellation_token
 from ..errors import AssetValidationError
 from .models import ExportFormat
@@ -25,8 +25,10 @@ class ValidatedExportAudio:
 class ExportOutputValidator:
     """Probe and enforce the audio contract for a staged WAV or MP3."""
 
-    def __init__(self, probe: Callable[..., AudioProbe] | None = None):
-        self.probe = probe or probe_audio
+    def __init__(self, probe: Callable[..., ExportAudioInfo] | None = None, *, ffprobe: Path | str | None = None):
+        self.probe = probe
+        if self.probe is None and ffprobe is not None:
+            self.probe = ExportAudioProbe(ffprobe)
 
     def validate(
         self,
@@ -34,7 +36,7 @@ class ExportOutputValidator:
         *,
         expected_format: ExportFormat | str,
         source_duration_seconds: float,
-        probe: Callable[..., AudioProbe] | None = None,
+        probe: Callable[..., ExportAudioInfo] | None = None,
         cancel: Any = None,
     ) -> ValidatedExportAudio:
         token = as_cancellation_token(cancel)
@@ -48,7 +50,10 @@ class ExportOutputValidator:
         if not path.is_file() or path.stat().st_size < minimum:
             raise AssetValidationError(f"导出的 {fmt.upper()} 文件无效或为空")
         try:
-            result = (probe or self.probe)(path, cancel=token)
+            active_probe = probe or self.probe
+            if active_probe is None:
+                raise RuntimeError("ExportAudioProbe 未配置")
+            result = active_probe(path, cancel=token)
         except InterruptedError:
             raise
         except Exception as exc:

@@ -30,7 +30,8 @@ class CoverExporter:
     def __init__(self, paths: AppPaths | None = None, *, backend: ExportBackend | None = None, probe=None):
         self.paths = paths or AppPaths.default()
         self.backend = backend
-        self.validator = ExportOutputValidator(probe)
+        ffprobe = EngineRuntimeResolver(self.paths).resolve_private_tool("ffprobe")
+        self.validator = ExportOutputValidator(probe, ffprobe=ffprobe)
 
     def _backend(self) -> ExportBackend:
         if self.backend is None:

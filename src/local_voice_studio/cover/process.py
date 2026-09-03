@@ -24,10 +24,12 @@ FFMPEG_QUIET_ARGS = ("-hide_banner", "-nostats", "-loglevel", "error")
 class ManagedProcess:
     """Run one trusted local process with cancellable, bounded diagnostics."""
 
-    def __init__(self, command: Sequence[str | Path], *, cancel: Any = None, stderr_limit: int = 8_192) -> None:
+    def __init__(self, command: Sequence[str | Path], *, cancel: Any = None, stderr_limit: int = 8_192, capture_stdout: bool = False) -> None:
         self.command = [str(item) for item in command]
         self.cancel = as_cancellation_token(cancel)
         self.stderr_limit = max(1, int(stderr_limit))
+        self.capture_stdout = bool(capture_stdout)
+        self._stdout_data = bytearray()
         self.process: subprocess.Popen[bytes] | None = None
         self._stderr_stream: BinaryIO | None = None
         self._stderr_thread: threading.Thread | None = None
@@ -42,6 +44,11 @@ class ManagedProcess:
         with self._state_lock:
             data = bytes(self._stderr_buffer)
         return data.decode("utf-8", errors="replace")
+
+    @property
+    def stdout(self) -> bytes:
+        with self._state_lock:
+            return bytes(self._stdout_data)
 
     def stop(self) -> None:
         self._stop_requested.set()
@@ -131,12 +138,13 @@ class ManagedProcess:
             if self.process is not None:
                 raise RuntimeError("ManagedProcess 已在运行")
             self._stderr_buffer.clear()
+            self._stdout_data.clear()
             self._stop_requested.clear()
 
         popen_kwargs: dict[str, Any] = {
             "cwd": str(cwd) if cwd else None,
             "stdin": subprocess.DEVNULL,
-            "stdout": subprocess.DEVNULL,
+            "stdout": subprocess.PIPE if self.capture_stdout else subprocess.DEVNULL,
             "stderr": subprocess.PIPE,
         }
         if os.name != "nt":
@@ -170,6 +178,17 @@ class ManagedProcess:
             if reader is not None and reader.is_alive():
                 self._close_stream(stream)
                 self._join_reader(reader)
+            if self.capture_stdout:
+                stdout = getattr(process, "stdout", None)
+                if stdout is not None:
+                    try:
+                        data = stdout.read()
+                    except (OSError, ValueError):
+                        data = b""
+                    if data:
+                        with self._state_lock:
+                            self._stdout_data.extend(data)
+                    self._close_stream(stdout)
             return int(returncode)
         finally:
             if process.poll() is None:
