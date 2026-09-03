@@ -26,7 +26,7 @@ class FakeExportBackend:
         if format == self.fail_format:
             raise RuntimeError("injected encoder failure")
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes((format.upper() + "-TEST").encode())
+        target.write_bytes((format.upper() + "-TEST").encode() + b"\0" * 256)
         if format == self.cancel_after and cancel is not None:
             source = getattr(cancel, "_source", None)
             if hasattr(source, "set"):
@@ -50,7 +50,11 @@ def _project(tmp_path: Path) -> tuple[AppPaths, CoverProject, Path]:
 
 
 def _exporter(paths: AppPaths, backend: FakeExportBackend) -> CoverExporter:
-    return CoverExporter(paths, backend=backend)
+    def probe(path, *, cancel=None):
+        return type("Probe", (), {"duration_seconds": 1.0, "sample_rate": 48000,
+                                   "channels": 2, "codec_name": "mp3" if ".mp3" in path.name else "pcm_s16le",
+                                   "bit_rate": 320000})()
+    return CoverExporter(paths, backend=backend, probe=probe)
 
 
 def test_export_cancel_cleans_staging_and_preserves_existing_outputs(tmp_path: Path) -> None:

@@ -33,14 +33,16 @@ def test_export_wav_mp3_both_and_unicode_sidecar(tmp_path, monkeypatch):
     root = tmp_path / "projects"; cover = CoverProject.create(root / "p", title="我的翻唱", cover_id="a" * 32); source = wav(cover.root / "outputs" / "mix.wav")
     cover.add_asset(CoverAsset("mix", "final_mix", "outputs/mix.wav", hashlib.sha256(source.read_bytes()).hexdigest(), "ai_generated", "ffmpeg-mixer"))
     cover.attest_rights()
-    paths = AppPaths(tmp_path / "data", root, tmp_path / "runtime", tmp_path / "engine", tmp_path / "models", tmp_path / "logs", tmp_path / "db.sqlite3"); exporter = CoverExporter(paths); exporter.paths.runtime_root.mkdir(parents=True, exist_ok=True)
+    paths = AppPaths(tmp_path / "data", root, tmp_path / "runtime", tmp_path / "engine", tmp_path / "models", tmp_path / "logs", tmp_path / "db.sqlite3")
+    probe = lambda path, *, cancel=None: type("Probe", (), {"duration_seconds": 1.0, "sample_rate": 48000, "channels": 2, "codec_name": "mp3" if ".mp3" in path.name else "pcm_s16le", "bit_rate": 320000})()
+    exporter = CoverExporter(paths, probe=probe); exporter.paths.runtime_root.mkdir(parents=True, exist_ok=True)
     import local_voice_studio.cover.exporting as mod
     class P:
         returncode = 0
         def __init__(self, args, **kwargs):
             target = Path(args[-1]); target.parent.mkdir(parents=True, exist_ok=True)
             if target.suffix.endswith("wav"): wav(target)
-            else: target.write_bytes(b"ID3")
+            else: target.write_bytes(b"ID3" + b"\0" * 256)
         def poll(self): return 0
     monkeypatch.setattr(mod.EngineRuntimeResolver, "resolve_private_tool", lambda *a, **k: Path("ffmpeg.exe"))
     monkeypatch.setattr(mod.subprocess, "Popen", P)

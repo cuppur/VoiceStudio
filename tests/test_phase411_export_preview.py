@@ -56,7 +56,7 @@ class FakeExportBackend:
     def encode(self, source: Path, target: Path, *, format: str, cancel=None) -> Path:
         self.calls.append(format)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes((b"RIFF" if format == "wav" else b"ID3") + format.encode())
+        target.write_bytes((b"RIFF" if format == "wav" else b"ID3") + format.encode() + b"\0" * 256)
         if format == self.cancel_format:
             raise InterruptedError("cancelled by fake backend")
         if format == self.fail_format:
@@ -73,6 +73,12 @@ def _export(exporter: CoverExporter, project: CoverProject, destination: Path, *
                            publication_rights_ack=True, **kwargs)
 
 
+def _probe(path, *, cancel=None):
+    return type("Probe", (), {"duration_seconds": 1.0, "sample_rate": 48000,
+                               "channels": 2, "codec_name": "mp3" if ".mp3" in path.name else "pcm_s16le",
+                               "bit_rate": 320000})()
+
+
 def _transaction_files(destination: Path) -> list[Path]:
     return [*destination.glob("*.staging"), *destination.glob("*.voicestudio-backup")]
 
@@ -85,7 +91,7 @@ def test_export_cancel_uses_valid_project_and_cleans_transaction(tmp_path: Path)
     for path in old.values():
         path.write_bytes(b"old-" + path.name.encode())
     backend = FakeExportBackend(cancel_format="wav")
-    exporter = CoverExporter(paths, backend=backend)
+    exporter = CoverExporter(paths, backend=backend, probe=_probe)
 
     with pytest.raises(CoverError) as raised:
         _export(exporter, project, destination)
@@ -105,7 +111,7 @@ def test_export_second_format_failure_rolls_back_without_partial_outputs(tmp_pat
     for path in old.values():
         path.write_bytes(b"old-" + path.name.encode())
     backend = FakeExportBackend(fail_format="mp3")
-    exporter = CoverExporter(paths, backend=backend)
+    exporter = CoverExporter(paths, backend=backend, probe=_probe)
 
     with pytest.raises(RuntimeError, match="fake mp3 failure"):
         _export(exporter, project, destination)
@@ -123,7 +129,7 @@ def test_export_sidecar_failure_rolls_back_after_both_formats_publish(tmp_path: 
     for path in old.values():
         path.write_bytes(b"old-" + path.name.encode())
     backend = FakeExportBackend()
-    exporter = CoverExporter(paths, backend=backend)
+    exporter = CoverExporter(paths, backend=backend, probe=_probe)
 
     original_write_text = Path.write_text
 
@@ -146,7 +152,7 @@ def test_export_rejects_existing_outputs_with_structured_conflict(tmp_path: Path
     destination.mkdir()
     (destination / "result.wav").write_bytes(b"old")
     with pytest.raises(ExportConflictError) as raised:
-        CoverExporter(paths, backend=FakeExportBackend()).export(
+        CoverExporter(paths, backend=FakeExportBackend(), probe=_probe).export(
             project.project_root, project.id, format="wav", destination=destination,
             file_name="result", final_asset_id="final", existing="reject",
             publication_rights_ack=True,
@@ -159,7 +165,7 @@ def test_export_asset_hash_mismatch_is_structured(tmp_path: Path) -> None:
     project.assets[-1].sha256 = "0" * 64
     project.save()
     with pytest.raises(AssetValidationError) as raised:
-        CoverExporter(paths, backend=FakeExportBackend()).export(
+        CoverExporter(paths, backend=FakeExportBackend(), probe=_probe).export(
             project.project_root, project.id, format="wav", destination=tmp_path / "exports",
             file_name="result", final_asset_id="final", existing="replace",
             publication_rights_ack=True,

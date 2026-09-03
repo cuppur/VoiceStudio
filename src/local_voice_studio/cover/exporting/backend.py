@@ -41,7 +41,10 @@ class FFmpegExportBackend:
         # Keep diagnostic flags centralized in cover.process; encoding options
         # belong exclusively to this backend, never to the transaction service.
         args = [str(self.ffmpeg), "-y", *FFMPEG_QUIET_ARGS, "-i", str(source), "-ar", "48000", "-ac", "2",
-                "-c:a", codec, "-f", format, str(target)]
+                "-c:a", codec]
+        if format == "mp3":
+            args += ["-b:a", "320k"]
+        args += ["-f", format, str(target)]
         process = process_module.ManagedProcess(args, cancel=token)
         self.process = process
         try:

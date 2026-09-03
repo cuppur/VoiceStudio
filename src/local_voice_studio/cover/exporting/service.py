@@ -21,14 +21,16 @@ from ..project import CoverProject, RIGHTS_ATTESTATION_TEXT_HASH
 from .backend import ExportBackend, FFmpegExportBackend
 from .manifest import ProvenanceManifestBuilder
 from .models import ExportFormat, ExportRequest, OverwritePolicy
+from .validation import ExportOutputValidator
 
 
 class CoverExporter:
     """Export a validated AI final mix through one injected backend."""
 
-    def __init__(self, paths: AppPaths | None = None, *, backend: ExportBackend | None = None):
+    def __init__(self, paths: AppPaths | None = None, *, backend: ExportBackend | None = None, probe=None):
         self.paths = paths or AppPaths.default()
         self.backend = backend
+        self.validator = ExportOutputValidator(probe)
 
     def _backend(self) -> ExportBackend:
         if self.backend is None:
@@ -133,6 +135,18 @@ class CoverExporter:
         source_path = ensure_within(cover.root, cover.root / source.relative_path)
         if not source_path.is_file() or not source.sha256 or sha256_file(source_path) != source.sha256:
             raise AssetValidationError("final_mix 缺失或 Hash 不匹配")
+        try:
+            source_probe = self.validator.probe(source_path, cancel=token)
+        except InterruptedError as exc:
+            raise self._cancel_error() from exc
+        except Exception as exc:
+            raise AssetValidationError("无法读取 final_mix 音频") from exc
+        source_duration = float(
+            source_probe.get("duration_seconds", 0) if isinstance(source_probe, dict)
+            else getattr(source_probe, "duration_seconds", 0)
+        )
+        if source_duration <= 0:
+            raise AssetValidationError("final_mix 时长无效")
 
         output_name = self._safe_output_id(cover, file_name, output_id)
         folder = Path(destination).resolve() if destination else (cover.root / "exports").resolve()
@@ -163,6 +177,15 @@ class CoverExporter:
                     raise
                 if not staging.is_file() or staging.stat().st_size <= 0:
                     raise AssetValidationError(f"导出未生成有效的 {target.suffix.lstrip('.').upper()} 文件")
+                try:
+                    self.validator.validate(
+                        staging,
+                        expected_format=target.suffix.lstrip("."),
+                        source_duration_seconds=source_duration,
+                        cancel=token,
+                    )
+                except InterruptedError as exc:
+                    raise self._cancel_error() from exc
                 staged.append(staging)
 
             stored_settings = source.metadata.get("settings", {}) if isinstance(source.metadata, dict) else {}
