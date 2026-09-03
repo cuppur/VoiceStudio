@@ -1,13 +1,14 @@
 import wave
 from pathlib import Path
 
-from local_voice_studio.singing.verification import SingingModelVerifier, VerificationResult, verify_inference_output
+from local_voice_studio.singing.verification import SingingModelVerifier, VerificationResult, validate_wav_quality, verify_inference_output
 
 
-def _wav(path: Path, seconds: float, value: int = 1000) -> None:
+def _wav(path: Path, seconds: float, value: int = 1000, *, rate: int = 16000, channels: int = 1) -> None:
     with wave.open(str(path), "wb") as stream:
-        stream.setnchannels(1); stream.setsampwidth(2); stream.setframerate(16000)
-        stream.writeframes((value.to_bytes(2, "little", signed=True)) * int(16000 * seconds))
+        stream.setnchannels(channels); stream.setsampwidth(2); stream.setframerate(rate)
+        frame = value.to_bytes(2, "little", signed=True) * channels
+        stream.writeframes(frame * int(rate * seconds))
 
 
 def test_real_verification_accepts_decoded_non_silent_output(tmp_path):
@@ -24,6 +25,26 @@ def test_real_verification_rejects_short_or_silent_output(tmp_path):
     assert not result.ok
     assert any("3-8" in error for error in result.errors)
     assert any("静音" in error for error in result.errors)
+
+
+def test_quality_gate_accepts_matching_pcm_without_loading_entire_file(tmp_path):
+    source, output = tmp_path / "source.wav", tmp_path / "output.wav"
+    _wav(source, 4.0, 1000); _wav(output, 4.1, 1200)
+    result = validate_wav_quality(output, reference=source)
+    assert result.ok
+    assert result.details["finite_samples"] is True
+    assert result.details["sample_rate"] == 16000
+
+
+def test_quality_gate_rejects_shape_drift_and_hard_clipping(tmp_path):
+    source, output = tmp_path / "source.wav", tmp_path / "output.wav"
+    _wav(source, 4.0, 1000)
+    _wav(output, 4.0, 32767, rate=8000, channels=2)
+    result = validate_wav_quality(output, reference=source)
+    assert not result.ok
+    assert any("采样率" in error for error in result.errors)
+    assert any("声道数" in error for error in result.errors)
+    assert any("硬削波" in error for error in result.errors)
 
 
 class _Engine:

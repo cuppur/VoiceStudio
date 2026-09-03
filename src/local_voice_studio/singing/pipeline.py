@@ -19,7 +19,7 @@ from ..paths import AppPaths, ensure_within, validate_id, validate_sha256
 from ..runtime import EngineRuntimeResolver
 from .models import RVCInferenceSettings, SingingModelVersion
 from .dataset import SourceAssetDatasetBuilder
-from .verification import SingingModelVerifier
+from .verification import SingingModelVerifier, validate_wav_quality
 
 
 def _sha256(path: Path) -> str:
@@ -30,13 +30,12 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _validate_wav(path: Path) -> None:
-    try:
-        with wave.open(str(path), "rb") as stream:
-            if stream.getnframes() <= 0 or stream.getframerate() <= 0 or stream.getnchannels() <= 0:
-                raise ValueError
-    except (OSError, EOFError, wave.Error, ValueError) as exc:
-        raise RuntimeError("转换未生成有效 WAV 音频") from exc
+def _validate_wav(path: Path, *, reference: Path, cancel: Any = None) -> None:
+    result = validate_wav_quality(path, reference=reference, cancel=cancel)
+    if not result.ok:
+        if "音频质量校验已取消" in result.errors:
+            raise RuntimeError("任务已取消")
+        raise RuntimeError("转换输出质量校验失败：" + "；".join(result.errors))
 
 
 class SingingPipeline:
@@ -228,7 +227,7 @@ class SingingPipeline:
         if cached:
             cached_path = ensure_within(cover.root, cover.root / cached.relative_path)
             if cached_path.is_file() and _sha256(cached_path) == cached.sha256:
-                try: _validate_wav(cached_path)
+                try: _validate_wav(cached_path, reference=source_path, cancel=cancel)
                 except RuntimeError: pass
                 else: return {"output_path": str(cached_path), "output_sha256": cached.sha256, "content_origin": "ai_generated", "asset_id": cached.id, "cache_hit": True}
         output_id = validate_id(str(payload.get("output_id", "ai-vocal-" + cache_key[:16])), legacy=True, field="output_id")
@@ -244,7 +243,7 @@ class SingingPipeline:
                 raise RuntimeError("任务已取消")
             if produced != staging or not staging.is_file() or not staging.stat().st_size:
                 raise RuntimeError("转换未生成有效输出")
-            _validate_wav(staging)
+            _validate_wav(staging, reference=source_path, cancel=cancel)
             staging.replace(output)
             asset = CoverAsset(id=output_id, role="ai_vocal", relative_path=output.relative_to(cover.root).as_posix(), sha256=_sha256(output), content_origin="ai_generated", producer="rvc_v2", producer_version=cache_key, model_id=model.id, model_sha256=model.checkpoint_sha256, source_asset_ids=[source.id])
             cover.add_asset(asset)
