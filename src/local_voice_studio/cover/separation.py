@@ -16,6 +16,10 @@ from .project import CoverProject
 
 MODEL_NAME = "HP2_all_vocals.pth"
 SEPARATOR_VERSION = "uvr5-hp2-v1"
+ROFORMER_MODEL_NAME = "melband_roformer_vocals.onnx"
+ROFORMER_MODEL_SHA256 = "64a4f3bee48fbe7d971b23875adc924ed004c3533f49672592641dddc0f6f561"
+ROFORMER_MODEL_SIZE = 953292899
+ROFORMER_VERSION = "melband-roformer-onnx-60cb6b4"
 
 
 @dataclass(frozen=True)
@@ -35,6 +39,12 @@ class SeparationEngine(Protocol):
     def describe(self, paths: AppPaths) -> SeparationEngineDescriptor:
         ...
 
+    def command(self, paths: AppPaths, python: Path, source: Path, input_dir: Path, output_dir: Path) -> list[str]:
+        ...
+
+    def outputs(self, output_dir: Path) -> tuple[Path | None, Path | None]:
+        ...
+
 
 class UVR5SeparationEngine:
     id = "uvr5"
@@ -47,12 +57,75 @@ class UVR5SeparationEngine:
             ("vocal", "instrumental"), runtime.status,
         )
 
+    def command(self, paths: AppPaths, python: Path, source: Path, input_dir: Path, output_dir: Path) -> list[str]:
+        return [str(python), "-m", "local_voice_studio.uvr_cli", "--engine", str(paths.engine_root),
+                "--input", str(input_dir), "--output", str(output_dir)]
+
+    def outputs(self, output_dir: Path) -> tuple[Path | None, Path | None]:
+        vocal = next((path for path in (output_dir / "vocal").glob("*.wav") if _valid_wav(path)), None)
+        instrumental = next((path for path in (output_dir / "instrumental").glob("*.wav") if _valid_wav(path)), None)
+        return vocal, instrumental
+
+
+@dataclass(frozen=True)
+class RoFormerRuntimeStatus:
+    status: str
+    model_path: Path | None = None
+    model_sha256: str = ""
+    error: str = ""
+
+    @property
+    def ready(self) -> bool:
+        return self.status == "ready"
+
+    @classmethod
+    def detect(cls, paths: AppPaths | None = None) -> "RoFormerRuntimeStatus":
+        paths = paths or AppPaths.default()
+        model = paths.models_root / "separation" / ROFORMER_MODEL_NAME
+        if not model.is_file():
+            return cls("missing", model, error="RoFormer 未安装")
+        try:
+            manifest_path = EngineRuntimeResolver(paths).bundle_root / "manifests" / "runtime-assets-v1.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            pin = next((item for item in manifest.get("installed_file_pins", []) if item.get("id") == "roformer-vocals-onnx"), None)
+            if not pin or int(pin.get("size", 0)) != ROFORMER_MODEL_SIZE or str(pin.get("sha256", "")).lower() != ROFORMER_MODEL_SHA256:
+                return cls("corrupt", model, error="RoFormer 资产清单缺少固定版本")
+            if model.stat().st_size != ROFORMER_MODEL_SIZE:
+                return cls("corrupt", model, error="RoFormer 文件损坏")
+            actual = sha256_file(model)
+            if actual != ROFORMER_MODEL_SHA256:
+                return cls("hash_mismatch", model, actual, error="RoFormer 模型 Hash 不匹配")
+            return cls("ready", model, actual)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return cls("corrupt", model, error="RoFormer 文件损坏")
+
+
+class RoFormerSeparationEngine:
+    id = "roformer"
+    version = ROFORMER_VERSION
+
+    def describe(self, paths: AppPaths) -> SeparationEngineDescriptor:
+        runtime = RoFormerRuntimeStatus.detect(paths)
+        return SeparationEngineDescriptor(
+            self.id, self.version, runtime.model_path, runtime.model_sha256,
+            ("vocal", "instrumental", "high_quality"), runtime.status,
+        )
+
+    def command(self, paths: AppPaths, python: Path, source: Path, input_dir: Path, output_dir: Path) -> list[str]:
+        model = paths.models_root / "separation" / ROFORMER_MODEL_NAME
+        return [str(python), "-m", "local_voice_studio.roformer_cli", "--input", str(source),
+                "--output", str(output_dir), "--model", str(model)]
+
+    def outputs(self, output_dir: Path) -> tuple[Path | None, Path | None]:
+        vocal, instrumental = output_dir / "vocal" / "vocals.wav", output_dir / "instrumental" / "instrumental.wav"
+        return (vocal if _valid_wav(vocal) else None, instrumental if _valid_wav(instrumental) else None)
+
 
 class SeparationEngineRegistry:
     """Small registry so pipelines do not branch on engine internals."""
 
     def __init__(self, engines: tuple[SeparationEngine, ...] | None = None):
-        self._engines = {engine.id: engine for engine in (engines or (UVR5SeparationEngine(),))}
+        self._engines = {engine.id: engine for engine in (engines or (UVR5SeparationEngine(), RoFormerSeparationEngine()))}
 
     def get(self, engine_id: str) -> SeparationEngine:
         try:
@@ -148,11 +221,10 @@ class SongSeparationPipeline:
         input_dir.mkdir(parents=True); output_dir.mkdir()
         shutil.copy2(source, input_dir / source.name)
         try:
-            if progress: progress(.15, "preparing_model", "正在准备 UVR5 模型")
+            if progress: progress(.15, "preparing_model", f"正在准备 {engine.id.upper()} 模型")
             launch = EngineRuntimeResolver(self.paths).worker_launch()
             python = launch.program
-            command = [str(python), "-m", "local_voice_studio.uvr_cli", "--engine", str(self.paths.engine_root),
-                       "--input", str(input_dir), "--output", str(output_dir)]
+            command = engine.command(self.paths, python, input_dir / source.name, input_dir, output_dir)
             env = os.environ.copy(); env["CUDA_VISIBLE_DEVICES"] = "0"
             env["PYTHONPATH"] = str(launch.source_root) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
             # UVR's CLI is not line-oriented while inference is running.  A
@@ -173,9 +245,8 @@ class SongSeparationPipeline:
                     import time
                     time.sleep(.1)
             if self.process.wait() != 0: raise RuntimeError("UVR5 分离进程失败")
-            vocal = next((p for p in (output_dir / "vocal").glob("*.wav") if _valid_wav(p)), None)
-            instrumental = next((p for p in (output_dir / "instrumental").glob("*.wav") if _valid_wav(p)), None)
-            if not vocal or not instrumental: raise RuntimeError("UVR5 未生成完整的人声与伴奏")
+            vocal, instrumental = engine.outputs(output_dir)
+            if not vocal or not instrumental: raise RuntimeError(f"{engine.id.upper()} 未生成完整的人声与伴奏")
             if progress: progress(.82, "generating_waveforms", "正在验证输出音轨")
             stems = cover.root / "stems"; stems.mkdir(exist_ok=True)
             final_vocal, final_instrumental = stems / "vocals.wav", stems / "instrumental.wav"

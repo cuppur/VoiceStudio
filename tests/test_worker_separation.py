@@ -54,6 +54,27 @@ def test_worker_dispatches_separate_song_and_passes_cancel(monkeypatch, tmp_path
     assert seen["cancel"] is service.cancel_event
 
 
+def test_worker_forwards_roformer_engine_choice(monkeypatch, tmp_path):
+    seen = {}
+    class FakePipeline:
+        def __init__(self, project, *, paths): pass
+        def separate(self, *args, **kwargs):
+            seen.update(kwargs)
+            return {"status": "completed"}
+        def cancel(self): pass
+    monkeypatch.setattr("local_voice_studio.worker.SongSeparationPipeline", FakePipeline)
+    monkeypatch.setattr(
+        "local_voice_studio.worker.CoverApplicationService.prepare_separation",
+        lambda self, cover_id, *, mode: PrepareSeparationCommand(self.project, cover_id, "source/song.wav", "a" * 64, mode),
+    )
+    service = WorkerService(paths(tmp_path)); service.emit = lambda *args, **kwargs: None
+    project = service.paths.projects_root / "p1"; project.mkdir(parents=True)
+    service.handle(Message("separate_song", {"project_path": str(project), "cover_id": "c1", "mode": "roformer"}))
+    assert service.current_thread is not None
+    service.current_thread.join(2)
+    assert seen["engine_id"] == "roformer"
+
+
 def test_worker_never_bypasses_application_separation_validation(monkeypatch, tmp_path):
     service = WorkerService(paths(tmp_path))
     project = service.paths.projects_root / "p1"

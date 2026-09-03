@@ -2,6 +2,7 @@
     [Parameter(Mandatory = $true)][string]$DataRoot,
     [ValidateSet("HF", "HF-Mirror", "ModelScope")][string]$Source = "ModelScope",
     [switch]$DownloadUVR5,
+    [switch]$DownloadRoFormer,
     [switch]$FunctionsOnly
 )
 
@@ -51,6 +52,7 @@ function Test-InstalledFilePins {
     try {
         foreach ($pin in @($Manifest.installed_file_pins)) {
             $target = Join-Path $DataRoot ([string]$pin.path).Replace("/", "\")
+            if ($pin.optional -and -not (Test-Path -LiteralPath $target -PathType Leaf)) { continue }
             Test-PinnedFile -Path $target -Asset $pin
         }
         return $true
@@ -461,13 +463,20 @@ try {
             }
         } finally { if (Test-Path -LiteralPath $rvcExtract) { Remove-Item -LiteralPath $rvcExtract -Recurse -Force } }
     }
+    $roformerModel = Join-Path $resolvedDataRoot "models\separation\melband_roformer_vocals.onnx"
+    $roformerReady = Test-Path -LiteralPath $roformerModel -PathType Leaf
+    if ($DownloadRoFormer -and -not $roformerReady) {
+        Write-Host "[Download] 正在安装固定版本 MelBand RoFormer 高质量分离模型"
+        Invoke-PinnedAssetDownload -Id "roformer-vocals-onnx" -Destination $roformerModel | Out-Null
+        $roformerReady = $true
+    }
     foreach ($rvcId in @("rvc-hubert-config", "rvc-hubert-preprocessor-config", "rvc-hubert-model", "rvc-rmvpe", "rvc-v2-generator", "rvc-v2-discriminator")) {
         $rvcAsset = Get-PinnedAsset -Id $rvcId
         $rvcDestination = Join-Path $resolvedDataRoot ([string]$rvcAsset.destination).Replace("/", "\")
         Invoke-PinnedAssetDownload -Id $rvcId -Destination $rvcDestination | Out-Null
     }
     }
-    $modelsReady = $coreModelsReady -and $privateToolsReady -and (-not $DownloadUVR5 -or $uvrReady)
+    $modelsReady = $coreModelsReady -and $privateToolsReady -and (-not $DownloadUVR5 -or $uvrReady) -and (-not $DownloadRoFormer -or $roformerReady)
     if ($modelsReady) {
         Complete-Step 5 "FFmpeg 与预训练模型已存在，已跳过" -Skipped
     } else {
@@ -519,6 +528,7 @@ try {
     $verifiedFiles = [System.Collections.Generic.List[object]]::new()
     foreach ($pin in @($assetManifest.installed_file_pins)) {
         $target = Join-Path $resolvedDataRoot ([string]$pin.path).Replace("/", "\")
+        if ($pin.optional -and -not (Test-Path -LiteralPath $target -PathType Leaf)) { continue }
         Test-PinnedFile -Path $target -Asset $pin
         $verifiedFiles.Add(@{ path = [string]$pin.path; size = [Int64]$pin.size; sha256 = ([string]$pin.sha256).ToLowerInvariant(); kind = "tool" })
     }

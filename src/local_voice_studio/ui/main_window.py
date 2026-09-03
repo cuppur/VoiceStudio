@@ -49,7 +49,7 @@ class SetupDialog(QDialog):
         self.start_button.setEnabled(False); self.close_button.setEnabled(False); self.log.clear(); self.summary.setText(""); self.progress.setValue(0); self._line_buffer = ""; self._current_step = 0
         for number, name in enumerate(self.STEP_NAMES, 1): self.step_labels[number - 1].setText(f"{number}. {name} — 等待")
         arguments = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(self.script), "-DataRoot", str(self.paths.data_root)]
-        if self.optional_tools.isChecked(): arguments.append("-DownloadUVR5")
+        if self.optional_tools.isChecked(): arguments.extend(("-DownloadUVR5", "-DownloadRoFormer"))
         env = QProcessEnvironment.systemEnvironment(); env.insert("PYTHONUTF8", "1"); env.insert("PYTHONIOENCODING", "utf-8"); self.process.setProcessEnvironment(env)
         self.process.setProgram("powershell.exe"); self.process.setArguments(arguments); self.process.start()
 

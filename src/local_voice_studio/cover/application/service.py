@@ -59,8 +59,8 @@ class CoverApplicationService:
         cover = self._cover(cover_id)
         if not cover.rights_confirmed or cover.rights_attestation_text_hash != RIGHTS_ATTESTATION_TEXT_HASH:
             raise RightsRequiredError("开始分离前必须确认歌曲处理与使用权利声明")
-        if mode != "uvr5":
-            raise ValueError("当前仅支持 UVR5 分离")
+        if mode not in {"uvr5", "roformer"}:
+            raise ValueError("不支持的歌曲分离方式")
         validate_sha256(cover.source_sha256, field="source_sha256")
         source = ensure_within(cover.root, cover.root / cover.source_relative_path)
         if not source.is_file():

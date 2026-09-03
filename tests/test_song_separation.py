@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from pathlib import Path
 import pytest
 from local_voice_studio.cover import CoverProject
-from local_voice_studio.cover.separation import MODEL_NAME, SeparationEngineRegistry, SongSeparationPipeline, UVR5RuntimeStatus
+from local_voice_studio.cover.separation import MODEL_NAME, RoFormerRuntimeStatus, SeparationEngineRegistry, SongSeparationPipeline, UVR5RuntimeStatus
 from local_voice_studio.paths import AppPaths
 
 def setup_case(tmp_path: Path):
@@ -42,6 +42,18 @@ def test_separation_engine_registry_has_explicit_uvr5_descriptor(tmp_path: Path,
     assert descriptor.version == "uvr5-hp2-v1"
     assert descriptor.capabilities == ("vocal", "instrumental")
     assert descriptor.status == "ready"
+
+
+def test_separation_engine_registry_has_offline_roformer_descriptor(tmp_path: Path, monkeypatch):
+    paths, _, _ = setup_case(tmp_path)
+    model = paths.models_root / "separation" / "melband_roformer_vocals.onnx"
+    monkeypatch.setattr("local_voice_studio.cover.separation.RoFormerRuntimeStatus.detect", lambda paths=None: RoFormerRuntimeStatus("ready", model, "2" * 64))
+    engine = SeparationEngineRegistry().get("roformer")
+    descriptor = engine.describe(paths)
+    command = engine.command(paths, Path("python.exe"), Path("song.wav"), Path("input"), Path("output"))
+    assert descriptor.capabilities == ("vocal", "instrumental", "high_quality")
+    assert command[2:4] == ["local_voice_studio.roformer_cli", "--input"]
+    assert "--model" in command and str(model) in command
 
 class FakeProcess:
     def __init__(self, command, **kwargs):

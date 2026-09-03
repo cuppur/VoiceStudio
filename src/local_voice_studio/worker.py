@@ -379,14 +379,15 @@ class WorkerService:
         self.emit(request_id, "result", {"progress": 1.0, "training_run_id": payload.get("training_run_id", ""), "outputs": [str(path) for path in outputs], "checkpoints": {"gpt": gpt[0], "sovits": sovits[0], "gpt_sha256": sha256_file(Path(gpt[0])), "sovits_sha256": sha256_file(Path(sovits[0])), "origin": "trained-local", "trust_status": "verified"}})
 
     def _separate_song(self, request_id: str, payload: dict[str, Any]) -> None:
-        if str(payload.get("mode", "uvr5")) != "uvr5":
-            raise ValueError("当前阶段只支持 UVR5 分离")
+        mode = str(payload.get("mode", "uvr5"))
+        if mode not in {"uvr5", "roformer"}:
+            raise ValueError("不支持的歌曲分离方式")
         project = ensure_within(self.paths.projects_root, Path(str(payload.get("project_path", ""))))
         # The application service is the sole trust boundary.  Never fall
         # back to client-supplied source paths or hashes when the project
         # manifest is missing or invalid.
         command = CoverApplicationService(project, paths=self.paths).prepare_separation(
-            str(payload.get("cover_id", "")), mode="uvr5"
+            str(payload.get("cover_id", "")), mode=mode
         )
         pipeline = SongSeparationPipeline(project, paths=self.paths)
         self.separation = pipeline
@@ -395,6 +396,7 @@ class WorkerService:
                 command.cover_id,
                 command.source_relative_path,
                 command.source_sha256,
+                engine_id=command.mode,
                 cancel=self.cancel_event,
                 progress=lambda value, stage, message: self.emit(request_id, "progress", {"progress": value, "stage": stage, "message": message}),
             )

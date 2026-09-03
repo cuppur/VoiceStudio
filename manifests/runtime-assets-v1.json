@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "manifest_version": "2026.08.13.1",
+  "manifest_version": "2026.09.04.1",
   "engine": {
     "name": "GPT-SoVITS",
     "commit": "d523079fc05d9a8028d6085bffe4a2757c32abb6",
@@ -62,6 +62,19 @@
       "urls": [
         "https://huggingface.co/XXXXRT/GPT-SoVITS-Pretrained/resolve/0c47645e02a7bc3688d7b263b0042c81e3cd82cd/uvr5_weights.zip",
         "https://hf-mirror.com/XXXXRT/GPT-SoVITS-Pretrained/resolve/0c47645e02a7bc3688d7b263b0042c81e3cd82cd/uvr5_weights.zip"
+      ]
+    },
+    {
+      "id": "roformer-vocals-onnx",
+      "version": "60cb6b4b97e41b42f7ff16c2e386f47a8cc7e50a",
+      "destination": "models/separation/melband_roformer_vocals.onnx",
+      "size": 953292899,
+      "sha256": "64a4f3bee48fbe7d971b23875adc924ed004c3533f49672592641dddc0f6f561",
+      "license": "MIT",
+      "source_model_revision": "ac9b0614ab3cd7f77219e18ba494dfd93956c348",
+      "urls": [
+        "https://huggingface.co/smank/mel-band-roformer-vocals-onnx/resolve/60cb6b4b97e41b42f7ff16c2e386f47a8cc7e50a/melband_roformer_vocals.onnx?download=true",
+        "https://hf-mirror.com/smank/mel-band-roformer-vocals-onnx/resolve/60cb6b4b97e41b42f7ff16c2e386f47a8cc7e50a/melband_roformer_vocals.onnx"
       ]
     },
     {
@@ -156,7 +169,16 @@
       "version": "HP2_all_vocals",
       "path": "engines/GPT-SoVITS/tools/uvr5/uvr5_weights/HP2_all_vocals.pth",
       "size": 63454827,
-      "sha256": "39796caa5db18d7f9382d8ac997ac967bfd85f7761014bb807d2543cc844ef05"
+      "sha256": "39796caa5db18d7f9382d8ac997ac967bfd85f7761014bb807d2543cc844ef05",
+      "optional": true
+    },
+    {
+      "id": "roformer-vocals-onnx",
+      "version": "60cb6b4b97e41b42f7ff16c2e386f47a8cc7e50a",
+      "path": "models/separation/melband_roformer_vocals.onnx",
+      "size": 953292899,
+      "sha256": "64a4f3bee48fbe7d971b23875adc924ed004c3533f49672592641dddc0f6f561",
+      "optional": true
     },
     {
       "id": "rvc-hubert-config",

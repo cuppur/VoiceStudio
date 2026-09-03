@@ -45,6 +45,9 @@ class AssetManifestTests(unittest.TestCase):
         self.assertEqual(manifest["engine"]["commit"], "d523079fc05d9a8028d6085bffe4a2757c32abb6")
         self.assertEqual(manifest["engine"]["pretrained_revision"], "0c47645e02a7bc3688d7b263b0042c81e3cd82cd")
         self.assertTrue(all("resolve/main" not in url and "resolve/master" not in url for asset in manifest["assets"] for url in asset["urls"]))
+        roformer = next(asset for asset in manifest["assets"] if asset["id"] == "roformer-vocals-onnx")
+        self.assertEqual(roformer["license"], "MIT")
+        self.assertEqual(roformer["sha256"], "64a4f3bee48fbe7d971b23875adc924ed004c3533f49672592641dddc0f6f561")
 
     def test_unpinned_or_unsafe_spec_is_rejected(self):
         with self.assertRaises(AssetManifestError):
@@ -159,6 +162,7 @@ class BootstrapContracts(unittest.TestCase):
         self.assertIn("Test-MiniforgeSignature", source)
         self.assertIn("NumFOCUS", ASSET_MANIFEST.read_text(encoding="utf-8"))
         self.assertIn("schema_version = 2", source)
+        self.assertIn("DownloadRoFormer", source)
 
     def test_legacy_manifest_upgrade_reuses_verified_private_tools(self):
         source = BOOTSTRAP.read_text(encoding="utf-8-sig")

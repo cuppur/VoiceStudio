@@ -12,7 +12,7 @@ from ..cover import CoverProject
 from ..cover.application import CoverApplicationService
 from ..cover.mixing import CoverMixSettings, GainScale
 from ..cover.preview import PlaybackMode, PreviewMixPlanner, PreviewTrack, TrackRole
-from ..cover.separation import UVR5RuntimeStatus
+from ..cover.separation import RoFormerRuntimeStatus, UVR5RuntimeStatus
 from .cover_session import SongSession, parse_lrc
 from .audio import PreviewAudioController
 from .studio_widgets import LyricView, QuickMixerPanel, StemTrackWidget, TaskProgress, TrackStatus, TransportWidget, VoiceSelector
@@ -46,16 +46,22 @@ class _LoadThread(QThread):
 
 
 class SeparationDialog(QDialog):
-    def __init__(self, runtime, parent=None):
+    def __init__(self, runtime, roformer_runtime=None, parent=None):
         super().__init__(parent); self.setWindowTitle("选择歌曲分离方式"); self.setMinimumWidth(520); layout = QVBoxLayout(self)
+        self.engine_id = ""
         layout.addWidget(QLabel("歌曲分离"))
-        cards = (("UVR5", "快速分离", "已安装 · 可用" if runtime.ready else ("文件损坏" if runtime.status == "corrupt" else "未安装"), runtime.ready),
-                 ("RoFormer", "高质量分离", "尚未安装 · 未来版本", False), ("多轨", "主唱 / 和声 / 伴奏", "未来版本", False))
-        for name, detail, state, enabled in cards:
+        cards = (("uvr5", "UVR5", "快速分离", "已安装 · 可用" if runtime.ready else ("文件损坏" if runtime.status == "corrupt" else "未安装"), runtime.ready),
+                 ("roformer", "RoFormer", "高质量分离", "已安装 · 可用" if roformer_runtime and roformer_runtime.ready else ("文件损坏" if roformer_runtime and roformer_runtime.status in {"corrupt", "hash_mismatch"} else "未安装"), bool(roformer_runtime and roformer_runtime.ready)),
+                 ("", "多轨", "主唱 / 和声 / 伴奏", "未来版本", False))
+        for engine_id, name, detail, state, enabled in cards:
             button = QPushButton(f"{name}\n{detail}    {state}"); button.setObjectName("separatorCard"); button.setEnabled(enabled)
-            if enabled: button.clicked.connect(self.accept)
+            if enabled: button.clicked.connect(lambda _checked=False, value=engine_id: self._choose(value))
             layout.addWidget(button)
         cancel = QPushButton("取消"); cancel.clicked.connect(self.reject); layout.addWidget(cancel, alignment=Qt.AlignRight)
+
+    def _choose(self, engine_id: str) -> None:
+        self.engine_id = engine_id
+        self.accept()
 
 
 class ExportDialog(QDialog):
@@ -295,7 +301,10 @@ class CoverPage(QWidget):
         except Exception as exc: self._ai_failed(str(exc))
 
     def refresh_runtime_status(self):
-        self.runtime_status = UVR5RuntimeStatus.detect(self.paths); self.uvr_status.setText("UVR5 已就绪" if self.runtime_status.ready else ("UVR5 文件损坏" if self.runtime_status.status == "corrupt" else ("UVR5 Hash 不匹配" if self.runtime_status.status == "hash_mismatch" else "UVR5 未安装"))); self.separate_button.setEnabled(self.runtime_status.ready)
+        self.runtime_status = UVR5RuntimeStatus.detect(self.paths); self.roformer_runtime_status = RoFormerRuntimeStatus.detect(self.paths)
+        available = [name for name, state in (("UVR5", self.runtime_status), ("RoFormer", self.roformer_runtime_status)) if state.ready]
+        self.uvr_status.setText("分离引擎已就绪：" + " / ".join(available) if available else "歌曲分离引擎未安装")
+        self.separate_button.setEnabled(bool(available))
 
     def _confirm_rights(self):
         if self.cover_project and self.cover_project.rights_confirmed and self.cover_project.rights_attestation_text_hash: return True
@@ -320,9 +329,10 @@ class CoverPage(QWidget):
     def separate_song(self):
         if not self.cover_project or not self.worker: self.song_meta.setText("请先导入歌曲"); return
         self.refresh_runtime_status()
-        if not self.runtime_status.ready or SeparationDialog(self.runtime_status, self).exec() != QDialog.Accepted or not self._confirm_rights(): return
+        dialog = SeparationDialog(self.runtime_status, self.roformer_runtime_status, self)
+        if dialog.exec() != QDialog.Accepted or not dialog.engine_id or not self._confirm_rights(): return
         try:
-            payload = self.cover_service.create_separation_command(self.cover_project.id, mode="uvr5").to_worker_payload()
+            payload = self.cover_service.create_separation_command(self.cover_project.id, mode=dialog.engine_id).to_worker_payload()
         except Exception as exc:
             self._separation_failed(str(exc)); return
         self.stems[1].set_status(TrackStatus.PROCESSING); self.stems[2].set_status(TrackStatus.PROCESSING); self.progress.show(); self.progress.set_stage(0); self.separate_button.setEnabled(False); self.cancel_button.show()
@@ -331,7 +341,7 @@ class CoverPage(QWidget):
 
     def cancel_separation(self):
         if self._separation_request and self.worker:
-            self.cancel_button.setEnabled(False); self.song_meta.setText("正在停止 UVR5…")
+            self.cancel_button.setEnabled(False); self.song_meta.setText("正在停止歌曲分离…")
             self.worker.send("cancel", {"target_request_id": self._separation_request})
 
     def handle_worker_event(self, request_id, event, payload):
