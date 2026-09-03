@@ -76,6 +76,23 @@ class PrepareVocalCleanupCommand:
 
 
 @dataclass(frozen=True)
+class SuggestTransposeCommand:
+    project_path: Path | str
+    cover_id: str
+    profile_id: str
+    singing_model_id: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "project_path", Path(self.project_path))
+
+    def to_payload(self) -> dict[str, Any]:
+        return {"project_path": str(self.project_path), "cover_id": self.cover_id,
+                "profile_id": self.profile_id, "singing_model_id": self.singing_model_id}
+
+    to_worker_payload = to_payload
+
+
+@dataclass(frozen=True)
 class PrepareRenderCommand:
     project_path: Path | str
     cover_id: str

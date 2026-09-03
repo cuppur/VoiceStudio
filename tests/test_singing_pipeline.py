@@ -84,6 +84,13 @@ class ExplodingVerificationEngine(FakeSingingEngine):
     def verify_model(self, checkpoint, index): raise RuntimeError("verification crashed")
 
 
+class PitchEngine(FakeSingingEngine):
+    def analyze_pitch(self, path, cancel=None):
+        median = 100.0 if Path(path).name == "vocals.wav" else 200.0
+        return {"backend": "rmvpe", "version": "rvc-rmvpe-v1", "median_hz": median,
+                "minimum_hz": median - 10, "maximum_hz": median + 10, "voiced_frames": 20}
+
+
 def _fixture(tmp_path):
     project = tmp_path / "project"
     project.mkdir()
@@ -216,3 +223,11 @@ def test_ai_vocal_cache_includes_cleanup_engine_lineage(tmp_path):
     assert CoverProject.load(project, cover.id).get_asset("cleaned").producer_version == "cleanup-two"
     changed = pipeline.convert({**base, "output_id": "cleanup-lineage-two"})
     assert first["cache_hit"] is False and changed["cache_hit"] is False
+
+
+def test_suggest_transpose_never_changes_conversion_settings(tmp_path):
+    project, cover = _fixture(tmp_path); pipeline = SingingPipeline(PitchEngine(), projects_root=tmp_path)
+    model = pipeline.train({"project_path": str(project), "profile_id": "profile", "training_run_id": "pitch", "source_asset_ids": ["asset"], "engine": "rvc_v2"})
+    result = pipeline.suggest_transpose({"project_path": str(project), "profile_id": "profile", "cover_id": cover.id, "singing_model_id": model["id"]})
+    assert result["suggested_transpose"] == 12
+    assert result["applied"] is False

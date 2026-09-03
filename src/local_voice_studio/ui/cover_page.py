@@ -92,7 +92,7 @@ class CoverPage(QWidget):
     export_requested = Signal()
     def __init__(self, paths, store, project, worker=None, parent=None):
         super().__init__(parent); self.setObjectName("coverPage"); self.paths, self.store, self.project, self.worker = paths, store, Path(project), worker
-        self.cover_project = None; self.sessions = {}; self.track_paths = {}; self._threads = set(); self._separation_request = ""; self._cleanup_request = ""; self._pending_ai_payload = {}; self._ai_request = ""; self._render_request = ""; self._export_request = ""; self._last_export_payload = {}; self._selected_track = 0; self._playback_mode = PlaybackMode.MIX_PREVIEW
+        self.cover_project = None; self.sessions = {}; self.track_paths = {}; self._threads = set(); self._separation_request = ""; self._cleanup_request = ""; self._pitch_request = ""; self._pending_ai_payload = {}; self._ai_request = ""; self._render_request = ""; self._export_request = ""; self._last_export_payload = {}; self._selected_track = 0; self._playback_mode = PlaybackMode.MIX_PREVIEW
         self.cover_service = CoverApplicationService(self.project, paths=self.paths, store=self.store)
         self.preview_controller = PreviewAudioController.create_qt(self, drift_tolerance_ms=50)
         self.sync_timer = QTimer(self); self.sync_timer.setInterval(750); self.sync_timer.timeout.connect(self._resync_preview)
@@ -167,7 +167,7 @@ class CoverPage(QWidget):
         panel = QFrame(); panel.setObjectName("coverSettings"); panel.setMinimumWidth(286); panel.setMaximumWidth(340); form = QVBoxLayout(panel); form.setContentsMargins(16, 14, 16, 14); form.setSpacing(9)
         form.addWidget(_label("目标声音", "sectionLabel")); self.profile_combo = VoiceSelector(project_root=self.project); self.profile_combo.voice_selected.connect(self._profile_selected); form.addWidget(self.profile_combo)
         self.voice_capabilities = QLabel("✓ AI 翻唱    ✓ 本地处理"); self.voice_capabilities.setObjectName("capabilities"); form.addWidget(self.voice_capabilities)
-        form.addWidget(_label("翻唱设置", "cardTitle")); pitch_row = QHBoxLayout(); pitch_row.addWidget(QLabel("音调")); self.pitch = QSpinBox(); self.pitch.setRange(-12, 12); self.pitch.setSuffix(" 半音"); pitch_row.addWidget(self.pitch); form.addLayout(pitch_row)
+        form.addWidget(_label("翻唱设置", "cardTitle")); pitch_row = QHBoxLayout(); pitch_row.addWidget(QLabel("音调")); self.pitch = QSpinBox(); self.pitch.setRange(-12, 12); self.pitch.setSuffix(" 半音"); pitch_row.addWidget(self.pitch); self.auto_pitch_button = QPushButton("自动建议"); self.auto_pitch_button.setObjectName("miniButton"); self.auto_pitch_button.clicked.connect(self.suggest_transpose); pitch_row.addWidget(self.auto_pitch_button); form.addLayout(pitch_row)
         self.cleanup_toggle = QCheckBox("人声降噪（可选）"); self.cleanup_toggle.setChecked(False); self.cleanup_toggle.setObjectName("settingToggle"); form.addWidget(self.cleanup_toggle)
         self.normalize_toggle = QCheckBox("混音归一化"); self.normalize_toggle.setChecked(True); self.normalize_toggle.setObjectName("settingToggle"); form.addWidget(self.normalize_toggle)
         self.limiter_toggle = QCheckBox("防削波限制器"); self.limiter_toggle.setChecked(True); self.limiter_toggle.setObjectName("settingToggle"); form.addWidget(self.limiter_toggle)
@@ -311,6 +311,19 @@ class CoverPage(QWidget):
         try: self._ai_request = self.worker.send("convert_vocal", payload)
         except Exception as exc: self._ai_failed(str(exc))
 
+    def suggest_transpose(self):
+        profile = self._selected_profile()
+        if not self.cover_project or not profile or not self.worker:
+            self.song_meta.setText("请选择已验证歌唱模型的声音"); return
+        try:
+            payload = self.cover_service.create_transpose_suggestion_command(self.cover_project.id, profile.id).to_worker_payload()
+        except Exception as exc:
+            self.song_meta.setText(str(exc)); return
+        self.auto_pitch_button.setEnabled(False); self.auto_pitch_button.setText("分析中…"); self.song_meta.setText("正在用 RMVPE 分析音高")
+        try: self._pitch_request = self.worker.send("suggest_transpose", payload)
+        except Exception as exc:
+            self._pitch_request = ""; self.auto_pitch_button.setEnabled(True); self.auto_pitch_button.setText("自动建议"); self.song_meta.setText(str(exc))
+
     def refresh_runtime_status(self):
         self.runtime_status = UVR5RuntimeStatus.detect(self.paths); self.roformer_runtime_status = RoFormerRuntimeStatus.detect(self.paths)
         available = [name for name, state in (("UVR5", self.runtime_status), ("RoFormer", self.roformer_runtime_status)) if state.ready]
@@ -357,6 +370,13 @@ class CoverPage(QWidget):
             self.worker.send("cancel", {"target_request_id": self._separation_request})
 
     def handle_worker_event(self, request_id, event, payload):
+        if request_id == self._pitch_request:
+            self._pitch_request = ""; self.auto_pitch_button.setEnabled(True); self.auto_pitch_button.setText("自动建议")
+            if event == "result":
+                value = int(payload.get("suggested_transpose", 0)); self.pitch.setValue(value)
+                self.song_meta.setText(f"RMVPE 建议 {value:+d} 半音（已填入，仍可手动修改）")
+            elif event == "error": self.song_meta.setText(str(payload.get("message", "音高分析失败")))
+            return
         if request_id == self._cleanup_request:
             if event == "result":
                 self._cleanup_request = ""; self.cover_project = self._load_cover_project(self.cover_project.id)

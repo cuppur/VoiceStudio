@@ -20,6 +20,7 @@ from ..runtime import EngineRuntimeResolver
 from .models import RVCInferenceSettings, SingingModelVersion
 from .dataset import SourceAssetDatasetBuilder
 from .verification import SingingModelVerifier, validate_wav_quality
+from .pitch import PitchAnalysis, recommend_transpose
 
 
 def _sha256(path: Path) -> str:
@@ -259,3 +260,51 @@ class SingingPipeline:
         except Exception:
             staging.unlink(missing_ok=True)
             raise
+
+    def suggest_transpose(self, payload: Mapping[str, Any], cancel: Any = None) -> dict[str, Any]:
+        """Analyze the separated input and trusted training lineage with RMVPE.
+
+        The result is only a recommendation.  It never alters conversion
+        settings, so the user remains the final authority for the transpose.
+        """
+        project = self._project(payload)
+        _manifest, profile, _ = self._profile(project, payload)
+        cover = CoverProject.load(project, str(payload.get("cover_id", "")))
+        if not cover.rights_confirmed:
+            raise ValueError("分析音高前必须确认歌曲处理权利")
+        source = cover.get_asset(role="vocal")
+        if source is None or source.content_origin != "separated":
+            raise ValueError("音高分析输入必须是已分离的人声轨")
+        source_path = ensure_within(cover.root, cover.root / source.relative_path)
+        if not source_path.is_file() or _sha256(source_path) != source.sha256:
+            raise ValueError("已分离人声资产缺失或 Hash 不匹配")
+        model_id = str(payload.get("singing_model_id") or profile.get("active_singing_model_id", ""))
+        model_data = next((item for item in profile.get("singing_models", []) if str(item.get("id")) == model_id), None)
+        model = SingingModelVersion.from_dict(model_data or {})
+        if not model_data or model.profile_id != profile["id"] or model.trust_status != "verified":
+            raise ValueError("歌唱模型不可用或未通过完整性验证")
+        analyzer = getattr(self.engine, "analyze_pitch", None)
+        if not callable(analyzer):
+            raise RuntimeError("RMVPE 音高分析引擎尚未就绪")
+        source_analysis = PitchAnalysis.from_dict(analyzer(source_path, cancel=cancel))
+        targets: list[PitchAnalysis] = []
+        for lineage in model.training_lineage:
+            if cancel is not None and cancel.is_set():
+                raise RuntimeError("任务已取消")
+            relative = str(lineage.get("project_relative_path", ""))
+            expected = str(lineage.get("sha256", ""))
+            if not relative or not expected:
+                continue
+            try:
+                candidate = ensure_within(project, project / relative)
+            except ValueError:
+                continue
+            if candidate.is_file() and _sha256(candidate) == expected:
+                targets.append(PitchAnalysis.from_dict(analyzer(candidate, cancel=cancel)))
+            if len(targets) >= 3:
+                break
+        if not targets:
+            raise RuntimeError("没有可用于建议的已验证目标声音训练素材")
+        recommendation = recommend_transpose(source_analysis, targets)
+        return {"suggested_transpose": recommendation, "source": source_analysis.__dict__,
+                "targets": [item.__dict__ for item in targets], "applied": False}

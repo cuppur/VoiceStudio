@@ -22,7 +22,7 @@ from ..project import CoverProject, RIGHTS_ATTESTATION_TEXT_HASH
 from ..models import CoverAssetRole, ContentOrigin
 from ..errors import (AssetValidationError, ConsentRequiredError,
                       ModelNotReadyError, RightsRequiredError)
-from .commands import ExportCoverCommand, PrepareAIVocalCommand, PrepareRenderCommand, PrepareSeparationCommand, PrepareVocalCleanupCommand
+from .commands import ExportCoverCommand, PrepareAIVocalCommand, PrepareRenderCommand, PrepareSeparationCommand, PrepareVocalCleanupCommand, SuggestTransposeCommand
 from ..cleanup import VocalCleanupSettings
 from .results import CoverStateResult
 
@@ -83,6 +83,12 @@ class CoverApplicationService:
         return PrepareAIVocalCommand(str(self.project), cover.id, profile.id, model.id, int(pitch_shift))
 
     create_ai_vocal_command = prepare_ai_vocal
+
+    def prepare_transpose_suggestion(self, cover_id: str, profile_id: str) -> SuggestTransposeCommand:
+        ai = self.prepare_ai_vocal(cover_id, profile_id)
+        return SuggestTransposeCommand(ai.project_path, ai.cover_id, ai.profile_id, ai.singing_model_id)
+
+    create_transpose_suggestion_command = prepare_transpose_suggestion
 
     def prepare_vocal_cleanup(self, cover_id: str, settings: dict[str, Any]) -> PrepareVocalCleanupCommand:
         cover = self._cover(cover_id)

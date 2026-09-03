@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import json
 import os
 import shutil
 import sys
@@ -31,8 +32,36 @@ def main() -> int:
     parser.add_argument("--version", default="v2")
     parser.add_argument("--test-input", default="")
     parser.add_argument("--test-output", default="")
+    parser.add_argument("--analyze-pitch", action="store_true")
+    parser.add_argument("--pitch-report", default="")
     args = parser.parse_args()
     model = Path(args.model).resolve()
+    if args.analyze_pitch:
+        if not args.input or not args.pitch_report:
+            parser.error("--analyze-pitch requires --input and --pitch-report")
+        import numpy as np
+        import soundfile as sf
+        import torch
+        from scipy.signal import resample_poly
+        from infer.lib.rmvpe import RMVPE
+
+        audio, sample_rate = sf.read(args.input, dtype="float32", always_2d=True)
+        samples = np.asarray(audio.mean(axis=1), dtype=np.float32)
+        if sample_rate != 16000:
+            from math import gcd
+            divisor = gcd(int(sample_rate), 16000)
+            samples = resample_poly(samples, 16000 // divisor, int(sample_rate) // divisor).astype(np.float32)
+        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        model_path = Path(os.environ.get("rmvpe_root", Path.cwd() / "assets" / "rmvpe")) / "rmvpe.pt"
+        f0 = np.asarray(RMVPE(str(model_path), bool(torch.cuda.is_available()), device).infer_from_audio(samples, thred=0.03), dtype=np.float32)
+        voiced = f0[np.isfinite(f0) & (f0 > 0)]
+        if voiced.size == 0:
+            raise RuntimeError("RMVPE 未检测到有效人声音高")
+        report = {"backend": "rmvpe", "version": "rvc-rmvpe-v1", "median_hz": float(np.median(voiced)),
+                  "minimum_hz": float(np.min(voiced)), "maximum_hz": float(np.max(voiced)), "voiced_frames": int(voiced.size)}
+        report_path = Path(args.pitch_report).resolve(); report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report), encoding="utf-8")
+        return 0
     safe_index = args.index
     if args.index:
         # The Windows FAISS build cannot reliably open non-ASCII paths.  Keep

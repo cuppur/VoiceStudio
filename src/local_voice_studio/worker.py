@@ -169,6 +169,7 @@ class WorkerService:
                 "train": self._train,
                 "separate_song": self._separate_song,
                 "cleanup_vocal": self._cleanup_vocal,
+                "suggest_transpose": self._suggest_transpose,
                 "train_singing_model": self._train_singing_model,
                 "convert_vocal": self._convert_vocal,
                 "render_cover": self._render_cover,
@@ -424,6 +425,14 @@ class WorkerService:
             self.emit(request_id, "result", {"progress": 1.0, **result})
         finally:
             self.cleanup = None
+
+    def _suggest_transpose(self, request_id: str, payload: dict[str, Any]) -> None:
+        project = ensure_within(self.paths.projects_root, Path(str(payload.get("project_path", ""))))
+        command = CoverApplicationService(project, paths=self.paths).prepare_transpose_suggestion(
+            str(payload.get("cover_id", "")), str(payload.get("profile_id", ""))
+        )
+        result = self._singing(request_id).suggest_transpose(command.to_worker_payload(), cancel=self.cancel_event)
+        self.emit(request_id, "result", result)
 
     def _singing(self, request_id: str) -> SingingPipeline:
         if self.singing_engine is None:

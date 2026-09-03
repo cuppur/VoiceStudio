@@ -219,6 +219,19 @@ class RVCEngine:
         if not out.is_file() or not out.stat().st_size: raise RuntimeError("RVC 转换未生成输出音频")
         return out
 
+    def analyze_pitch(self, path: Path, cancel: Any = None) -> dict[str, Any]:
+        """Run the pinned RMVPE backend in the isolated RVC interpreter."""
+        import tempfile
+        descriptor, report_name = tempfile.mkstemp(prefix="voicestudio-pitch-", suffix=".json")
+        os.close(descriptor)
+        report = Path(report_name)
+        try:
+            self._run([str(self.config.python), str(Path(__file__).with_name("rvc_bridge.py")), "--analyze-pitch",
+                       "--input", str(path), "--model", str(path), "--pitch-report", str(report)], self.config.engine_root, cancel)
+            return json.loads(report.read_text(encoding="utf-8"))
+        finally:
+            report.unlink(missing_ok=True)
+
     def verify_model(self, checkpoint: Path, index: Path | None = None, test_input: Path | None = None, test_output: Path | None = None) -> VerificationResult:
         result = VerificationResult(False, [])
         if index is None or not index.is_file():
