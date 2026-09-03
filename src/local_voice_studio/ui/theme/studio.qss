@@ -1,11 +1,11 @@
 QWidget { font-family: "Microsoft YaHei UI"; font-size: 13px; color: #F5F7FA; }
 QMainWindow, QStackedWidget, #workspace { background: #0D0F14; }
-#coverPage, #coverPage QWidget, #coverPage QScrollArea, #coverPage QScrollArea > QWidget { background: #090B10; color: #F6F8FC; }
+#coverPage, #coverPage QWidget, #coverPage QScrollArea, #coverPage QScrollArea > QWidget { background: @color.background; color: @color.text_primary; }
 #songHeader { background: transparent; border: 0; }
 #coverArt { background: qlineargradient(x1:0,y1:1,x2:1,y2:0, stop:0 #111A35, stop:.48 #303E9F, stop:1 #6A5CFF); border-radius: 16px; border: 1px solid #343E73; }
 #eyebrow, #sectionLabel { color: #7F899B; font-size: 10px; font-weight: 700; }
 #songTitle { font-size: 25px; font-weight: 760; color: #F6F8FC; }
-#timelineCard, #lyricsCard, #mixerCard, #coverSettings { background: #111620; border: 1px solid #222A39; border-radius: 16px; }
+#timelineCard, #lyricsCard, #mixerCard, #coverSettings { background: @color.surface; border: 1px solid @color.border; border-radius: 16px; }
 #timelineCard > QVBoxLayout > QHBoxLayout, #lyricsCard > QVBoxLayout > QHBoxLayout, #mixerCard > QVBoxLayout > QHBoxLayout { min-height: 46px; border-bottom: 1px solid #1B2330; }
 #tracks { background: #0D121B; }
 #cardTitle { color: #E9EDF5; font-size: 12px; font-weight: 720; }
@@ -58,7 +58,7 @@ QPushButton, QToolButton { min-height: 20px; background: #1C202B; border: 1px so
 QPushButton:hover, QToolButton:hover { background: #252A37; border-color: #424A5B; }
 QPushButton:pressed { background: #181C25; }
 QPushButton:disabled { color: #626A78; background: #171A21; border-color: #242832; }
-#primaryButton { background: #5968E8; border-color: #6877F1; color: white; font-weight: 600; }
+#primaryButton { background: @color.accent; border-color: #6877F1; color: white; font-weight: 600; }
 #primaryButton:hover { background: #6675EF; }
 QProgressBar { border: 0; border-radius: 4px; text-align: center; background: #20242E; }
 QProgressBar::chunk { background: #7381FF; border-radius: 4px; }
