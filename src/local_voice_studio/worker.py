@@ -222,14 +222,19 @@ class WorkerService:
             target(request_id, payload)
         except Exception as exc:
             traceback.print_exc(file=sys.stderr)
-            event = "cancelled" if self.cancel_event.is_set() else "failed"
+            cancelled = (
+                self.cancel_event.is_set()
+                or isinstance(exc, InterruptedError)
+                or str(getattr(exc, "code", "")).endswith("cancelled")
+            )
+            event = "cancelled" if cancelled else "failed"
             error_payload = {"message": str(exc), "exception": type(exc).__name__, "status": event}
             if isinstance(exc, CoverError):
                 error_payload.update(cover_error_payload(exc))
             if request_id and self._request_context.get("command") in {"separate_song", "convert_vocal", "render_cover", "export_cover"}:
                 command = self._request_context["command"]
-                error_payload.setdefault("code", f"cover.{command}.failed")
-                error_payload.setdefault("recoverable", event != "cancelled")
+                error_payload.setdefault("code", "cover.cancelled" if cancelled else f"cover.{command}.failed")
+                error_payload.setdefault("recoverable", True if cancelled else False)
             self.emit(request_id, "error", error_payload)
         finally:
             if self.current_request_id == request_id:
@@ -473,7 +478,7 @@ class WorkerService:
         try:
             self.emit(request_id, "progress", {"progress": .05, "stage": "validating", "message": "正在验证混音素材"})
             result = self.mixer.mix(
-                Path(command.project_id), command.cover_id, settings,
+                command.project_path, command.cover_id, settings,
                 profile_id=command.profile_id, model_id=command.singing_model_id,
                 cancel=self.cancel_token,
             )
@@ -498,7 +503,7 @@ class WorkerService:
         try:
             self.emit(request_id, "progress", {"progress": .05, "stage": "validating", "message": "正在验证导出信息"})
             result = self.exporter.export(
-                Path(command.project_id), command.cover_id,
+                command.project_path, command.cover_id,
                 format=command.format, destination=command.destination,
                 file_name=command.file_name, final_asset_id=command.final_asset_id,
                 existing=command.existing_policy, cancel=self.cancel_token,

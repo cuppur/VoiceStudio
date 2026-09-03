@@ -1,28 +1,53 @@
-"""FFmpeg-only export encoding seam."""
+"""The single audio-encoding backend used by Cover export."""
 from __future__ import annotations
+
 from pathlib import Path
-from typing import Any
-from ..process import ManagedProcess
+from typing import Any, Protocol
 
-class FFmpegExportBackend:
-    def __init__(self, ffmpeg: Path):
-        self.ffmpeg = Path(ffmpeg)
-        self.process: ManagedProcess | None = None
+from .. import process as process_module
+from ..cancellation import as_cancellation_token
+from ..process import FFMPEG_QUIET_ARGS
 
-    def cancel(self) -> None:
-        if self.process is not None:
-            self.process.stop()
+
+class ExportBackend(Protocol):
+    """Small seam for real FFmpeg and deterministic transaction fakes."""
 
     def encode(self, source: Path, target: Path, *, format: str, cancel: Any = None) -> Path:
+        ...
+
+    def cancel(self) -> None:
+        ...
+
+
+class FFmpegExportBackend:
+    """Encode WAV/MP3 while delegating lifecycle and cancellation to ManagedProcess."""
+
+    def __init__(self, ffmpeg: Path):
+        self.ffmpeg = Path(ffmpeg)
+        self.process: process_module.ManagedProcess | None = None
+
+    def cancel(self) -> None:
+        process = self.process
+        if process is not None:
+            process.stop()
+
+    def encode(self, source: Path, target: Path, *, format: str, cancel: Any = None) -> Path:
+        if format not in {"wav", "mp3"}:
+            raise ValueError(f"不支持的导出格式: {format}")
+        token = as_cancellation_token(cancel)
+        if token.is_cancelled():
+            raise InterruptedError("导出已取消")
         codec = "pcm_s16le" if format == "wav" else "libmp3lame"
-        args = [str(self.ffmpeg), "-y", "-i", str(source), "-ar", "48000", "-ac", "2", "-c:a", codec,
-                "-f", "wav" if format == "wav" else "mp3", str(target)]
-        process = ManagedProcess(args, cancel=cancel)
+        # Keep diagnostic flags centralized in cover.process; encoding options
+        # belong exclusively to this backend, never to the transaction service.
+        args = [str(self.ffmpeg), "-y", *FFMPEG_QUIET_ARGS, "-i", str(source), "-ar", "48000", "-ac", "2",
+                "-c:a", codec, "-f", format, str(target)]
+        process = process_module.ManagedProcess(args, cancel=token)
         self.process = process
         try:
             return_code = process.run()
         except InterruptedError as exc:
-            raise RuntimeError("导出已取消") from exc
+            raise InterruptedError("导出已取消") from exc
         finally:
             self.process = None
         if return_code:
@@ -31,3 +56,6 @@ class FFmpegExportBackend:
         return target
 
     render = encode
+
+
+__all__ = ["ExportBackend", "FFmpegExportBackend"]

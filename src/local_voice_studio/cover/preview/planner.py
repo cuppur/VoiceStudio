@@ -2,22 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import math
 from pathlib import Path
 from typing import Mapping
 
+from ..models import CoverAssetRole
 
-class TrackRole(str, Enum):
-    ORIGINAL = "original"
-    VOCAL = "vocal"
-    INSTRUMENTAL = "instrumental"
-    AI_VOCAL = "ai_vocal"
-    FINAL_MIX = "final_mix"
-
-    @classmethod
-    def parse(cls, value: "TrackRole | str") -> "TrackRole":
-        if isinstance(value, cls):
-            return value
-        return cls(str(value).strip().lower().replace("-", "_"))
+# Preview uses the domain asset vocabulary directly.  This is deliberately an
+# alias: there must be one role enum in the application, while ``parse`` keeps
+# old IPC callers accepting ``ai-vocal`` and ``ai_vocal``.
+TrackRole = CoverAssetRole
 
 
 class PlaybackMode(str, Enum):
@@ -60,7 +54,7 @@ class PreviewMixPlan:
     @property
     def source(self) -> PreviewTrack | None:
         track = self.tracks.get(self.selected_role)
-        return track if track and track.available else None
+        return track if track and track in self.active_tracks else None
 
     @property
     def roles(self) -> set[TrackRole]:
@@ -108,7 +102,7 @@ class PreviewMixPlanner:
         playback = mode if isinstance(mode, PlaybackMode) else PlaybackMode(mode_text)
         if playback is PlaybackMode.FINAL_MIX:
             role = TrackRole.FINAL_MIX
-        return PreviewMixPlan(playback, role, self.tracks)
+        return PreviewMixPlan(playback, role, _normalize_linear_gains(self.tracks), 1.0)
 
     def build(self, cover: object, *, mode: PlaybackMode | str = PlaybackMode.MIX_PREVIEW,
               selected_role: TrackRole | str = TrackRole.AI_VOCAL,
@@ -148,15 +142,64 @@ class PreviewMixPlanner:
             # channels deliberately expose linear gain to QAudioOutput.
             if db_key in settings:
                 raw_db = settings[db_key]
-                gain = 0.0 if raw_db == "-inf" else 10.0 ** (float(raw_db) / 20.0)
+                gain = _db_to_linear(raw_db)
             else:
                 gain = float(settings.get(gain_key, 1.0))
             tracks[role] = PreviewTrack(role, path=path, duration_ms=int(getattr(cover, "duration_ms", 0)),
                                         gain=gain, asset_id=str(getattr(asset, "id", "")))
         plan = PreviewMixPlanner(tracks).plan(selected_role, mode)
+        # Normalise only at this preview boundary.  The largest effective
+        # channel gain (including master gain) maps to 1.0, preserving all
+        # inter-track dB differences while preventing QAudioOutput clamping
+        # from silently flattening a positive-gain mix.
         if "master_gain_db" in settings:
             raw_master = settings["master_gain_db"]
-            master = 0.0 if raw_master == "-inf" else 10.0 ** (float(raw_master) / 20.0)
+            master_db = _as_db(raw_master)
         else:
             master = float(settings.get("master_gain", 1.0))
-        return PreviewMixPlan(plan.mode, plan.selected_role, plan.tracks, master)
+            master_db = 20.0 * math.log10(master) if master > 0 else float("-inf")
+        finite_db = [
+            20.0 * math.log10(track.gain)
+            for track in tracks.values()
+            if track.available and track.enabled and not track.muted and track.gain > 0.0
+        ]
+        peak_db = max([master_db + db for db in finite_db] or [master_db])
+        normalizer_db = max(0.0, peak_db)
+        normalized = {
+            role: PreviewTrack(track.role, track.path, track.duration_ms, track.enabled,
+                               _linear_from_db((20.0 * math.log10(track.gain) + master_db) - normalizer_db)
+                               if track.gain > 0.0 and math.isfinite(master_db) else 0.0,
+                               track.muted, track.solo, track.asset_id)
+            for role, track in tracks.items()
+        }
+        return PreviewMixPlan(plan.mode, plan.selected_role, normalized, 1.0)
+
+
+def _as_db(value: object) -> float:
+    if isinstance(value, str) and value.strip().lower() in {"-inf", "-infinity"}:
+        return float("-inf")
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"无效的预览增益: {value!r}") from exc
+
+
+def _db_to_linear(value: object) -> float:
+    db = _as_db(value)
+    return _linear_from_db(db)
+
+
+def _linear_from_db(db: float) -> float:
+    return 0.0 if not math.isfinite(db) else 10.0 ** (db / 20.0)
+
+
+def _normalize_linear_gains(tracks: Mapping[TrackRole, PreviewTrack]) -> dict[TrackRole, PreviewTrack]:
+    """Keep preview-only channel gains bounded without changing domain dB."""
+    peak = max((track.gain for track in tracks.values()
+                if track.available and track.enabled and not track.muted and track.gain > 0.0), default=1.0)
+    scale = 1.0 / peak if peak > 1.0 else 1.0
+    return {
+        role: PreviewTrack(track.role, track.path, track.duration_ms, track.enabled,
+                           track.gain * scale, track.muted, track.solo, track.asset_id)
+        for role, track in tracks.items()
+    }

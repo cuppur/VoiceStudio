@@ -13,6 +13,7 @@ import pytest
 
 from local_voice_studio.cover.project import CoverAsset, CoverProject
 from local_voice_studio.cover.mixing import CoverMixSettings, CoverMixer
+from local_voice_studio.cover.errors import AssetValidationError
 from local_voice_studio.paths import AppPaths
 
 
@@ -25,12 +26,11 @@ def wav(path: Path, seconds: float = 1.0, rate: int = 48_000, channels: int = 2)
 
 
 class Runner:
-    def __init__(self): self.commands = []
+    def __init__(self): self.calls = []
 
-    def __call__(self, command, **kwargs):
-        self.commands.append((list(command), kwargs))
-        output = Path(command[-1]); wav(output)
-        return 0
+    def render(self, inputs, settings, staging_path, *, duration_seconds=None, cancel=None):
+        self.calls.append((tuple(inputs), settings, Path(staging_path), duration_seconds, cancel))
+        wav(Path(staging_path))
 
 
 def paths_for(tmp_path: Path) -> AppPaths:
@@ -70,20 +70,14 @@ def test_mix_settings_defaults_are_safe_and_explicit():
 def test_mixer_uses_ai_vocal_and_instrumental_and_records_command(tmp_path, monkeypatch):
     cover = project(tmp_path); ai = wav(cover.root / "generated" / "ai.wav")
     cover.add_asset(CoverAsset("ai", "ai_vocal", "generated/ai.wav", hashlib.sha256(ai.read_bytes()).hexdigest(), "ai_generated", "rvc_v2"))
-    runner = Runner(); mixer = CoverMixer(paths_for(tmp_path))
-    mixer._ffmpeg = lambda: Path("ffmpeg.exe")
-    class P:
-        returncode = 0
-        def __init__(self, args): wav(Path(args[-1]))
-        def poll(self): return 0
+    runner = Runner(); mixer = CoverMixer(paths_for(tmp_path), backend=runner)
     import local_voice_studio.cover.mixing as mod
     monkeypatch.setattr(mod, "probe_audio", lambda *a, **k: type("Probe", (), {"duration_seconds": 2.0, "sample_rate": 48000, "channels": 2})())
-    old = mod.subprocess.Popen; mod.subprocess.Popen = lambda args, **kwargs: (runner.commands.append((args, kwargs)) or P(args))
     monkeypatch.setattr(mod, "probe_audio", lambda *a, **k: type("Probe", (), {"duration_seconds": 2.0, "sample_rate": 48000, "channels": 2})())
-    try: result = mixer.mix(cover.root.parent.parent, cover.id, CoverMixSettings(), profile_manifest=profile(cover))
-    finally: mod.subprocess.Popen = old
-    command = runner.commands[0][0]
-    assert str(ai) in command and str(cover.root / "stems" / "instrumental.wav") in command
+    result = mixer.mix(cover.root.parent.parent, cover.id, CoverMixSettings(), profile_manifest=profile(cover))
+    inputs = runner.calls[0][0]
+    assert {item.path for item in inputs} == {ai, cover.root / "stems" / "instrumental.wav"}
+    assert runner.calls[0][3] == 2.0
     assert result["output_path"].endswith(".wav") and result["cache_hit"] is False
     saved = CoverProject.load(cover.root.parent.parent, cover.id).get_asset(result["asset_id"])
     assert saved and saved.role == "final_mix" and saved.content_origin == "ai_generated"
@@ -95,29 +89,21 @@ def test_mixer_requires_rights_and_verified_ai_asset(tmp_path):
     cover = project(tmp_path / "bad"); bad = wav(cover.root / "generated" / "bad.wav")
     cover.add_asset(CoverAsset("ai", "ai_vocal", "generated/bad.wav", hashlib.sha256(bad.read_bytes()).hexdigest(), "ai_generated", "rvc_v2"))
     bad.write_bytes(b"tampered")
-    with pytest.raises(ValueError): CoverMixer(paths_for(tmp_path / "bad")).mix(cover.root.parent.parent, cover.id, CoverMixSettings(), profile_manifest=profile(cover))
+    with pytest.raises(AssetValidationError): CoverMixer(paths_for(tmp_path / "bad"), backend=Runner()).mix(cover.root.parent.parent, cover.id, CoverMixSettings(), profile_manifest=profile(cover))
 
 
 def test_mixer_cache_hit_miss_and_tamper_repair(tmp_path, monkeypatch):
     cover = project(tmp_path); ai = wav(cover.root / "generated" / "ai.wav")
     digest = hashlib.sha256(ai.read_bytes()).hexdigest()
     cover.add_asset(CoverAsset("ai", "ai_vocal", "generated/ai.wav", digest, "ai_generated", "rvc_v2"))
-    mixer = CoverMixer(paths_for(tmp_path)); mixer._ffmpeg = lambda: Path("ffmpeg.exe"); settings = CoverMixSettings()
-    class P:
-        returncode = 0
-        def __init__(self, args): wav(Path(args[-1]))
-        def poll(self): return 0
+    runner = Runner(); mixer = CoverMixer(paths_for(tmp_path), backend=runner); settings = CoverMixSettings()
     import local_voice_studio.cover.mixing as mod
     monkeypatch.setattr(mod, "probe_audio", lambda *a, **k: type("Probe", (), {"duration_seconds": 2.0, "sample_rate": 48000, "channels": 2})())
-    old = mod.subprocess.Popen; mod.subprocess.Popen = lambda *a, **k: P(a[0])
     manifest = profile(cover)
-    try: first = mixer.mix(cover.root.parent.parent, cover.id, settings, profile_manifest=manifest); second = mixer.mix(cover.root.parent.parent, cover.id, settings, profile_manifest=manifest)
-    finally: mod.subprocess.Popen = old
+    first = mixer.mix(cover.root.parent.parent, cover.id, settings, profile_manifest=manifest); second = mixer.mix(cover.root.parent.parent, cover.id, settings, profile_manifest=manifest)
     assert first["cache_hit"] is False and second["cache_hit"] is True
     Path(second["output_path"]).write_bytes(b"tampered")
-    old = mod.subprocess.Popen; mod.subprocess.Popen = lambda *a, **k: P(a[0])
-    try: repaired = mixer.mix(cover.root.parent.parent, cover.id, settings, profile_manifest=manifest)
-    finally: mod.subprocess.Popen = old
+    repaired = mixer.mix(cover.root.parent.parent, cover.id, settings, profile_manifest=manifest)
     assert repaired["cache_hit"] is False and Path(repaired["output_path"]).is_file()
 
 

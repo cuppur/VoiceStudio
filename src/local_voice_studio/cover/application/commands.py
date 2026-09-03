@@ -14,14 +14,22 @@ from ..exporting.models import ExportFormat, OverwritePolicy
 
 @dataclass(frozen=True)
 class PrepareSeparationCommand:
-    project_id: str
+    project_path: Path | str
     cover_id: str
     source_relative_path: str
     source_sha256: str
     mode: str = "uvr5"
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "project_path", Path(self.project_path))
+
+    @property
+    def project_id(self) -> str:
+        """Legacy spelling retained for callers from the first Phase 4 cut."""
+        return str(self.project_path)
+
     def to_payload(self) -> dict[str, Any]:
-        return {"project_path": self.project_id, "cover_id": self.cover_id,
+        return {"project_path": str(self.project_path), "cover_id": self.cover_id,
                 "source_relative_path": self.source_relative_path,
                 "source_sha256": self.source_sha256, "mode": self.mode}
 
@@ -30,14 +38,21 @@ class PrepareSeparationCommand:
 
 @dataclass(frozen=True)
 class PrepareAIVocalCommand:
-    project_id: str
+    project_path: Path | str
     cover_id: str
     profile_id: str
     singing_model_id: str
     pitch_shift: int = 0
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "project_path", Path(self.project_path))
+
+    @property
+    def project_id(self) -> str:
+        return str(self.project_path)
+
     def to_payload(self) -> dict[str, Any]:
-        return {"project_path": self.project_id, "cover_id": self.cover_id,
+        return {"project_path": str(self.project_path), "cover_id": self.cover_id,
                 "profile_id": self.profile_id, "singing_model_id": self.singing_model_id,
                 "pitch_shift": self.pitch_shift}
 
@@ -46,14 +61,21 @@ class PrepareAIVocalCommand:
 
 @dataclass(frozen=True)
 class PrepareRenderCommand:
-    project_id: str
+    project_path: Path | str
     cover_id: str
     profile_id: str
     singing_model_id: str
     mix: CoverMixSettings = field(default_factory=CoverMixSettings)
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "project_path", Path(self.project_path))
+
+    @property
+    def project_id(self) -> str:
+        return str(self.project_path)
+
     def to_payload(self) -> dict[str, Any]:
-        return {"project_path": self.project_id, "cover_id": self.cover_id,
+        return {"project_path": str(self.project_path), "cover_id": self.cover_id,
                 "profile_id": self.profile_id, "singing_model_id": self.singing_model_id,
                 "mix_settings": self.mix.canonical()}
 
@@ -62,7 +84,7 @@ class PrepareRenderCommand:
 
 @dataclass(frozen=True)
 class ExportCoverCommand:
-    project_id: str
+    project_path: Path | str
     cover_id: str
     final_asset_id: str
     format: ExportFormat | str
@@ -71,10 +93,18 @@ class ExportCoverCommand:
     existing_policy: OverwritePolicy | str = OverwritePolicy.REJECT
     publication_rights_acknowledged: bool = False
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "project_path", Path(self.project_path))
+        object.__setattr__(self, "destination", Path(self.destination))
+
+    @property
+    def project_id(self) -> str:
+        return str(self.project_path)
+
     def to_payload(self) -> dict[str, Any]:
         export_format = self.format.value if isinstance(self.format, ExportFormat) else str(self.format)
         policy = self.existing_policy.value if isinstance(self.existing_policy, OverwritePolicy) else str(self.existing_policy)
-        return {"project_path": self.project_id, "cover_id": self.cover_id,
+        return {"project_path": str(self.project_path), "cover_id": self.cover_id,
                 "final_asset_id": self.final_asset_id, "format": export_format,
                 "file_name": self.file_name, "destination": str(self.destination),
                 "existing_policy": policy,

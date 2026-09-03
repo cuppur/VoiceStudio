@@ -17,6 +17,7 @@ from PySide6.QtCore import QEventLoop, QTimer, QPoint, Qt
 from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import QApplication
 from local_voice_studio.cover.project import CoverProject
+from local_voice_studio.cover.mixing import GainScale
 from local_voice_studio.paths import AppPaths
 from local_voice_studio.storage import StudioStore
 from local_voice_studio.ui.cover_page import ExportDialog
@@ -96,7 +97,25 @@ def main() -> int:
         page._export_request = window.client.send("export_cover", export_payload); kind, value, elapsed = wait_request(window, page._export_request, args.timeout * 1000); report["steps"]["export"] = {"event": kind, "elapsed_seconds": elapsed, **value}
         if kind != "result": raise RuntimeError("export failed: " + str(value))
         page.request_final_render(); kind, value, elapsed = wait_request(window, page._render_request, args.timeout * 1000); report["steps"]["cache"] = {"event": kind, "elapsed_seconds": elapsed, **value}
-        page._select_track(1); page._seek_all(1000); app.processEvents(); plan = page.preview_controller.plan; active_tracks = plan.active_tracks if plan else (); positions = [page.preview_controller.channels[track.role].position() for track in active_tracks if track.role in page.preview_controller.channels]; report["steps"]["preview_sync"] = {"positions_ms": positions, "max_drift_ms": max(positions) - min(positions) if positions else 0, "selected_track": page._selected_track, "roles": [track.role.value for track in active_tracks], "available_roles": [role.value for role in plan.tracks] if plan else [], "tracks": [{"role": track.role.value, "source": track.path, "asset_id": track.asset_id, "gain": track.gain, "mute": track.muted, "solo": track.solo, "position_ms": page.preview_controller.channels[track.role].position()} for track in active_tracks if track.role in page.preview_controller.channels]}
+        page._select_track(1); page._seek_all(1000); app.processEvents(); plan = page.preview_controller.plan; active_tracks = plan.active_tracks if plan else (); positions = [page.preview_controller.channels[track.role].position() for track in active_tracks if track.role in page.preview_controller.channels]
+        requested_db = {
+            "ai_vocal": GainScale.slider_to_db(page.mixer.sliders[0].value()),
+            "instrumental": GainScale.slider_to_db(page.mixer.sliders[1].value()),
+            "vocal": GainScale.slider_to_db(page.mixer.sliders[2].value()),
+        }
+        report["steps"]["preview_sync"] = {
+            "mode": plan.mode.value if plan else "",
+            "active_roles": [track.role.value for track in active_tracks],
+            "sources": {track.role.value: track.path for track in active_tracks},
+            "requested_db": requested_db,
+            "preview_linear": {track.role.value: track.gain for track in active_tracks},
+            "positions_ms": positions,
+            "max_drift_ms": max(positions) - min(positions) if positions else 0,
+            "selected_track": page._selected_track,
+            "roles": [track.role.value for track in active_tracks],
+            "available_roles": [role.value for role in plan.tracks] if plan else [],
+            "tracks": [{"role": track.role.value, "source": track.path, "asset_id": track.asset_id, "gain": track.gain, "mute": track.muted, "solo": track.solo, "position_ms": page.preview_controller.channels[track.role].position()} for track in active_tracks if track.role in page.preview_controller.channels],
+        }
         page.toggle_playback(); app.processEvents(); time.sleep(.2); page.toggle_playback(); report["steps"]["preview_playback"] = {"played_and_paused": True}
         window.close(); app.processEvents()
         restored = MainWindow(paths, store); restored._switch_project(project); restored.show(); restored_page = restored.cover_page; wait_load(restored_page, app)

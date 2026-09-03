@@ -142,7 +142,9 @@ class CoverPage(QWidget):
 
     def _mixer_volume_changed(self, index: int, value: int) -> None:
         track_index = (3, 2, 1)[index] if 0 <= index < 3 else -1
-        if track_index >= 0: self.stems[track_index].set_volume(value); self._apply_preview_gains()
+        if track_index >= 0:
+            self.stems[track_index].set_volume(value)
+            self._refresh_preview_plan()
 
     def request_final_render(self) -> None:
         profile = self._selected_profile()
@@ -435,11 +437,19 @@ class CoverPage(QWidget):
         slider = self.transport.volume.value() if master is None and hasattr(self, "transport") else (80 if master is None else int(round(float(master) * 100)))
         master_linear = GainScale.db_to_linear(GainScale.slider_to_db(slider))
         solos = {self._track_role(i) for i, track in enumerate(self.stems[:4]) if track.solo.isChecked()}
-        for index, path in self.track_paths.items():
+        plan = self.preview_controller.plan
+        requested: dict[TrackRole, float] = {}
+        for index in self.track_paths:
             role = self._track_role(index); stem = self.stems[index]
-            gain = GainScale.db_to_linear(GainScale.slider_to_db(stem.volume.value()))
+            track = plan.tracks.get(role) if plan else None
+            if track is None:
+                continue
             audible = not stem.mute.isChecked() and (not solos or role in solos)
-            self.preview_controller.set_gain(role, master_linear * gain if audible else 0.0)
+            requested[role] = track.gain * master_linear if audible else 0.0
+        peak = max(requested.values(), default=0.0)
+        scale = 1.0 / peak if peak > 1.0 else 1.0
+        for role, gain in requested.items():
+            self.preview_controller.set_gain(role, gain * scale)
 
     def _on_player_position(self, role: TrackRole, value: int) -> None:
         if self.preview_controller.master_role in (None, role):

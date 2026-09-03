@@ -4,8 +4,11 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, asdict
+from enum import Enum
 from pathlib import Path
 from typing import Any
+
+from ..models import CoverAssetRole
 
 
 class GainScale:
@@ -74,6 +77,8 @@ class CoverMixSettings:
                 raise ValueError("增益必须在 -60 到 24 dB 之间")
         if self.alignment_tolerance_ms < 0 or self.alignment_tolerance_ms > 1000:
             raise ValueError("对齐容差无效")
+        if self.fade_in_ms < 0 or self.fade_out_ms < 0:
+            raise ValueError("淡入淡出时长不能为负数")
 
     def canonical(self) -> dict[str, Any]:
         value = asdict(self)
@@ -93,11 +98,17 @@ class CoverMixSettings:
 
 @dataclass(frozen=True)
 class MixInput:
-    role: str
+    role: CoverAssetRole | str
     asset_id: str
     path: Path
     sha256: str
     gain_db: float
 
+    def __post_init__(self) -> None:
+        role = self.role.value if isinstance(self.role, Enum) else self.role
+        object.__setattr__(self, "role", CoverAssetRole(str(role).strip().lower().replace("-", "_")))
+        object.__setattr__(self, "path", Path(self.path))
+        object.__setattr__(self, "gain_db", float(self.gain_db))
+
     def as_cache_tuple(self) -> tuple[str, str, str, float]:
-        return self.role, self.asset_id, self.sha256, self.gain_db
+        return self.role.value, self.asset_id, self.sha256, self.gain_db

@@ -19,7 +19,9 @@ try:
 except ImportError:  # compatibility while older package layout is present
     from ..mixing.service import CoverMixSettings
 from ..project import CoverProject, RIGHTS_ATTESTATION_TEXT_HASH
-from ..errors import ConsentRequiredError, ModelNotReadyError, RightsRequiredError
+from ..models import CoverAssetRole, ContentOrigin
+from ..errors import (AssetValidationError, ConsentRequiredError,
+                      ModelNotReadyError, RightsRequiredError)
 from .commands import ExportCoverCommand, PrepareAIVocalCommand, PrepareRenderCommand, PrepareSeparationCommand
 from .results import CoverStateResult
 
@@ -62,9 +64,9 @@ class CoverApplicationService:
         validate_sha256(cover.source_sha256, field="source_sha256")
         source = ensure_within(cover.root, cover.root / cover.source_relative_path)
         if not source.is_file():
-            raise FileNotFoundError("歌曲源文件不存在")
+            raise AssetValidationError("歌曲源文件不存在")
         if sha256_file(source) != cover.source_sha256:
-            raise ValueError("歌曲源文件 SHA-256 不匹配")
+            raise AssetValidationError("歌曲源文件 SHA-256 不匹配")
         return PrepareSeparationCommand(str(self.project), cover.id, cover.source_relative_path, cover.source_sha256, mode)
 
     create_separation_command = prepare_separation
@@ -87,10 +89,10 @@ class CoverApplicationService:
             raise RightsRequiredError("生成最终混音前必须确认歌曲处理权利")
         ai = cover.get_asset(role="ai_vocal")
         instrumental = cover.get_asset(role="instrumental")
-        if not ai or ai.content_origin != "ai_generated":
-            raise ValueError("生成最终混音前必须存在 AI 人声")
-        if not instrumental or instrumental.content_origin != "separated":
-            raise ValueError("生成最终混音前必须存在已分离伴奏")
+        if not ai or ai.role != CoverAssetRole.AI_VOCAL or ai.content_origin != ContentOrigin.AI_GENERATED:
+            raise AssetValidationError("生成最终混音前必须存在 AI 人声")
+        if not instrumental or instrumental.role != CoverAssetRole.INSTRUMENTAL or instrumental.content_origin != ContentOrigin.SEPARATED:
+            raise AssetValidationError("生成最终混音前必须存在已分离伴奏")
         model_id = profile.active_singing_model_id
         model = next((m for m in profile.singing_models if m.id == model_id), None)
         if not model or model.trust_status != "verified": raise ModelNotReadyError("歌唱模型未通过验证")
@@ -106,10 +108,10 @@ class CoverApplicationService:
         if not cover.rights_confirmed or cover.rights_attestation_text_hash != RIGHTS_ATTESTATION_TEXT_HASH:
             raise RightsRequiredError("导出前必须确认歌曲处理权利")
         asset = cover.get_asset(final_asset_id)
-        if not asset or asset.role != "final_mix" or asset.content_origin != "ai_generated":
-            raise ValueError("只能导出已生成的最终混音")
-        if format not in {"wav", "mp3", "both"}: raise ValueError("不支持的导出格式")
-        if existing_policy not in {"reject", "replace"}: raise ValueError("不支持的覆盖策略")
+        if not asset or asset.role != CoverAssetRole.FINAL_MIX or asset.content_origin != ContentOrigin.AI_GENERATED:
+            raise AssetValidationError("只能导出已生成的最终混音")
+        if format not in {"wav", "mp3", "both"}: raise AssetValidationError("不支持的导出格式")
+        if existing_policy not in {"reject", "replace"}: raise AssetValidationError("不支持的覆盖策略")
         if not publication_rights_acknowledged: raise RightsRequiredError("导出前必须确认发布权利提醒")
         return ExportCoverCommand(str(self.project), cover.id, asset.id, format, file_name,
                                   Path(destination), existing_policy, True)
