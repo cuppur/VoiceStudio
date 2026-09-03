@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QUrl
 from PySide6.QtGui import QCloseEvent, QDesktopServices, QIcon, QTextCursor
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
+    QCheckBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
     QGroupBox, QPlainTextEdit, QProgressBar, QPushButton, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -101,7 +101,13 @@ class MainWindow(QMainWindow):
         central = QWidget(); root = QHBoxLayout(central); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0); self.setCentralWidget(central)
         sidebar = QWidget(); sidebar.setObjectName("sidebar"); sidebar.setFixedWidth(220); side_layout = QVBoxLayout(sidebar); side_layout.setContentsMargins(0, 0, 0, 0); brand = QLabel("VoiceStudio"); brand.setObjectName("brand"); side_layout.addWidget(brand); brand_sub = QLabel("LOCAL AI AUDIO STUDIO"); brand_sub.setObjectName("brandSub"); side_layout.addWidget(brand_sub); self.project_button = QToolButton(); self.project_button.setObjectName("projectPicker"); self.project_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon); self.project_button.setPopupMode(QToolButton.InstantPopup); self.project_menu = QMenu(self.project_button); self.project_menu.aboutToShow.connect(self._refresh_project_menu); self.project_button.setMenu(self.project_menu); side_layout.addWidget(self.project_button)
         self.navigation = QListWidget(); self.navigation.setObjectName("navigation"); self.navigation.setFrameShape(QListWidget.NoFrame); side_layout.addWidget(self.navigation); task_center = QPushButton("任务中心"); task_center.setObjectName("sidebarButton"); task_center.clicked.connect(self._open_task_center); side_layout.addWidget(task_center); version = QLabel("GPT-SoVITS V2ProPlus\n完全本地 · 无遥测"); version.setObjectName("sidebarFoot"); side_layout.addWidget(version); root.addWidget(sidebar)
-        self.stack = QStackedWidget(); root.addWidget(self.stack, 1)
+        workspace = QWidget(); workspace.setObjectName("workspace"); workspace_layout = QVBoxLayout(workspace); workspace_layout.setContentsMargins(0, 0, 0, 0); workspace_layout.setSpacing(0)
+        topbar = QFrame(); topbar.setObjectName("topbar"); topbar_layout = QHBoxLayout(topbar); topbar_layout.setContentsMargins(26, 0, 26, 0); topbar_layout.setSpacing(8)
+        topbar_layout.addWidget(QLabel("创作")); topbar_layout.addWidget(QLabel("›")); current_title = QLabel("AI 翻唱工作台"); current_title.setObjectName("topbarTitle"); topbar_layout.addWidget(current_title); topbar_layout.addStretch()
+        self.topbar_status = QLabel("本地工作进程 · 启动中"); self.topbar_status.setObjectName("topbarStatus"); topbar_layout.addWidget(self.topbar_status)
+        settings_button = QPushButton("设置"); settings_button.setObjectName("topbarButton"); settings_button.clicked.connect(lambda: self.navigation.setCurrentRow(4)); topbar_layout.addWidget(settings_button)
+        workspace_layout.addWidget(topbar)
+        self.stack = QStackedWidget(); workspace_layout.addWidget(self.stack, 1); root.addWidget(workspace, 1)
         for icon, name in (("cover.svg", "AI 翻唱"), ("generate.svg", "文字生成"), ("voices.svg", "我的声音"), ("training.svg", "训练声音"), ("settings.svg", "设置")):
             item = QListWidgetItem(self._navigation_icon(icon), name)
             self.navigation.addItem(item)
@@ -175,10 +181,10 @@ class MainWindow(QMainWindow):
         dialog = SetupDialog(self._script_path(), self.paths, self); dialog.exec(); self.client.start(); self.settings_page.check_health()
 
     def _state(self, state: str) -> None:
-        messages = {"running": "本地工作进程已启动", "stopped": "本地工作进程已停止"}; self.statusBar().showMessage(messages.get(state, state), 5000)
+        messages = {"running": "本地工作进程 · 就绪", "stopped": "本地工作进程 · 已停止"}; message = messages.get(state, state); self.statusBar().showMessage(message, 5000); self.topbar_status.setText(message)
 
     def _worker_event(self, request_id: str, event: str, payload: dict) -> None:
-        if request_id == "worker" and event == "ready": self.statusBar().showMessage("本地工作进程就绪", 5000)
+        if request_id == "worker" and event == "ready": self.statusBar().showMessage("本地工作进程就绪", 5000); self.topbar_status.setText("本地工作进程 · 就绪")
         if hasattr(self, "cover_page"):
             self.cover_page.handle_worker_event(request_id, event, payload)
 
