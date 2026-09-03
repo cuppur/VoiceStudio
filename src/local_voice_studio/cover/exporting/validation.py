@@ -30,6 +30,12 @@ class ExportOutputValidator:
         if self.probe is None and ffprobe is not None:
             self.probe = ExportAudioProbe(ffprobe)
 
+    def cancel(self) -> None:
+        """Forward cancellation to the active managed ffprobe, when present."""
+        cancel = getattr(self.probe, "cancel", None)
+        if callable(cancel):
+            cancel()
+
     def validate(
         self,
         path: Path,

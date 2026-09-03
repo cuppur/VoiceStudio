@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from local_voice_studio.cover.exporting.audio_probe import ExportAudioProbe
+from local_voice_studio.cover.exporting.validation import ExportOutputValidator
 
 
 class FakeProcess:
@@ -66,3 +67,14 @@ def test_export_probe_cancel_passthrough(monkeypatch, tmp_path):
     monkeypatch.setattr("local_voice_studio.cover.exporting.audio_probe.ManagedProcess", Cancelled)
     with pytest.raises(InterruptedError):
         ExportAudioProbe(tmp_path / "ffprobe").probe(tmp_path / "x.wav")
+
+
+def test_export_validator_cancel_forwards_to_managed_probe():
+    class Probe:
+        cancelled = False
+        def cancel(self):
+            self.cancelled = True
+    probe = Probe()
+    validator = ExportOutputValidator(probe)
+    validator.cancel()
+    assert probe.cancelled

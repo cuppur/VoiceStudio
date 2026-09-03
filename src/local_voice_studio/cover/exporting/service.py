@@ -45,7 +45,8 @@ class CoverExporter:
         return self.backend
 
     def cancel(self) -> None:
-        """Cancel the active backend operation, if one exists."""
+        """Cancel both encoding and any active source/output probe."""
+        self.validator.cancel()
         backend = self.backend
         if backend is not None:
             backend.cancel()
