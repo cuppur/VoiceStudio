@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from pathlib import Path
 import pytest
 from local_voice_studio.cover import CoverProject
-from local_voice_studio.cover.separation import MODEL_NAME, SongSeparationPipeline, UVR5RuntimeStatus
+from local_voice_studio.cover.separation import MODEL_NAME, SeparationEngineRegistry, SongSeparationPipeline, UVR5RuntimeStatus
 from local_voice_studio.paths import AppPaths
 
 def setup_case(tmp_path: Path):
@@ -31,6 +31,17 @@ def test_runtime_missing_and_corrupt(tmp_path: Path):
     paths, _, _ = setup_case(tmp_path); model = paths.engine_root / "tools" / "uvr5" / "uvr5_weights" / MODEL_NAME
     model.unlink(); assert UVR5RuntimeStatus.detect(paths).status == "missing"
     model.touch(); assert UVR5RuntimeStatus.detect(paths).status == "corrupt"
+
+
+def test_separation_engine_registry_has_explicit_uvr5_descriptor(tmp_path: Path, monkeypatch):
+    paths, _, _ = setup_case(tmp_path)
+    monkeypatch.setattr("local_voice_studio.cover.separation.UVR5RuntimeStatus.detect", lambda paths=None: UVR5RuntimeStatus("ready", Path("model.pth"), "1" * 64))
+    engine = SeparationEngineRegistry().get("uvr5")
+    descriptor = engine.describe(paths)
+    assert descriptor.id == "uvr5"
+    assert descriptor.version == "uvr5-hp2-v1"
+    assert descriptor.capabilities == ("vocal", "instrumental")
+    assert descriptor.status == "ready"
 
 class FakeProcess:
     def __init__(self, command, **kwargs):

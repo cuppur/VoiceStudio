@@ -7,7 +7,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol
 
 from ..audio import sha256_file
 from ..paths import AppPaths, ensure_within, validate_sha256
@@ -16,6 +16,53 @@ from .project import CoverProject
 
 MODEL_NAME = "HP2_all_vocals.pth"
 SEPARATOR_VERSION = "uvr5-hp2-v1"
+
+
+@dataclass(frozen=True)
+class SeparationEngineDescriptor:
+    id: str
+    version: str
+    model_path: Path | None
+    model_sha256: str
+    capabilities: tuple[str, ...]
+    status: str
+
+
+class SeparationEngine(Protocol):
+    id: str
+    version: str
+
+    def describe(self, paths: AppPaths) -> SeparationEngineDescriptor:
+        ...
+
+
+class UVR5SeparationEngine:
+    id = "uvr5"
+    version = SEPARATOR_VERSION
+
+    def describe(self, paths: AppPaths) -> SeparationEngineDescriptor:
+        runtime = UVR5RuntimeStatus.detect(paths)
+        return SeparationEngineDescriptor(
+            self.id, self.version, runtime.model_path, runtime.model_sha256,
+            ("vocal", "instrumental"), runtime.status,
+        )
+
+
+class SeparationEngineRegistry:
+    """Small registry so pipelines do not branch on engine internals."""
+
+    def __init__(self, engines: tuple[SeparationEngine, ...] | None = None):
+        self._engines = {engine.id: engine for engine in (engines or (UVR5SeparationEngine(),))}
+
+    def get(self, engine_id: str) -> SeparationEngine:
+        try:
+            return self._engines[str(engine_id)]
+        except KeyError as exc:
+            raise ValueError(f"不支持的分离引擎: {engine_id}") from exc
+
+    @property
+    def ids(self) -> tuple[str, ...]:
+        return tuple(self._engines)
 
 
 @dataclass(frozen=True)
@@ -62,18 +109,22 @@ def _kill_tree(process: subprocess.Popen) -> None:
 class SongSeparationPipeline:
     """Run UVR5 out-of-process and publish verified files into one CoverProject."""
 
-    def __init__(self, project_path: Path, *, paths: AppPaths | None = None):
+    def __init__(self, project_path: Path, *, paths: AppPaths | None = None,
+                 engine_registry: SeparationEngineRegistry | None = None):
         self.paths = paths or AppPaths.default()
         self.project_path = ensure_within(self.paths.projects_root, Path(project_path))
+        self.engine_registry = engine_registry or SeparationEngineRegistry()
         self.process: subprocess.Popen | None = None
 
     def cancel(self) -> None:
         if self.process and self.process.poll() is None: _kill_tree(self.process)
 
-    def separate(self, cover_id: str, source_relative_path: str, source_sha256: str, *, cancel=None,
+    def separate(self, cover_id: str, source_relative_path: str, source_sha256: str, *, engine_id: str = "uvr5", cancel=None,
                  progress: Callable[[float, str, str], None] | None = None) -> dict:
-        runtime = UVR5RuntimeStatus.detect(self.paths)
-        if not runtime.ready: raise RuntimeError(runtime.error)
+        engine = self.engine_registry.get(engine_id)
+        descriptor = engine.describe(self.paths)
+        if descriptor.status != "ready":
+            raise RuntimeError(f"{engine.id.upper()} 未就绪")
         validate_sha256(source_sha256, field="source_sha256")
         cover = CoverProject.load(self.project_path, cover_id)
         if not cover.rights_confirmed:
@@ -84,11 +135,11 @@ class SongSeparationPipeline:
         actual_source_sha = sha256_file(source)
         if actual_source_sha != source_sha256 or actual_source_sha != cover.source_sha256:
             raise ValueError("歌曲输入文件 SHA-256 不匹配")
-        cache_key = hashlib.sha256(f"{actual_source_sha}:uvr5:{SEPARATOR_VERSION}:{runtime.model_sha256}".encode()).hexdigest()
+        cache_key = hashlib.sha256(f"{actual_source_sha}:{descriptor.id}:{descriptor.version}:{descriptor.model_sha256}".encode()).hexdigest()
         if (cover.separation_status == "completed" and cover.separation_cache_key == cache_key
-                and cover.separator == "uvr5" and cover.separator_model_sha256 == runtime.model_sha256
+                and cover.separator == descriptor.id and cover.separator_model_sha256 == descriptor.model_sha256
                 and cover.verify_outputs()):
-            return self._result(cover, actual_source_sha, runtime.model_sha256, cache_hit=True)
+            return self._result(cover, actual_source_sha, descriptor.model_sha256, cache_hit=True, separator=descriptor.id, version=descriptor.version)
         if progress: progress(.05, "validating", "正在验证歌曲")
         cover.separation_status = "processing"; cover.save()
         staging = ensure_within(cover.root, cover.root / ".separation-staging")
@@ -135,13 +186,13 @@ class SongSeparationPipeline:
             # and hashes are persisted together with the compatibility paths.
             cover.set_stem("vocal", final_vocal)
             cover.set_stem("instrumental", final_instrumental)
-            cover.separator = "uvr5"; cover.separator_model_sha256 = runtime.model_sha256
+            cover.separator = descriptor.id; cover.separator_model_sha256 = descriptor.model_sha256
             cover.separation_cache_key = cache_key; cover.separation_status = "completed"
             cover.output_paths = {"vocal": cover.vocal_path, "instrumental": cover.instrumental_path}
             cover.output_hashes = {"vocal": sha256_file(final_vocal), "instrumental": sha256_file(final_instrumental)}
             cover.save()
             if progress: progress(1.0, "saving_project", "分离结果已保存")
-            return self._result(cover, actual_source_sha, runtime.model_sha256, cache_hit=False)
+            return self._result(cover, actual_source_sha, descriptor.model_sha256, cache_hit=False, separator=descriptor.id, version=descriptor.version)
         except InterruptedError:
             cover.separation_status = "cancelled"; cover.save(); raise
         except Exception:
@@ -150,10 +201,12 @@ class SongSeparationPipeline:
             self.process = None; shutil.rmtree(staging, ignore_errors=True)
 
     @staticmethod
-    def _result(cover: CoverProject, source_sha: str, model_sha: str, *, cache_hit: bool) -> dict:
+    def _result(cover: CoverProject, source_sha: str, model_sha: str, *, cache_hit: bool,
+                separator: str = "uvr5", version: str = SEPARATOR_VERSION) -> dict:
         vocal = ensure_within(cover.root, cover.root / cover.vocal_path)
         instrumental = ensure_within(cover.root, cover.root / cover.instrumental_path)
-        return {"vocal_path": str(vocal), "instrumental_path": str(instrumental), "separator": "uvr5",
+        return {"vocal_path": str(vocal), "instrumental_path": str(instrumental), "separator": separator,
+                "separator_version": version,
                 "separator_model_sha256": model_sha, "source_sha256": source_sha, "cache_hit": cache_hit,
                 "content_origin": "separated",
                 "vocal_sha256": cover.output_hashes["vocal"], "instrumental_sha256": cover.output_hashes["instrumental"]}
