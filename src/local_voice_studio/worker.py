@@ -382,22 +382,12 @@ class WorkerService:
         if str(payload.get("mode", "uvr5")) != "uvr5":
             raise ValueError("当前阶段只支持 UVR5 分离")
         project = ensure_within(self.paths.projects_root, Path(str(payload.get("project_path", ""))))
-        # Application service resolves the project-owned source and rights
-        # gate before the infrastructure pipeline receives any paths.
-        try:
-            command = CoverApplicationService(project, paths=self.paths).prepare_separation(str(payload.get("cover_id", "")), mode="uvr5")
-        except FileNotFoundError:
-            # Keep the low-level worker contract usable for migration probes
-            # that exercise dispatch before a CoverProject manifest exists.
-            from .cover.application.commands import PrepareSeparationCommand
-            command = PrepareSeparationCommand(str(project), str(payload.get("cover_id", "")),
-                                                str(payload.get("source_relative_path", "")),
-                                                str(payload.get("source_sha256", "")), "uvr5")
-        cover_id = str(payload.get("cover_id", ""))
-        source_relative_path = str(payload.get("source_relative_path", ""))
-        source_sha256 = str(payload.get("source_sha256", ""))
-        if not cover_id or not source_relative_path or not source_sha256:
-            raise ValueError("separate_song 缺少 cover_id/source_relative_path/source_sha256")
+        # The application service is the sole trust boundary.  Never fall
+        # back to client-supplied source paths or hashes when the project
+        # manifest is missing or invalid.
+        command = CoverApplicationService(project, paths=self.paths).prepare_separation(
+            str(payload.get("cover_id", "")), mode="uvr5"
+        )
         pipeline = SongSeparationPipeline(project, paths=self.paths)
         self.separation = pipeline
         try:

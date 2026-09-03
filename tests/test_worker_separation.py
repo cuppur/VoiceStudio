@@ -9,6 +9,7 @@ from local_voice_studio.paths import AppPaths
 from local_voice_studio.protocol import COMMANDS, Message
 from local_voice_studio.worker import WorkerService
 from local_voice_studio.singing.base import EngineReadiness
+from local_voice_studio.cover.application.commands import PrepareSeparationCommand
 
 
 def paths(tmp_path: Path) -> AppPaths:
@@ -35,6 +36,12 @@ def test_worker_dispatches_separate_song_and_passes_cancel(monkeypatch, tmp_path
             seen["pipeline_cancel"] = True
 
     monkeypatch.setattr("local_voice_studio.worker.SongSeparationPipeline", FakePipeline)
+    monkeypatch.setattr(
+        "local_voice_studio.worker.CoverApplicationService.prepare_separation",
+        lambda self, cover_id, *, mode: PrepareSeparationCommand(
+            self.project, cover_id, "source/song.wav", "a" * 64, mode
+        ),
+    )
     service = WorkerService(paths(tmp_path))
     service.emit = lambda *args, **kwargs: None
     project = service.paths.projects_root / "p1"; project.mkdir(parents=True)
@@ -45,6 +52,22 @@ def test_worker_dispatches_separate_song_and_passes_cancel(monkeypatch, tmp_path
     assert seen["cover_id"] == "c1"
     assert seen["source_relative_path"] == "source/song.wav"
     assert seen["cancel"] is service.cancel_event
+
+
+def test_worker_never_bypasses_application_separation_validation(monkeypatch, tmp_path):
+    service = WorkerService(paths(tmp_path))
+    project = service.paths.projects_root / "p1"
+    project.mkdir(parents=True)
+    monkeypatch.setattr(
+        "local_voice_studio.worker.CoverApplicationService.prepare_separation",
+        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("manifest missing")),
+    )
+    with pytest.raises(FileNotFoundError, match="manifest missing"):
+        service._separate_song("request", {
+            "project_path": str(project), "cover_id": "c1",
+            "source_relative_path": "source/song.wav", "source_sha256": "a" * 64,
+            "mode": "uvr5",
+        })
 
 
 def test_cancel_forwards_to_active_separation(monkeypatch, tmp_path):
