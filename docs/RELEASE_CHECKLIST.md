@@ -63,7 +63,7 @@
 | 项 | 方式 | 状态 |
 |----|------|------|
 | 无障碍名称（主导航、设置、cover 主操作） | `test_phase31_ui.py::test_key_controls_expose_accessible_names` | ✅ 自动化 |
-| UI 测试覆盖率 ≥ 90% | 当前 `--cov=local_voice_studio.ui` 实测 **53%** | ⚠️ **P2 延后**（任务卡约定 P2 可延后但须记录；核心状态机/契约已由 E2E 覆盖，剩余为控件渲染分支） |
+| UI 测试覆盖率 ≥ 90% | 当前 `--cov=local_voice_studio.ui` 实测 **91%**（`test_phase63_*` 套件：pages 94 + window 56 + cover_page 74 + ui_coverage 29 + widgets 13） | ✅ 达标 |
 | 中文/英文错误提示 | 全站中文提示；`_friendly_error` 兜底 | ✅ 自动化（部分） |
 
 ## 6. 发布产物顺序（v1.0.0）
