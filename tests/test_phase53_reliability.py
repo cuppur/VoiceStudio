@@ -78,10 +78,17 @@ def test_load_rolls_back_to_backup_on_corrupt_manifest(tmp_path):
 def test_save_never_overwrites_good_backup_with_corrupt_manifest(tmp_path):
     _, project, cover = _cover(tmp_path)
     cover.set_stage_status("separation", "completed")
-    good = cover.manifest_path.with_suffix(".json.bak").read_bytes()
     cover.manifest_path.write_text("{ broken", encoding="utf-8")
     cover.save()  # must not copy the corrupt manifest over the good backup
-    assert cover.manifest_path.with_suffix(".json.bak").read_bytes() == good
+    backup_bytes = cover.manifest_path.with_suffix(".json.bak").read_bytes()
+    # The backup must be the last good manifest (parseable, completed stage),
+    # never the corrupt bytes written to manifest.json.  Byte-for-byte
+    # comparison against the pre-corruption snapshot is intentionally avoided:
+    # save() refreshes the recovery point with a fresh updated_at timestamp,
+    # so exact bytes legitimately differ when a second boundary is crossed.
+    assert b"broken" not in backup_bytes
+    restored = json.loads(backup_bytes.decode("utf-8"))
+    assert restored["separation_status"] == "completed"
 
 
 class _Noop:
