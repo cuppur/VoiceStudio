@@ -143,7 +143,7 @@ class CoverPage(QWidget):
         self.song_title = QLabel("还没有导入歌曲"); self.song_title.setObjectName("songTitle"); copy.addWidget(self.song_title)
         self.song_meta = QLabel("支持 WAV / MP3 / FLAC · 导入后自动寻找同名 LRC"); self.song_meta.setObjectName("muted"); copy.addWidget(self.song_meta); header_layout.addLayout(copy, 1)
         self.separate_button = QPushButton("重新分离"); self.separate_button.setObjectName("secondaryButton"); self.separate_button.clicked.connect(self.separate_song); header_layout.addWidget(self.separate_button)
-        self.import_button = QPushButton("导入歌曲"); self.import_button.setObjectName("secondaryButton"); self.import_button.clicked.connect(self.import_song); header_layout.addWidget(self.import_button); root.addWidget(header)
+        self.import_button = QPushButton("导入歌曲"); self.import_button.setObjectName("secondaryButton"); self.import_button.setAccessibleName("导入歌曲"); self.import_button.clicked.connect(self.import_song); header_layout.addWidget(self.import_button); root.addWidget(header)
 
         center = QHBoxLayout(); center.setSpacing(14); left = QVBoxLayout(); left.setSpacing(12); center.addLayout(left, 1)
         timeline = QFrame(); timeline.setObjectName("timelineCard"); timeline_layout = QVBoxLayout(timeline); timeline_layout.setContentsMargins(0, 0, 0, 0); timeline_layout.setSpacing(0)
@@ -179,9 +179,9 @@ class CoverPage(QWidget):
         self.normalize_toggle = QCheckBox("混音归一化"); self.normalize_toggle.setChecked(True); self.normalize_toggle.setObjectName("settingToggle"); form.addWidget(self.normalize_toggle)
         self.limiter_toggle = QCheckBox("防削波限制器"); self.limiter_toggle.setChecked(True); self.limiter_toggle.setObjectName("settingToggle"); form.addWidget(self.limiter_toggle)
         form.addStretch(); self.rights_state = QLabel("歌曲权利：未确认"); self.rights_state.setWordWrap(True); self.rights_state.setObjectName("rightsState"); form.addWidget(self.rights_state); self.uvr_status = QLabel(); self.uvr_status.setObjectName("muted"); self.uvr_status.setWordWrap(True); form.addWidget(self.uvr_status); note = QLabel("本地处理 · 不上传音频\n普通分离音轨不是 AI 翻唱成品"); note.setObjectName("settingsNote"); note.setWordWrap(True); form.addWidget(note)
-        self.cover_button = QPushButton("开始 AI 翻唱"); self.cover_button.setObjectName("primaryButton"); self.cover_button.setMinimumHeight(42); self.cover_button.setEnabled(False); self.cover_button.clicked.connect(self.generate_ai_vocal); form.addWidget(self.cover_button)
-        self.render_button = QPushButton("生成最终翻唱"); self.render_button.setObjectName("primaryButton"); self.render_button.setEnabled(False); self.render_button.clicked.connect(self.request_final_render); form.addWidget(self.render_button)
-        self.export_button = QPushButton("导出最终混音"); self.export_button.setObjectName("secondaryButton"); self.export_button.setEnabled(False); self.export_button.clicked.connect(self.export_final); form.addWidget(self.export_button)
+        self.cover_button = QPushButton("开始 AI 翻唱"); self.cover_button.setObjectName("primaryButton"); self.cover_button.setAccessibleName("开始 AI 翻唱"); self.cover_button.setMinimumHeight(42); self.cover_button.setEnabled(False); self.cover_button.clicked.connect(self.generate_ai_vocal); form.addWidget(self.cover_button)
+        self.render_button = QPushButton("生成最终翻唱"); self.render_button.setObjectName("primaryButton"); self.render_button.setAccessibleName("生成最终翻唱"); self.render_button.setEnabled(False); self.render_button.clicked.connect(self.request_final_render); form.addWidget(self.render_button)
+        self.export_button = QPushButton("导出最终混音"); self.export_button.setObjectName("secondaryButton"); self.export_button.setAccessibleName("导出最终混音"); self.export_button.setEnabled(False); self.export_button.clicked.connect(self.export_final); form.addWidget(self.export_button)
         return panel
 
     def _mixer_volume_changed(self, index: int, value: int) -> None:

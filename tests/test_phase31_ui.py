@@ -138,3 +138,20 @@ def test_main_window_uses_the_single_formal_singing_training_page(tmp_path: Path
         assert hasattr(window.training_page, "singing_train_button")
         assert window.training_page.train_singing is window.training_page.singing_train_button
         window.close()
+
+
+def test_key_controls_expose_accessible_names(tmp_path: Path):
+    """Phase 6.3 accessibility: primary actions must be reachable by name."""
+    QApplication.instance() or QApplication([])
+    store = StudioStore(_paths(tmp_path)); project = store.create_project("a11y")
+    client = FakeClient()
+    page = CoverPage(store.paths, store, project, client)
+    assert page.import_button.accessibleName() == "导入歌曲"
+    assert page.cover_button.accessibleName() == "开始 AI 翻唱"
+    assert page.render_button.accessibleName() == "生成最终翻唱"
+    assert page.export_button.accessibleName() == "导出最终混音"
+    page.release_resources(); app = QApplication.instance(); app.processEvents()
+    with patch.object(WorkerClient, "start", lambda self: None), patch.object(WorkerClient, "shutdown", lambda self: None), patch.object(WorkerClient, "send", lambda self, command, payload=None, request_id=None: request_id or "request"):
+        window = MainWindow(store.paths, store)
+        assert window.navigation.accessibleName() == "主导航"
+        window.close(); app.processEvents()

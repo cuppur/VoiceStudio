@@ -18,6 +18,9 @@ def main() -> int:
     multiprocessing.freeze_support()
     QCoreApplication.setApplicationName("本地声音工坊")
     QCoreApplication.setOrganizationName("LocalVoiceStudio")
+    # Phase 6.1: keep UI crisp at Windows 100/125/150 % DPI. Qt 6 high-DPI
+    # scaling is on by default; PassThrough keeps fractional rounding exact.
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
