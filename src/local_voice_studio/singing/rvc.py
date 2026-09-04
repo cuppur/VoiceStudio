@@ -14,6 +14,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .base import EngineReadiness
 from .verification import VerificationResult, verify_inference_output
+from ..cover.errors import classify_backend_error
 
 
 @dataclass(frozen=True)
@@ -126,7 +127,10 @@ class RVCEngine:
                     break
             code = self.process.wait()
         finally: self.process = None
-        if code: raise RuntimeError(f"RVC 子进程退出码 {code}: {' | '.join(output_tail[-5:])}")
+        if code:
+            tail = " | ".join(output_tail[-5:])
+            message = f"RVC 子进程退出码 {code}: {tail}"
+            raise RuntimeError(classify_backend_error(message, tail)) from None
 
     def cancel(self) -> None:
         p = self.process

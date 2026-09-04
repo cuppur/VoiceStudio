@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt, QObject, Signal
+from PySide6.QtCore import QProcess, Qt, QObject, Signal
 from PySide6.QtWidgets import QApplication
 
 from local_voice_studio.models import SourceAsset, VoiceProfile
@@ -25,6 +25,8 @@ from local_voice_studio.ui.worker_client import WorkerClient
 
 class FakeClient(QObject):
     event = Signal(str, str, dict)
+    state_changed = Signal(str)
+    ready_changed = Signal(bool)
     def __init__(self): super().__init__(); self.sent = []
     def send(self, command, payload=None, request_id=None):
         self.sent.append((command, dict(payload or {}), request_id)); return request_id or "request"
@@ -59,6 +61,25 @@ def test_worker_exit_finishes_pending_requests_with_error(tmp_path: Path):
     client._finished()
     assert client.pending == {}
     assert events[0][0:2] == ("request-1", "error")
+    assert events[0][2]["status"] == "worker_stopped"
+
+
+def test_worker_process_error_flushes_pending_on_failed_to_start():
+    client = WorkerClient.__new__(WorkerClient)
+    client.pending = {"request-2": "separate_song"}
+    client.ready = True
+    client.process = type("Process", (), {
+        "errorString": lambda self: "cannot start",
+        "error": lambda self: QProcess.FailedToStart,
+    })()
+    events = []
+    client.event = type("Signal", (), {"emit": lambda self, *args: events.append(args)})()
+    client.ready_changed = type("Signal", (), {"emit": lambda self, *args: None})()
+    client.state_changed = type("Signal", (), {"emit": lambda self, *args: None})()
+    client._diagnostic = lambda _message: None
+    client._process_error()
+    assert client.pending == {}
+    assert events[0][0:2] == ("request-2", "error")
     assert events[0][2]["status"] == "worker_stopped"
 
 

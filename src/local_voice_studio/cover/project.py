@@ -124,8 +124,10 @@ class CoverProject:
     separator_model_sha256: str = ""
     separation_cache_key: str = ""
     separation_status: str = "not_started"
+    ai_vocal_status: str = "pending"
+    mix_status: str = "pending"
+    export_status: str = "pending"
     lyrics_path: str = ""
-    lyrics_origin: str = "manual"
     lyrics_origin: str = "manual"
     waveform_path: str = ""
     waveform_paths: dict[str, str] = field(default_factory=dict)
@@ -167,6 +169,43 @@ class CoverProject:
         ids = [asset.id for asset in self.assets]
         if len(ids) != len(set(ids)):
             raise CoverProjectError("assets 不允许重复 asset id")
+        self._normalize_stage_statuses()
+
+    STAGE_FIELDS = ("separation_status", "ai_vocal_status", "mix_status", "export_status")
+    STAGE_STATUSES = ("pending", "running", "completed", "cancelled", "failed", "interrupted")
+
+    def _normalize_stage_statuses(self) -> None:
+        """Coerce persisted stage statuses into the six-state contract."""
+        for field_name in self.STAGE_FIELDS:
+            value = str(getattr(self, field_name, "") or "").strip().lower()
+            legacy = {"not_started": "pending", "processing": "running", "error": "failed", "done": "completed"}
+            normalized = legacy.get(value, value)
+            if normalized not in self.STAGE_STATUSES:
+                normalized = "pending"
+            setattr(self, field_name, normalized)
+
+    def set_stage_status(self, stage: str, status: str) -> None:
+        """Transition one cover workflow stage; persists immediately."""
+        field_name = f"{stage}_status"
+        if field_name not in self.STAGE_FIELDS:
+            raise CoverProjectError(f"未知的工作流阶段: {stage}")
+        if str(status).strip().lower() not in self.STAGE_STATUSES:
+            raise CoverProjectError(f"未知的工作流状态: {status}")
+        setattr(self, field_name, str(status).strip().lower())
+        self.save()
+
+    @classmethod
+    def recover_interrupted(cls, project_root: Path, cover_id: str) -> "CoverProject":
+        """Load a cover, marking any stale running stage as interrupted."""
+        cover = cls.load(project_root, cover_id)
+        changed = False
+        for field_name in cover.STAGE_FIELDS:
+            if getattr(cover, field_name) == "running":
+                setattr(cover, field_name, "interrupted")
+                changed = True
+        if changed:
+            cover.save()
+        return cover
 
     @property
     def root(self) -> Path:
@@ -210,7 +249,21 @@ class CoverProject:
         path = ensure_within(root, root / "manifest.json")
         if not path.is_file():
             raise FileNotFoundError(path)
-        value = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            # Roll back to the last good manifest instead of losing the
+            # project; the corrupted copy stays visible for forensics.
+            backup = path.with_suffix(".json.bak")
+            if backup.is_file():
+                try:
+                    value = json.loads(backup.read_text(encoding="utf-8"))
+                except (OSError, ValueError, json.JSONDecodeError) as backup_exc:
+                    raise CoverProjectError(
+                        f"翻唱工程清单已损坏且备份不可读（{cover_id}）"
+                    ) from backup_exc
+            else:
+                raise CoverProjectError(f"翻唱工程清单已损坏（{cover_id}）") from exc
         version = value.get("schema_version", 1)
         if version not in (1, cls.SCHEMA_VERSION):
             raise CoverProjectError("不支持的翻唱项目版本")
@@ -276,7 +329,11 @@ class CoverProject:
             "vocal_path": self.vocal_path, "instrumental_path": self.instrumental_path,
             "separator": self.separator, "separator_model_sha256": self.separator_model_sha256,
             "separation_cache_key": self.separation_cache_key,
-            "separation_status": self.separation_status, "lyrics_path": self.lyrics_path,
+            "separation_status": self.separation_status,
+            "ai_vocal_status": self.ai_vocal_status,
+            "mix_status": self.mix_status,
+            "export_status": self.export_status,
+            "lyrics_path": self.lyrics_path,
             "lyrics_origin": self.lyrics_origin,
             "waveform_path": self.waveform_path,
             "waveform_paths": dict(self.waveform_paths),
@@ -297,9 +354,19 @@ class CoverProject:
         self._validate_recorded_paths()
         self.root.mkdir(parents=True, exist_ok=True)
         self.updated_at = _now()
+        payload = json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
         temporary = self.manifest_path.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(self.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.write_text(payload, encoding="utf-8")
         temporary.replace(self.manifest_path)
+        # Keep the last successfully written manifest as a recovery point so
+        # a torn write or later corruption can be rolled back instead of
+        # losing the project. Never overwrite a good backup with corrupt bytes.
+        try:
+            json.loads(self.manifest_path.read_text(encoding="utf-8"))
+            backup = self.manifest_path.with_suffix(".json.bak")
+            backup.write_bytes(self.manifest_path.read_bytes())
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
         return self.manifest_path
 
     def copy_source(self, source: Path) -> Path:

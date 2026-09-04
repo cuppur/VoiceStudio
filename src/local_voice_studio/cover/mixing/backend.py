@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Protocol, Sequence
 
 from ..cancellation import as_cancellation_token
-from ..errors import RenderCancelledError
+from ..errors import RenderCancelledError, classify_backend_error
 from ..process import FFMPEG_QUIET_ARGS, ManagedProcess
 from .models import CoverMixSettings, MixInput
 
@@ -125,5 +125,5 @@ class FFmpegMixBackend:
             self.process = None
         if return_code:
             detail = f"：{process.stderr_tail}" if process.stderr_tail else ""
-            raise RuntimeError("FFmpeg 混音失败" + detail)
+            raise RuntimeError(classify_backend_error("FFmpeg 混音失败" + detail, process.stderr_tail))
         return AudioRenderResult(Path(staging_path), float(duration_seconds or 0.0))

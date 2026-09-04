@@ -133,12 +133,24 @@ class WorkerClient(QObject):
 
     def _finished(self, *_args) -> None:
         self._diagnostic(f"finished code={self.process.exitCode()} status={self.process.exitStatus()}")
-        pending = list(self.pending.items()); self.pending.clear()
-        for request_id, command in pending:
-            self.event.emit(request_id, "error", {"message": f"本地工作进程已退出（退出码 {self.process.exitCode()}）", "status": "worker_stopped", "command": command})
+        self._fail_pending(f"本地工作进程已退出（退出码 {self.process.exitCode()}）")
         self.ready = False; self.ready_changed.emit(False)
         self.state_changed.emit("stopped")
 
     def _process_error(self, *_args) -> None:
         self._diagnostic("process error: " + self.process.errorString())
+        # FailedToStart (e.g. missing private interpreter) never triggers
+        # finished, so pending requests must be flushed here too or the UI
+        # would stay stuck with disabled buttons.
+        if self.process.error() == QProcess.FailedToStart:
+            self._fail_pending("无法启动本地工作进程：请进入“设置”安装或修复本地引擎")
+            self.ready = False; self.ready_changed.emit(False)
+            self.state_changed.emit("start-failed")
+            return
+        # Crashed: finished() follows, which flushes pending requests.
         self.state_changed.emit(self.process.errorString())
+
+    def _fail_pending(self, message: str) -> None:
+        pending = list(self.pending.items()); self.pending.clear()
+        for request_id, command in pending:
+            self.event.emit(request_id, "error", {"message": message, "status": "worker_stopped", "command": command})

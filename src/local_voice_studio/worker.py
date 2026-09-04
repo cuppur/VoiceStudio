@@ -26,6 +26,7 @@ from .cover.exporting import CoverExporter, FFmpegExportBackend
 from .cover.application import CoverApplicationService
 from .cover.cancellation import CancellationToken
 from .cover.errors import CoverError, error_payload as cover_error_payload
+from .cover.project import CoverProject
 from .singing.pipeline import SingingPipeline
 from .singing.rvc import RVCConfig, RVCEngine
 
@@ -141,6 +142,10 @@ class WorkerService:
                     stop()
             if self.mixer is not None: self.mixer.cancel()
             if self.exporter is not None: self.exporter.cancel()
+            if self.lyrics is not None:
+                cancel = getattr(self.lyrics, "cancel", None)
+                if callable(cancel):
+                    cancel()
             self.emit(message.id, "result", {"cancel_requested": True, "target_request_id": self.current_request_id})
         elif message.type == "shutdown":
             self.cancel_event.set()
@@ -158,6 +163,10 @@ class WorkerService:
                     stop()
             if self.mixer is not None: self.mixer.cancel()
             if self.exporter is not None: self.exporter.cancel()
+            if self.lyrics is not None:
+                cancel = getattr(self.lyrics, "cancel", None)
+                if callable(cancel):
+                    cancel()
             self.shutdown_event.set()
             self.emit(message.id, "result", {"shutdown": True})
         else:
@@ -179,7 +188,7 @@ class WorkerService:
                 "transcribe_lyrics": self._transcribe_lyrics,
             }[message.type]
             self.current_request_id = message.id
-            self._request_context = {key: message.payload[key] for key in ("workflow_id", "stage", "attempt", "overall_progress") if key in message.payload}
+            self._request_context = {key: message.payload[key] for key in ("workflow_id", "stage", "attempt", "overall_progress", "project_path", "cover_id") if key in message.payload}
             self._request_context["command"] = message.type
             self.current_thread = threading.Thread(target=self._run_guarded, args=(message.id, target, message.payload), daemon=True)
             self.current_thread.start()
@@ -228,9 +237,35 @@ class WorkerService:
             raise ValueError("无法唯一确定旧模型所属项目，请重新打开该项目")
         return matches[0]
 
+    STAGE_BY_COMMAND = {
+        "separate_song": "separation",
+        "convert_vocal": "ai_vocal",
+        "render_cover": "mix",
+        "export_cover": "export",
+    }
+
+    def _stage_cover(self, stage: str, status: str) -> None:
+        """Persist a six-state transition on the active cover, best effort."""
+        try:
+            project_value = str(self._request_context.get("project_path", ""))
+            cover_id = str(self._request_context.get("cover_id", ""))
+            if not project_value or not cover_id:
+                return
+            project = ensure_within(self.paths.projects_root, Path(project_value))
+            cover = CoverProject.load(project, cover_id)
+            cover.set_stage_status(stage, status)
+        except Exception:
+            # A missing/corrupt cover must not mask the real command outcome.
+            pass
+
     def _run_guarded(self, request_id: str, target, payload: dict[str, Any]) -> None:
+        stage = self.STAGE_BY_COMMAND.get(self._request_context.get("command", ""))
+        if stage:
+            self._stage_cover(stage, "running")
         try:
             target(request_id, payload)
+            if stage:
+                self._stage_cover(stage, "completed")
         except Exception as exc:
             traceback.print_exc(file=sys.stderr)
             cancelled = (
@@ -239,6 +274,8 @@ class WorkerService:
                 or str(getattr(exc, "code", "")).endswith("cancelled")
             )
             event = "cancelled" if cancelled else "failed"
+            if stage:
+                self._stage_cover(stage, "cancelled" if cancelled else "failed")
             error_payload = {"message": str(exc), "exception": type(exc).__name__, "status": event}
             if isinstance(exc, CoverError):
                 error_payload.update(cover_error_payload(exc))

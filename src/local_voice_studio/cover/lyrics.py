@@ -58,6 +58,13 @@ class CoverLyricsService:
         self.paths = paths or AppPaths.default()
         self.project_path = ensure_within(self.paths.projects_root, Path(project_path))
         self.python = python
+        self._process: subprocess.Popen | None = None
+
+    def cancel(self) -> None:
+        """Kill the running transcription child process (cancel contract)."""
+        process = self._process
+        if process is not None and process.poll() is None:
+            self._kill(process)
 
     def _engine_python(self) -> Path:
         if self.python is not None:
@@ -93,6 +100,7 @@ class CoverLyricsService:
                                    stdin=subprocess.DEVNULL,
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    text=True, encoding="utf-8", errors="replace")
+        self._process = process
         try:
             assert process.stdout is not None
             for line in process.stdout:
@@ -100,7 +108,7 @@ class CoverLyricsService:
                 if progress and stripped:
                     progress(0.4, stripped[-120:])
                 if cancel is not None and getattr(cancel, "is_set", lambda: False)():
-                    self._kill(process)
+                    self.cancel()
                     process.wait()
                     raise InterruptedError("自动识别歌词已取消")
             if process.wait() != 0:
@@ -124,9 +132,13 @@ class CoverLyricsService:
             segments_json.unlink(missing_ok=True)
             raise
         finally:
-            if process.poll() is None:
-                self._kill(process)
-                process.wait()
+            try:
+                if process.poll() is None:
+                    self._kill(process)
+                    process.wait()
+            finally:
+                if self._process is process:
+                    self._process = None
 
     def _engine_env(self) -> dict[str, str]:
         env = {**os.environ}

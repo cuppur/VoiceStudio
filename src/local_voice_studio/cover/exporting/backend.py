@@ -6,6 +6,7 @@ from typing import Any, Protocol
 
 from .. import process as process_module
 from ..cancellation import as_cancellation_token
+from ..errors import classify_backend_error
 from ..process import FFMPEG_QUIET_ARGS
 
 
@@ -55,7 +56,7 @@ class FFmpegExportBackend:
             self.process = None
         if return_code:
             detail = f"：{process.stderr_tail}" if process.stderr_tail else ""
-            raise RuntimeError("FFmpeg 导出失败" + detail)
+            raise RuntimeError(classify_backend_error("FFmpeg 导出失败" + detail, process.stderr_tail))
         return target
 
     render = encode

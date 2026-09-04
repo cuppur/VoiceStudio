@@ -13,6 +13,7 @@ from typing import Any, Protocol
 from ..audio import sha256_file
 from ..paths import AppPaths, ensure_within, validate_id
 from ..runtime import EngineRuntimeResolver
+from .errors import classify_backend_error
 from .project import CoverAsset, CoverProject
 
 
@@ -104,7 +105,7 @@ class FFmpegVocalCleanupBackend:
                     time.sleep(0.1)
             if self.process.wait() != 0:
                 error = (self.process.stderr.read() if self.process.stderr else b"").decode("utf-8", errors="replace")
-                raise RuntimeError("人声清理失败: " + error[-300:])
+                raise RuntimeError(classify_backend_error("人声清理失败: " + error[-300:], error))
         finally:
             self.process = None
 

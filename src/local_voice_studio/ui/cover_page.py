@@ -97,6 +97,9 @@ class CoverPage(QWidget):
         self.preview_controller = PreviewAudioController.create_qt(self, drift_tolerance_ms=50)
         self.sync_timer = QTimer(self); self.sync_timer.setInterval(750); self.sync_timer.timeout.connect(self._resync_preview)
         self._build(); self.refresh_profiles(); self.refresh_runtime_status(); self.restore_cover()
+        if self.worker is not None:
+            self.worker.state_changed.connect(self._on_worker_state)
+            self.worker.ready_changed.connect(self._on_worker_ready)
         for role, channel in self.preview_controller.channels.items():
             channel.player.positionChanged.connect(lambda value, r=role: self._on_player_position(r, value))
             channel.player.durationChanged.connect(lambda _value: self.transport.set_timeline(self._position_ms(), self._timeline_duration()))
@@ -421,7 +424,13 @@ class CoverPage(QWidget):
     def restore_cover(self):
         covers = self._list_cover_projects()
         if not covers: return
-        self.cover_project = max(covers, key=lambda item: item.updated_at); self.rights_state.setText("歌曲权利：已确认" if self.cover_project.rights_confirmed else "歌曲权利：未确认"); self.track_paths = {}; source = self.cover_project.root / self.cover_project.source_relative_path; lrc = self.cover_project.root / self.cover_project.lyrics_path if self.cover_project.lyrics_path else None; self._reset_tracks(); self._load_track(0, source, lrc)
+        latest = max(covers, key=lambda item: item.updated_at)
+        stale = [field for field in CoverProject.STAGE_FIELDS if getattr(latest, field) == "running"]
+        if stale:
+            names = {"separation_status": "分离", "ai_vocal_status": "AI 人声", "mix_status": "最终混音", "export_status": "导出"}
+            self.song_meta.setText("上次退出时流程未完成（" + "、".join(names[f] for f in stale) + "），已标记为中断，可重新执行")
+        self.cover_project = CoverProject.recover_interrupted(self.project, latest.id) if stale else latest
+        self.rights_state.setText("歌曲权利：已确认" if self.cover_project.rights_confirmed else "歌曲权利：未确认"); self.track_paths = {}; source = self.cover_project.root / self.cover_project.source_relative_path; lrc = self.cover_project.root / self.cover_project.lyrics_path if self.cover_project.lyrics_path else None; self._reset_tracks(); self._load_track(0, source, lrc)
         for index, role in ((1, "vocal"), (2, "instrumental")):
             asset = self.cover_project.get_asset(role=role)
             if asset: self._load_track(index, self.cover_project.root / asset.relative_path)
@@ -450,6 +459,21 @@ class CoverPage(QWidget):
         if self._separation_request and self.worker:
             self.cancel_button.setEnabled(False); self.song_meta.setText("正在停止歌曲分离…")
             self.worker.send("cancel", {"target_request_id": self._separation_request})
+
+    def _on_worker_state(self, state: str) -> None:
+        if state in {"stopped", "start-failed"}:
+            self.song_meta.setText("本地处理进程已停止：可重新执行任务或进入设置修复引擎")
+            self.separate_button.setEnabled(False)
+            self.cover_button.setEnabled(False)
+            self.render_button.setEnabled(False)
+            self.export_button.setEnabled(False)
+            self.cancel_button.hide(); self.cancel_ai_button.hide(); self.cancel_final_button.hide()
+            self.progress.hide()
+
+    def _on_worker_ready(self, ready: bool) -> None:
+        self.refresh_runtime_status()
+        if ready and self.cover_project:
+            self._update_cover_button()
 
     def handle_worker_event(self, request_id, event, payload):
         if request_id == self._lyrics_request:
