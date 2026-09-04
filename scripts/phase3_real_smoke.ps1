@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)][string]$Model,
     [Parameter(Mandatory=$true)][string]$InputDir,
     [Parameter(Mandatory=$true)][string]$OutputDir,
