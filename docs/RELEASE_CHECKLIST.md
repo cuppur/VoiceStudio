@@ -9,15 +9,15 @@
 |----|------|------|
 | 版本统一 1.0.0（pyproject / `__version__` / 安装器） | `test_core.py::test_package_version_matches_project_version` 自动化 | ✅ 自动化 |
 | onedir 打包 + EXE smoke | CI `package-smoke` | ✅ 自动化 |
-| 安装器编译（Inno Setup 6） | 本地 `scripts/build.ps1`（本机已编译通过 `LocalVoiceStudio-Setup-1.0.0.exe`） | 发布前重跑 |
+| 安装器编译（Inno Setup 6） | 本地 `scripts/build.ps1` 完整构建（PS 5.1 兼容）→ `LocalVoiceStudio-Setup-1.0.0.exe`（57.6 MB）+ 一键启动（6.2 MB） | ✅ 已本地验证 |
 | 安装 / 修复 / 卸载（Inno 默认 Repair 流程） | 真机双击 Setup，走 Install → 再次运行走 Repair/Uninstall | 人工 |
 | 卸载默认保留用户数据 | 卸载后检查 `%LOCALAPPDATA%\LocalVoiceStudio` 仍在 | 人工 |
 | 卸载可选删除全部数据 | 卸载时选「是」，确认项目/声音/录音/导出被删除 | 人工 |
 | 安装器不捆绑大模型 | 安装后 `%LOCALAPPDATA%\Programs\LocalVoiceStudio` 大小（应远小于模型体积）；模型由运行时引导下载 | 人工 |
 | 运行时下载 SHA256 + 断点续传 + 重试 | `scripts/bootstrap_runtime.ps1`（`curl -C - --retry 5` + `Get-FileHash` 校验） | 代码审查 + 真机断网重试 |
 | Authenticode 签名（EXE + Setup + 卸载器） | `scripts/sign_release.ps1` / `build.ps1 -Release -CertificateThumbprint` | 发布时执行 |
-| 发布文件：Setup exe + SHA256SUMS + licenses + README + CHANGELOG | `scripts/create_release_metadata.ps1`（生成 `SHA256SUMS.txt` + `sbom.cdx.json` + `sbom.spdx`） | 发布时执行 |
-| SBOM（CycloneDX JSON + SPDX 2.3 tag-value） | 同上；需先安装 `pip install "cyclonedx-bom>=5,<7" lib4sbom`（cyclonedx-py 无 SPDX 输出，脚本用 lib4sbom 转换） | 发布时执行 |
+| 发布文件：Setup exe + SHA256SUMS + licenses + README + CHANGELOG | `scripts/create_release_metadata.ps1`（生成 `SHA256SUMS.txt` + `sbom.cdx.json` + `sbom.spdx`） | ✅ 已对真实安装包验证 |
+| SBOM（CycloneDX JSON + SPDX 2.3 tag-value） | 同上；需先安装 `pip install "cyclonedx-bom>=5,<7" lib4sbom`（cyclonedx-py 无 SPDX 输出，脚本用 lib4sbom 转换） | ✅ 已对真实安装包验证 |
 | 升级测试（旧版 0.x → 1.0.0） | 真机先装旧版再装新版，确认项目/数据保留 | 人工 |
 
 ## 2. 兼容矩阵（Phase 6.1）
