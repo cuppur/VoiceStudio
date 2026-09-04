@@ -24,21 +24,23 @@ $lines = foreach ($item in $Artifact) {
 # --- SBOM (CycloneDX JSON + SPDX 2.3 tag-value) ------------------------------
 # cyclonedx-py 仅支持 JSON/XML 输出（无 SPDX），故先用它生成 CycloneDX JSON，
 # 再用 lib4sbom 转换为 SPDX 2.3 tag-value。
-$python = $null
+# Note: PowerShell variable names are case-insensitive, so the resolved
+# executable is kept in $resolvedPython to avoid clobbering the $Python param.
+$resolvedPython = $null
 if ($Python -ne "") {
-    $python = Get-Item -LiteralPath $Python -ErrorAction SilentlyContinue
-    if (-not $python) { throw "指定的 Python 路径不存在：$Python" }
+    $resolvedPython = Get-Item -LiteralPath $Python -ErrorAction SilentlyContinue
+    if (-not $resolvedPython) { throw "指定的 Python 路径不存在：$Python" }
 } else {
     $candidates = @()
     $cmd = Get-Command python -ErrorAction SilentlyContinue
     if ($cmd) { $candidates += $cmd.Source }
     foreach ($candidate in $candidates) {
-        if ($candidate -and (Test-Path -LiteralPath $candidate)) { $python = Get-Item -LiteralPath $candidate; break }
+        if ($candidate -and (Test-Path -LiteralPath $candidate)) { $resolvedPython = Get-Item -LiteralPath $candidate; break }
     }
 }
-if (-not $python) { throw "Python is required to create the SBOM" }
-$pythonSource = [string]$python
-if ([System.IO.Path]::IsPathRooted($pythonSource) -eq $false) { $pythonSource = $python.FullName }
+if (-not $resolvedPython) { throw "Python is required to create the SBOM" }
+$pythonSource = [string]$resolvedPython
+if ([System.IO.Path]::IsPathRooted($pythonSource) -eq $false) { $pythonSource = $resolvedPython.FullName }
 $hasCycloneDx = & $pythonSource -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('cyclonedx_py') else 1)"
 if ($LASTEXITCODE -ne 0) {
     throw "未安装 cyclonedx-py，请先安装：$pythonSource -m pip install 'cyclonedx-bom>=5,<7'"
