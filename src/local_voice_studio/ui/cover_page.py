@@ -169,7 +169,9 @@ class CoverPage(QWidget):
         self.voice_capabilities = QLabel("✓ AI 翻唱    ✓ 本地处理"); self.voice_capabilities.setObjectName("capabilities"); form.addWidget(self.voice_capabilities)
         form.addWidget(_label("翻唱设置", "cardTitle")); pitch_row = QHBoxLayout(); pitch_row.addWidget(QLabel("音调")); self.pitch = QSpinBox(); self.pitch.setRange(-12, 12); self.pitch.setSuffix(" 半音"); pitch_row.addWidget(self.pitch); self.auto_pitch_button = QPushButton("自动建议"); self.auto_pitch_button.setObjectName("miniButton"); self.auto_pitch_button.clicked.connect(self.suggest_transpose); pitch_row.addWidget(self.auto_pitch_button); form.addLayout(pitch_row)
         tune_row = QHBoxLayout(); tune_row.addWidget(QLabel("自动音高")); self.autotune = QComboBox(); self.autotune.addItem("关闭", "off"); self.autotune.addItem("轻度", "light"); self.autotune.addItem("中度", "medium"); tune_row.addWidget(self.autotune); form.addLayout(tune_row)
-        self.cleanup_toggle = QCheckBox("人声降噪（可选）"); self.cleanup_toggle.setChecked(False); self.cleanup_toggle.setObjectName("settingToggle"); form.addWidget(self.cleanup_toggle)
+        self.cleanup_toggle = QCheckBox("人声清理（可选）"); self.cleanup_toggle.setChecked(False); self.cleanup_toggle.setObjectName("settingToggle"); form.addWidget(self.cleanup_toggle)
+        dereverb_row = QHBoxLayout(); dereverb_row.addWidget(QLabel("去混响")); self.dereverb = QComboBox(); self.dereverb.addItem("关闭", "off"); self.dereverb.addItem("轻度", "light"); self.dereverb.addItem("强力", "strong"); self.dereverb.setEnabled(False); dereverb_row.addWidget(self.dereverb); form.addLayout(dereverb_row)
+        self.cleanup_toggle.toggled.connect(self.dereverb.setEnabled)
         self.normalize_toggle = QCheckBox("混音归一化"); self.normalize_toggle.setChecked(True); self.normalize_toggle.setObjectName("settingToggle"); form.addWidget(self.normalize_toggle)
         self.limiter_toggle = QCheckBox("防削波限制器"); self.limiter_toggle.setChecked(True); self.limiter_toggle.setObjectName("settingToggle"); form.addWidget(self.limiter_toggle)
         form.addStretch(); self.rights_state = QLabel("歌曲权利：未确认"); self.rights_state.setWordWrap(True); self.rights_state.setObjectName("rightsState"); form.addWidget(self.rights_state); self.uvr_status = QLabel(); self.uvr_status.setObjectName("muted"); self.uvr_status.setWordWrap(True); form.addWidget(self.uvr_status); note = QLabel("本地处理 · 不上传音频\n普通分离音轨不是 AI 翻唱成品"); note.setObjectName("settingsNote"); note.setWordWrap(True); form.addWidget(note)
@@ -301,7 +303,7 @@ class CoverPage(QWidget):
         self.cover_button.setEnabled(False); self.cancel_ai_button.setEnabled(True); self.cancel_ai_button.show()
         if self.cleanup_toggle.isChecked():
             try:
-                cleanup = self.cover_service.create_vocal_cleanup_command(self.cover_project.id, {"mode": "denoise"}).to_worker_payload()
+                cleanup = self.cover_service.create_vocal_cleanup_command(self.cover_project.id, {"mode": "denoise", "dereverb": self.dereverb.currentData()}).to_worker_payload()
             except Exception as exc:
                 self._ai_failed(str(exc)); return
             self._pending_ai_payload = payload; self.cover_button.setText("人声清理中…"); self.song_meta.setText("正在清理已分离人声")

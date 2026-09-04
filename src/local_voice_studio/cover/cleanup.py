@@ -18,11 +18,18 @@ from .project import CoverAsset, CoverProject
 
 @dataclass(frozen=True)
 class VocalCleanupSettings:
-    """A deliberately small cleanup surface for the v1 vocal input chain."""
+    """A deliberately small cleanup surface for the v1 vocal input chain.
+
+    ``dereverb`` follows the v1 product spec: Off / Light / Strong.  All
+    levels are optional and default to Off; any cleaned stem keeps
+    ``content_origin = separated`` so it can never be mistaken for an
+    AI-generated final product.
+    """
 
     denoise: bool = False
+    dereverb: str = "off"
     highpass_hz: int = 80
-    version: str = "vocal-cleanup-v1"
+    version: str = "vocal-cleanup-v2"
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "VocalCleanupSettings":
@@ -31,13 +38,17 @@ class VocalCleanupSettings:
         mode = str(values.get("mode", "denoise" if values.get("denoise") else "off")).strip().lower()
         if mode not in {"off", "denoise"}:
             raise ValueError("当前仅支持关闭或降噪人声清理")
+        dereverb = str(values.get("dereverb", "off")).strip().lower()
+        if dereverb not in {"off", "light", "strong"}:
+            raise ValueError("去混响仅支持关闭、轻度或强力")
         highpass = int(values.get("highpass_hz", cls.highpass_hz))
         if not 20 <= highpass <= 250:
             raise ValueError("人声高通频率必须在 20 到 250 Hz 之间")
-        return cls(denoise=mode == "denoise", highpass_hz=highpass)
+        return cls(denoise=mode == "denoise", dereverb=dereverb, highpass_hz=highpass)
 
     def canonical(self) -> dict[str, object]:
-        return {"denoise": self.denoise, "highpass_hz": self.highpass_hz, "version": self.version}
+        return {"denoise": self.denoise, "dereverb": self.dereverb,
+                "highpass_hz": self.highpass_hz, "version": self.version}
 
 
 class VocalCleanupBackend(Protocol):
@@ -71,10 +82,10 @@ class FFmpegVocalCleanupBackend:
                 self.process.terminate()
 
     def cleanup(self, source: Path, output: Path, settings: VocalCleanupSettings, cancel: Any = None) -> None:
-        if not settings.denoise:
+        if not settings.denoise and settings.dereverb == "off":
             raise ValueError("未启用任何人声清理")
         output.parent.mkdir(parents=True, exist_ok=True)
-        filters = f"highpass=f={settings.highpass_hz},afftdn=nf=-25"
+        filters = _cleanup_filters(settings)
         self.process = subprocess.Popen(
             [str(self.executable), "-hide_banner", "-nostdin", "-y", "-i", str(source), "-af", filters,
              "-c:a", "pcm_s16le", str(output)],
@@ -110,7 +121,7 @@ class VocalCleanupService:
             cancel()
 
     def cleanup(self, cover_id: str, settings: VocalCleanupSettings, *, output_id: str = "", cancel: Any = None) -> dict[str, object]:
-        if not settings.denoise:
+        if not settings.denoise and settings.dereverb == "off":
             raise ValueError("未启用任何人声清理")
         cover = CoverProject.load(self.project_path, cover_id)
         source = next((asset for asset in reversed(cover.assets) if asset.role == "vocal" and asset.content_origin == "separated"
@@ -151,6 +162,29 @@ class VocalCleanupService:
         except Exception:
             staging.unlink(missing_ok=True)
             raise
+
+
+def _cleanup_filters(settings: VocalCleanupSettings) -> str:
+    """Build the ffmpeg filter chain for the requested cleanup surface.
+
+    ``dereverb`` is implemented as an optional non-local-means denoiser tuned
+    for the vocal band: Light keeps a conservative search window, Strong widens
+    it and adds a gentle compressor to tame the reverb tail.  Nothing here
+    fabricates AI processing -- the stem stays ``content_origin = separated``.
+    """
+    chain: list[str] = []
+    if settings.dereverb == "light":
+        chain.append("anlmdn=s=1:p=1:sc=0.05")
+    elif settings.dereverb == "strong":
+        chain.append("anlmdn=s=3:p=2:sc=0.08")
+        chain.append("acompressor=threshold=0.5:ratio=2:attack=10:release=120")
+    if settings.denoise:
+        chain.append(f"afftdn=nf=-25")
+    if chain:
+        chain.append(f"highpass=f={settings.highpass_hz}")
+    if not chain:
+        raise ValueError("未启用任何人声清理")
+    return ",".join(chain)
 
 
 def _valid_wav(path: Path) -> bool:
