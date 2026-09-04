@@ -72,7 +72,7 @@ class CoverApplicationService:
 
     create_separation_command = prepare_separation
 
-    def prepare_ai_vocal(self, cover_id: str, profile_id: str, *, pitch_shift: int = 0) -> PrepareAIVocalCommand:
+    def prepare_ai_vocal(self, cover_id: str, profile_id: str, *, pitch_shift: int = 0, inference_settings: dict[str, Any] | None = None) -> PrepareAIVocalCommand:
         cover = self._cover(cover_id); profile = self._profile(profile_id)
         if not cover.rights_confirmed or cover.rights_attestation_text_hash != RIGHTS_ATTESTATION_TEXT_HASH:
             raise RightsRequiredError("开始 AI 翻唱前必须确认歌曲处理权利")
@@ -80,7 +80,7 @@ class CoverApplicationService:
         model = next((m for m in profile.singing_models if m.id == model_id), None)
         if not model or model.trust_status != "verified":
             raise ModelNotReadyError("歌唱模型未通过验证")
-        return PrepareAIVocalCommand(str(self.project), cover.id, profile.id, model.id, int(pitch_shift))
+        return PrepareAIVocalCommand(str(self.project), cover.id, profile.id, model.id, int(pitch_shift), dict(inference_settings or {}))
 
     create_ai_vocal_command = prepare_ai_vocal
 

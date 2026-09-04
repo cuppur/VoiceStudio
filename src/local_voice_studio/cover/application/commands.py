@@ -43,6 +43,7 @@ class PrepareAIVocalCommand:
     profile_id: str
     singing_model_id: str
     pitch_shift: int = 0
+    inference_settings: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "project_path", Path(self.project_path))
@@ -54,7 +55,7 @@ class PrepareAIVocalCommand:
     def to_payload(self) -> dict[str, Any]:
         return {"project_path": str(self.project_path), "cover_id": self.cover_id,
                 "profile_id": self.profile_id, "singing_model_id": self.singing_model_id,
-                "pitch_shift": self.pitch_shift}
+                "pitch_shift": self.pitch_shift, "inference_settings": dict(self.inference_settings)}
 
     to_worker_payload = to_payload
 

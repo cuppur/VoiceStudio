@@ -17,7 +17,7 @@ PAYLOAD_FIELDS: dict[str, frozenset[str]] = {
         "project_path", "profile_id", "source_asset_ids", "training_run_id", "engine",
     }),
     "convert_vocal": frozenset({
-        "project_path", "cover_id", "profile_id", "singing_model_id", "pitch_shift",
+        "project_path", "cover_id", "profile_id", "singing_model_id", "pitch_shift", "inference_settings",
     }),
     "render_cover": frozenset({
         "project_path", "cover_id", "profile_id", "singing_model_id", "mix_settings",

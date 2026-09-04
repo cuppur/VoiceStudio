@@ -1,7 +1,14 @@
 import hashlib
 
 from local_voice_studio.models import VoiceProfile
-from local_voice_studio.singing.models import SingingModelVersion
+from local_voice_studio.singing.models import RVCInferenceSettings, SingingModelVersion
+
+
+def test_autotune_presets_map_to_f0_smoothing_without_overriding_manual_radius():
+    assert RVCInferenceSettings.from_payload({"autotune": "off"}).filter_radius == 0
+    assert RVCInferenceSettings.from_payload({"autotune": "light"}).filter_radius == 3
+    assert RVCInferenceSettings.from_payload({"autotune": "medium"}).filter_radius == 7
+    assert RVCInferenceSettings.from_payload({"autotune": "medium", "filter_radius": 2}).filter_radius == 2
 
 
 def _model(tmp_path, profile_id="profile"):

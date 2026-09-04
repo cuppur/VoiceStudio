@@ -168,6 +168,7 @@ class CoverPage(QWidget):
         form.addWidget(_label("目标声音", "sectionLabel")); self.profile_combo = VoiceSelector(project_root=self.project); self.profile_combo.voice_selected.connect(self._profile_selected); form.addWidget(self.profile_combo)
         self.voice_capabilities = QLabel("✓ AI 翻唱    ✓ 本地处理"); self.voice_capabilities.setObjectName("capabilities"); form.addWidget(self.voice_capabilities)
         form.addWidget(_label("翻唱设置", "cardTitle")); pitch_row = QHBoxLayout(); pitch_row.addWidget(QLabel("音调")); self.pitch = QSpinBox(); self.pitch.setRange(-12, 12); self.pitch.setSuffix(" 半音"); pitch_row.addWidget(self.pitch); self.auto_pitch_button = QPushButton("自动建议"); self.auto_pitch_button.setObjectName("miniButton"); self.auto_pitch_button.clicked.connect(self.suggest_transpose); pitch_row.addWidget(self.auto_pitch_button); form.addLayout(pitch_row)
+        tune_row = QHBoxLayout(); tune_row.addWidget(QLabel("自动音高")); self.autotune = QComboBox(); self.autotune.addItem("关闭", "off"); self.autotune.addItem("轻度", "light"); self.autotune.addItem("中度", "medium"); tune_row.addWidget(self.autotune); form.addLayout(tune_row)
         self.cleanup_toggle = QCheckBox("人声降噪（可选）"); self.cleanup_toggle.setChecked(False); self.cleanup_toggle.setObjectName("settingToggle"); form.addWidget(self.cleanup_toggle)
         self.normalize_toggle = QCheckBox("混音归一化"); self.normalize_toggle.setChecked(True); self.normalize_toggle.setObjectName("settingToggle"); form.addWidget(self.normalize_toggle)
         self.limiter_toggle = QCheckBox("防削波限制器"); self.limiter_toggle.setChecked(True); self.limiter_toggle.setObjectName("settingToggle"); form.addWidget(self.limiter_toggle)
@@ -293,7 +294,7 @@ class CoverPage(QWidget):
         if not self.worker: self.song_meta.setText("本地 Worker 未连接"); return
         try:
             payload = self.cover_service.create_ai_vocal_command(
-                self.cover_project.id, profile.id, pitch_shift=self.pitch.value()
+                self.cover_project.id, profile.id, pitch_shift=self.pitch.value(), inference_settings={"autotune": self.autotune.currentData()}
             ).to_worker_payload()
         except Exception as exc:
             self.song_meta.setText(str(exc)); return

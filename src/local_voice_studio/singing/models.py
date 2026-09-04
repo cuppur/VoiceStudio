@@ -28,6 +28,7 @@ class RVCInferenceSettings:
     f0_method: str = "rmvpe"
     pitch_backend_version: str = "rvc-rmvpe-v1"
     postprocess: str = "light"
+    autotune: str = "off"
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "RVCInferenceSettings":
@@ -36,26 +37,29 @@ class RVCInferenceSettings:
         transpose = int(values.get("transpose", payload.get("pitch_shift", payload.get("transpose", 0))))
         index_rate = float(values.get("index_rate", payload.get("index_rate", cls.index_rate)))
         protect = float(values.get("protect", payload.get("protect", cls.protect)))
-        filter_radius = int(values.get("filter_radius", payload.get("filter_radius", cls.filter_radius)))
+        raw_radius = values.get("filter_radius", payload.get("filter_radius"))
         f0_method = str(values.get("f0_method", payload.get("f0_method", cls.f0_method))).strip().lower()
         postprocess = str(values.get("postprocess", payload.get("postprocess", cls.postprocess))).strip().lower()
+        autotune = str(values.get("autotune", payload.get("autotune", cls.autotune))).strip().lower()
+        if autotune not in {"off", "light", "medium"}: raise ValueError("自动音高仅支持关闭、轻度或中度")
+        filter_radius = int(raw_radius if raw_radius is not None else {"off": 0, "light": 3, "medium": 7}[autotune])
         if not -12 <= transpose <= 12: raise ValueError("变调必须在 -12 到 +12 半音之间")
         if not 0.0 <= index_rate <= 1.0: raise ValueError("音色相似度必须在 0 到 1 之间")
         if not 0.0 <= protect <= 1.0: raise ValueError("辅音保护必须在 0 到 1 之间")
         if not 0 <= filter_radius <= 7: raise ValueError("滤波半径必须在 0 到 7 之间")
         if f0_method not in {"auto", "rmvpe"}: raise ValueError("不支持的 F0 方法")
         if postprocess not in {"off", "light"}: raise ValueError("后处理仅支持关闭或轻量")
-        return cls(transpose, index_rate, protect, filter_radius, f0_method, cls.pitch_backend_version, postprocess)
+        return cls(transpose, index_rate, protect, filter_radius, f0_method, cls.pitch_backend_version, postprocess, autotune)
 
     def canonical(self) -> dict[str, Any]:
         return {"transpose": self.transpose, "index_rate": self.index_rate, "protect": self.protect,
                 "filter_radius": self.filter_radius, "f0_method": self.f0_method,
-                "pitch_backend_version": self.pitch_backend_version, "postprocess": self.postprocess}
+                "pitch_backend_version": self.pitch_backend_version, "postprocess": self.postprocess, "autotune": self.autotune}
 
     def to_payload(self) -> dict[str, Any]:
         return {"transpose": self.transpose, "pitch_shift": self.transpose, "index_rate": self.index_rate,
                 "protect": self.protect, "filter_radius": self.filter_radius, "f0_method": self.f0_method,
-                "postprocess": self.postprocess,
+                "postprocess": self.postprocess, "autotune": self.autotune,
                 "inference_settings": self.canonical()}
 
 
