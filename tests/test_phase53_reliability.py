@@ -160,3 +160,19 @@ def test_classify_backend_error_detects_cuda_oom_and_disk_full():
     assert "磁盘空间不足" in disk
     plain = classify_backend_error("FFmpeg 混音失败：broken pipe", "some detail")
     assert plain == "FFmpeg 混音失败：broken pipe"
+
+
+def test_cover_project_works_under_non_ascii_username_path(tmp_path):
+    """Phase 5.3: Windows 用户名含中文（如 C:\\Users\\张三）时工程必须可创建/保存/恢复。"""
+    chinese_root = tmp_path / "用户" / "张三" / "项目"
+    chinese_root.mkdir(parents=True)
+    paths = _paths(chinese_root.parent / "data")
+    paths.projects_root.mkdir(parents=True)
+    project = paths.projects_root / "翻唱工程"
+    project.mkdir()
+    cover = CoverProject.create(project, cover_id="f" * 32, title="中文测试")
+    cover.set_stage_status("separation", "completed")
+    restored = CoverProject.load(project, "f" * 32)
+    assert restored.title == "中文测试"
+    assert restored.separation_status == "completed"
+    assert restored.manifest_path.is_file()
