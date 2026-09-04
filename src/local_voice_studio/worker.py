@@ -20,6 +20,7 @@ from .text import split_text
 from .training import TrainingPipeline
 from .cover.separation import SongSeparationPipeline
 from .cover.cleanup import VocalCleanupService, VocalCleanupSettings
+from .cover.lyrics import CoverLyricsService
 from .cover.mixing import CoverMixSettings, CoverMixer, FFmpegMixBackend
 from .cover.exporting import CoverExporter, FFmpegExportBackend
 from .cover.application import CoverApplicationService
@@ -45,6 +46,7 @@ class WorkerService:
         self.shutdown_event = threading.Event()
         self.separation: SongSeparationPipeline | None = None
         self.cleanup: VocalCleanupService | None = None
+        self.lyrics: CoverLyricsService | None = None
         self.mixer: CoverMixer | None = None
         self.exporter: CoverExporter | None = None
         if singing_engine is None:
@@ -174,6 +176,7 @@ class WorkerService:
                 "convert_vocal": self._convert_vocal,
                 "render_cover": self._render_cover,
                 "export_cover": self._export_cover,
+                "transcribe_lyrics": self._transcribe_lyrics,
             }[message.type]
             self.current_request_id = message.id
             self._request_context = {key: message.payload[key] for key in ("workflow_id", "stage", "attempt", "overall_progress") if key in message.payload}
@@ -239,7 +242,7 @@ class WorkerService:
             error_payload = {"message": str(exc), "exception": type(exc).__name__, "status": event}
             if isinstance(exc, CoverError):
                 error_payload.update(cover_error_payload(exc))
-            if request_id and self._request_context.get("command") in {"separate_song", "cleanup_vocal", "convert_vocal", "render_cover", "export_cover"}:
+            if request_id and self._request_context.get("command") in {"separate_song", "cleanup_vocal", "convert_vocal", "render_cover", "export_cover", "transcribe_lyrics"}:
                 command = self._request_context["command"]
                 error_payload.setdefault("code", "cover.cancelled" if cancelled else f"cover.{command}.failed")
                 error_payload.setdefault("recoverable", True if cancelled else False)
@@ -433,6 +436,24 @@ class WorkerService:
         )
         result = self._singing(request_id).suggest_transpose(command.to_worker_payload(), cancel=self.cancel_event)
         self.emit(request_id, "result", result)
+
+    def _transcribe_lyrics(self, request_id: str, payload: dict[str, Any]) -> None:
+        project = ensure_within(self.paths.projects_root, Path(str(payload.get("project_path", ""))))
+        command = CoverApplicationService(project, paths=self.paths).prepare_lyrics_transcription(
+            str(payload.get("cover_id", "")), language=str(payload.get("language", "zh"))
+        )
+        service = CoverLyricsService(project, paths=self.paths)
+        self.lyrics = service
+        try:
+            result = service.transcribe(
+                command.cover_id,
+                language=command.language,
+                cancel=self.cancel_event,
+                progress=lambda value, message: self.emit(request_id, "progress", {"progress": value, "stage": "lyrics", "message": message}),
+            )
+            self.emit(request_id, "result", {"progress": 1.0, **result})
+        finally:
+            self.lyrics = None
 
     def _singing(self, request_id: str) -> SingingPipeline:
         if self.singing_engine is None:

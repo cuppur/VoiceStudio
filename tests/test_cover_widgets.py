@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from local_voice_studio.ui.cover_session import LyricLine
-from local_voice_studio.ui.studio_widgets import LyricView, TaskProgress, VoiceSelector, WaveformWidget
+from local_voice_studio.ui.studio_widgets import LyricView, TaskProgress, VoiceSelector, WaveformWidget, WorkflowSteps
 from local_voice_studio.ui.studio_widgets.stem_track import StemTrackWidget, TrackStatus
 from local_voice_studio.ui.cover_page import TRACK_NAMES
 
@@ -61,3 +61,18 @@ def test_voice_selector_disables_unconsented_and_archived_profiles():
     assert not selector.model().item(2).flags() & Qt.ItemIsEnabled
     assert selector.itemData(0) == "ok"
     assert selector.itemData(1, Qt.ToolTipRole) == "请先确认授权"
+
+
+def test_workflow_steps_highlights_current_step():
+    QApplication.instance() or QApplication([])
+    steps = WorkflowSteps()
+    assert steps.STEPS == ("导入歌曲", "确认权利", "分离", "选择声音", "生成 AI 人声", "调整", "生成最终混音", "导出")
+    assert len(steps.chips) == 8
+    assert steps.chips[0].property("state") == "current"
+    assert steps.chips[1].property("state") != "current"
+    steps.set_step(5)
+    assert steps.chips[5].property("state") == "current"
+    assert steps.chips[0].property("state") != "current"
+    assert "下一步：生成最终混音" in steps.toolTip()
+    steps.set_step(99)  # clamp to last
+    assert steps.chips[7].property("state") == "current"

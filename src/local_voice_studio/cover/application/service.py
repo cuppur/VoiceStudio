@@ -22,7 +22,7 @@ from ..project import CoverProject, RIGHTS_ATTESTATION_TEXT_HASH
 from ..models import CoverAssetRole, ContentOrigin
 from ..errors import (AssetValidationError, ConsentRequiredError,
                       ModelNotReadyError, RightsRequiredError)
-from .commands import ExportCoverCommand, PrepareAIVocalCommand, PrepareRenderCommand, PrepareSeparationCommand, PrepareVocalCleanupCommand, SuggestTransposeCommand
+from .commands import ExportCoverCommand, PrepareAIVocalCommand, PrepareRenderCommand, PrepareSeparationCommand, PrepareVocalCleanupCommand, SuggestTransposeCommand, TranscribeLyricsCommand
 from ..cleanup import VocalCleanupSettings
 from .results import CoverStateResult
 
@@ -138,3 +138,13 @@ class CoverApplicationService:
                                   Path(destination), existing_policy, True)
 
     create_export_command = prepare_export
+
+    def prepare_lyrics_transcription(self, cover_id: str, *, language: str = "zh") -> "TranscribeLyricsCommand":
+        cover = self._cover(cover_id)
+        if not cover.rights_confirmed or cover.rights_attestation_text_hash != RIGHTS_ATTESTATION_TEXT_HASH:
+            raise RightsRequiredError("自动识别歌词前必须确认歌曲处理权利")
+        if str(language) not in {"zh", "auto"}:
+            raise ValueError("仅支持中文或自动识别语言")
+        return TranscribeLyricsCommand(str(self.project), cover.id, str(language))
+
+    create_lyrics_transcription_command = prepare_lyrics_transcription

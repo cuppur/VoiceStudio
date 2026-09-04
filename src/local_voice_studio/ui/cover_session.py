@@ -106,6 +106,106 @@ def parse_lrc(content: str) -> list[LyricLine]:
     return sorted(result, key=lambda line: line.timestamp_seconds)
 
 
+def _format_ts(seconds: float) -> str:
+    seconds = max(0.0, float(seconds))
+    minutes = int(seconds // 60)
+    remainder = seconds - minutes * 60
+    centis = int(round(remainder * 100))
+    if centis >= 6000:
+        minutes += 1
+        centis -= 6000
+    return f"[{minutes:02d}:{centis // 100:02d}.{centis % 100:02d}]"
+
+
+def serialize_lrc(lines: list[LyricLine]) -> str:
+    """Render lyric lines back to a plain, sorted LRC document."""
+    ordered = sorted(lines, key=lambda line: line.timestamp_seconds)
+    if not ordered:
+        return ""
+    return "\n".join(f"{_format_ts(line.timestamp_seconds)}{line.text}" for line in ordered) + "\n"
+
+
+def serialize_lrc(lines: Iterable[LyricLine]) -> str:
+    """Render lyric lines back to a standard, timestamp-sorted LRC document."""
+    ordered = sorted(lines, key=lambda line: line.timestamp_seconds)
+    if not ordered:
+        return ""
+    parts = []
+    for line in ordered:
+        seconds = max(0.0, line.timestamp_seconds)
+        minutes = int(seconds // 60)
+        remainder = seconds - minutes * 60
+        centiseconds = int(round(remainder * 100))
+        if centiseconds >= 6000:
+            minutes += 1
+            centiseconds -= 6000
+        parts.append(f"[{minutes:02d}:{centiseconds // 100:02d}.{centiseconds % 100:02d}]{line.text}")
+    return "\n".join(parts) + "\n"
+
+
+def write_lrc(path: Path, lines: Iterable[LyricLine]) -> None:
+    """Atomically persist edited lyrics so a crash never leaves a torn file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".lrc.tmp")
+    temporary.write_text(serialize_lrc(lines), encoding="utf-8")
+    temporary.replace(path)
+
+
+def serialize_lrc(lines: Iterable[LyricLine]) -> str:
+    """Render lyric lines back to a standard LRC document, timestamps sorted."""
+    ordered = sorted(lines, key=lambda line: line.timestamp_seconds)
+    if not ordered:
+        return ""
+    parts = []
+    for line in ordered:
+        seconds = max(0.0, line.timestamp_seconds)
+        minutes = int(seconds // 60)
+        remainder = seconds - minutes * 60
+        centiseconds = int(round(remainder * 100))
+        if centiseconds >= 6000:
+            minutes += 1
+            centiseconds -= 6000
+        parts.append(f"[{minutes:02d}:{centiseconds // 100:02d}.{centiseconds % 100:02d}]{line.text}")
+    return "\n".join(parts) + "\n"
+
+
+def write_lrc(path: Path, lines: Iterable[LyricLine]) -> None:
+    """Persist edited lyrics atomically so a crash never leaves a torn file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".lrc.tmp")
+    temporary.write_text(serialize_lrc(lines), encoding="utf-8")
+    temporary.replace(path)
+
+
+def serialize_lrc(lines: list[LyricLine]) -> str:
+    """Render lyric lines back to a standard, timestamp-sorted LRC document."""
+    ordered = sorted(lines, key=lambda line: line.timestamp_seconds)
+    if not ordered:
+        return ""
+    parts = []
+    for line in ordered:
+        seconds = max(0.0, line.timestamp_seconds)
+        minutes = int(seconds // 60)
+        remainder = seconds - minutes * 60
+        centiseconds = int(round(remainder * 100))
+        if centiseconds >= 6000:
+            minutes += 1
+            centiseconds -= 6000
+        parts.append(f"[{minutes:02d}:{centiseconds // 100:02d}.{centiseconds % 100:02d}]{line.text}")
+    return "\n".join(parts) + "\n"
+
+
+def write_lrc(path: Path, lines: list[LyricLine]) -> None:
+    """Persist lyrics atomically so a crash never leaves a torn file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".lrc.tmp")
+    temporary.write_text(serialize_lrc(lines), encoding="utf-8")
+    temporary.replace(path)
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:

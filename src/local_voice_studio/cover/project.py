@@ -125,6 +125,8 @@ class CoverProject:
     separation_cache_key: str = ""
     separation_status: str = "not_started"
     lyrics_path: str = ""
+    lyrics_origin: str = "manual"
+    lyrics_origin: str = "manual"
     waveform_path: str = ""
     waveform_paths: dict[str, str] = field(default_factory=dict)
     rights_attestation_version: int = 1
@@ -147,6 +149,8 @@ class CoverProject:
         except ValueError as exc:
             raise CoverProjectError(str(exc)) from exc
         self.content_origin = content_origin(self.content_origin)
+        if self.lyrics_origin not in {"manual", "auto"}:
+            raise CoverProjectError("lyrics_origin 必须是 manual 或 auto")
         if self.rights_attestation_version < 1:
             raise CoverProjectError("rights_attestation_version 必须为正整数")
         if self.rights_attestation_text_hash:
@@ -273,6 +277,7 @@ class CoverProject:
             "separator": self.separator, "separator_model_sha256": self.separator_model_sha256,
             "separation_cache_key": self.separation_cache_key,
             "separation_status": self.separation_status, "lyrics_path": self.lyrics_path,
+            "lyrics_origin": self.lyrics_origin,
             "waveform_path": self.waveform_path,
             "waveform_paths": dict(self.waveform_paths),
             "source_audio": self.source_relative_path,
@@ -378,8 +383,11 @@ class CoverProject:
                 return asset
         return None
 
-    def set_lyrics(self, path: Path) -> None:
+    def set_lyrics(self, path: Path, *, origin: str = "manual") -> None:
+        if origin not in {"manual", "auto"}:
+            raise CoverProjectError("lyrics_origin 必须是 manual 或 auto")
         self.lyrics_path = self._relative_owned(path)
+        self.lyrics_origin = origin
         self.save()
 
     def set_waveform(self, path: Path, track: str = "mix") -> None:

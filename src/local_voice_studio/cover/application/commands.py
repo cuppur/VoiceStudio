@@ -94,6 +94,22 @@ class SuggestTransposeCommand:
 
 
 @dataclass(frozen=True)
+class TranscribeLyricsCommand:
+    project_path: Path | str
+    cover_id: str
+    language: str = "zh"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "project_path", Path(self.project_path))
+
+    def to_payload(self) -> dict[str, Any]:
+        return {"project_path": str(self.project_path), "cover_id": self.cover_id,
+                "language": self.language}
+
+    to_worker_payload = to_payload
+
+
+@dataclass(frozen=True)
 class PrepareRenderCommand:
     project_path: Path | str
     cover_id: str

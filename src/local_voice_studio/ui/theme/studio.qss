@@ -97,3 +97,7 @@ QFrame#settings { background: #151C2F; border: 1px solid #283452; border-radius:
 #lyricView::item { color: #5F6879; padding: 7px 8px; border-radius: 8px; }
 #lyricView::item:hover { color: #AEB8C7; background: #151C27; }
 #lyricView::item:selected { color: #FFFFFF; background: #262044; border-left: 2px solid #8F82FF; }
+#workflowSteps { background: #0D121B; border: 1px solid #222733; border-radius: 10px; padding: 6px 4px; }
+QLabel#stepChip { color: #5F6879; font-size: 11px; padding: 4px 5px; border-radius: 7px; }
+QLabel#stepChip[state="current"] { color: #FFFFFF; background: #262044; border: 1px solid #8F82FF; }
+QLabel#stepArrow { color: #3A4254; font-size: 13px; padding: 0 1px; }

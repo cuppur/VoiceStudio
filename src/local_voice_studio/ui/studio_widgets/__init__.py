@@ -7,6 +7,7 @@ from .task_progress import TaskProgress
 from .transport import TransportWidget
 from .voice_selector import VoiceSelector
 from .waveform import WaveformWidget
+from .workflow_steps import WorkflowSteps
 
 __all__ = [
     "LyricView",
@@ -17,4 +18,5 @@ __all__ = [
     "TransportWidget",
     "VoiceSelector",
     "WaveformWidget",
+    "WorkflowSteps",
 ]

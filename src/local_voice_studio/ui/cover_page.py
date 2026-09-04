@@ -13,9 +13,9 @@ from ..cover.application import CoverApplicationService
 from ..cover.mixing import CoverMixSettings, GainScale
 from ..cover.preview import PlaybackMode, PreviewMixPlanner, PreviewTrack, TrackRole
 from ..cover.separation import RoFormerRuntimeStatus, UVR5RuntimeStatus
-from .cover_session import SongSession, parse_lrc
+from .cover_session import LyricLine, SongSession, parse_lrc, write_lrc
 from .audio import PreviewAudioController
-from .studio_widgets import LyricView, QuickMixerPanel, StemTrackWidget, TaskProgress, TrackStatus, TransportWidget, VoiceSelector
+from .studio_widgets import LyricView, QuickMixerPanel, StemTrackWidget, TaskProgress, TrackStatus, TransportWidget, VoiceSelector, WorkflowSteps
 
 RIGHTS_TEXT = "我确认自己拥有或已经获得处理、使用该音频所需的权利，并理解公开传播或商业发行可能需要额外取得歌曲、录音等相关授权。"
 TRACK_NAMES = ("原曲", "原唱人声", "伴奏", "AI 人声", "最终混音")
@@ -92,7 +92,7 @@ class CoverPage(QWidget):
     export_requested = Signal()
     def __init__(self, paths, store, project, worker=None, parent=None):
         super().__init__(parent); self.setObjectName("coverPage"); self.paths, self.store, self.project, self.worker = paths, store, Path(project), worker
-        self.cover_project = None; self.sessions = {}; self.track_paths = {}; self._threads = set(); self._separation_request = ""; self._cleanup_request = ""; self._pitch_request = ""; self._pending_ai_payload = {}; self._ai_request = ""; self._render_request = ""; self._export_request = ""; self._last_export_payload = {}; self._selected_track = 0; self._playback_mode = PlaybackMode.MIX_PREVIEW
+        self.cover_project = None; self.sessions = {}; self.track_paths = {}; self._threads = set(); self._separation_request = ""; self._cleanup_request = ""; self._pitch_request = ""; self._pending_ai_payload = {}; self._ai_request = ""; self._render_request = ""; self._export_request = ""; self._lyrics_request = ""; self._last_export_payload = {}; self._selected_track = 0; self._playback_mode = PlaybackMode.MIX_PREVIEW
         self.cover_service = CoverApplicationService(self.project, paths=self.paths, store=self.store)
         self.preview_controller = PreviewAudioController.create_qt(self, drift_tolerance_ms=50)
         self.sync_timer = QTimer(self); self.sync_timer.setInterval(750); self.sync_timer.timeout.connect(self._resync_preview)
@@ -151,7 +151,7 @@ class CoverPage(QWidget):
             track.solo_changed.connect(lambda _v, i=index: self._track_mix_changed(i)); track.mute_changed.connect(lambda _v, i=index: self._track_mix_changed(i)); track.volume_changed.connect(lambda _v, i=index: self._track_mix_changed(i)); self.stems.append(track); tracks_layout.addWidget(track)
         timeline_layout.addWidget(tracks, 1); left.addWidget(timeline, 1)
         lower = QHBoxLayout(); lower.setSpacing(12)
-        lyrics_card = QFrame(); lyrics_card.setObjectName("lyricsCard"); lyrics_layout = QVBoxLayout(lyrics_card); lyrics_layout.setContentsMargins(0, 0, 0, 0); lyric_header = QHBoxLayout(); lyric_header.setContentsMargins(14, 0, 10, 0); lyric_header.addWidget(_label("同步歌词", "cardTitle")); lyric_header.addStretch(); self.lyric_status = QLabel("未载入"); self.lyric_status.setObjectName("muted"); lyric_header.addWidget(self.lyric_status); self.lyric_import = QPushButton("导入 LRC"); self.lyric_import.setObjectName("miniButton"); self.lyric_import.clicked.connect(self.import_lyrics); lyric_header.addWidget(self.lyric_import); lyrics_layout.addLayout(lyric_header); self.lyrics = LyricView(); self.lyrics.seek_requested.connect(self._seek_all); lyrics_layout.addWidget(self.lyrics, 1); lower.addWidget(lyrics_card, 1)
+        lyrics_card = QFrame(); lyrics_card.setObjectName("lyricsCard"); lyrics_layout = QVBoxLayout(lyrics_card); lyrics_layout.setContentsMargins(0, 0, 0, 0); lyric_header = QHBoxLayout(); lyric_header.setContentsMargins(14, 0, 10, 0); lyric_header.addWidget(_label("同步歌词", "cardTitle")); lyric_header.addStretch(); self.lyric_status = QLabel("未载入"); self.lyric_status.setObjectName("muted"); lyric_header.addWidget(self.lyric_status); self.lyric_prev = QPushButton("上一行"); self.lyric_prev.setObjectName("miniButton"); self.lyric_prev.clicked.connect(self._lyric_previous); lyric_header.addWidget(self.lyric_prev); self.lyric_next = QPushButton("下一行"); self.lyric_next.setObjectName("miniButton"); self.lyric_next.clicked.connect(self._lyric_next); lyric_header.addWidget(self.lyric_next); self.lyric_auto = QPushButton("自动识别歌词"); self.lyric_auto.setObjectName("miniButton"); self.lyric_auto.setToolTip("使用本地 SenseVoice 对已分离人声转写歌词（自动识别 ≠ 官方歌词）"); self.lyric_auto.clicked.connect(self.auto_transcribe_lyrics); lyric_header.addWidget(self.lyric_auto); self.lyric_import = QPushButton("导入 LRC"); self.lyric_import.setObjectName("miniButton"); self.lyric_import.clicked.connect(self.import_lyrics); lyric_header.addWidget(self.lyric_import); lyrics_layout.addLayout(lyric_header); self.lyrics = LyricView(); self.lyrics.seek_requested.connect(self._seek_all); self.lyrics.edit_requested.connect(self._edit_lyric_line); lyrics_layout.addWidget(self.lyrics, 1); lower.addWidget(lyrics_card, 1)
         self.mixer = QuickMixerPanel(); self.mixer.volume_changed.connect(self._mixer_volume_changed)
         # Keep the compact mixer and timeline controls on one dB/slider scale;
         # the original vocal lane is intentionally silent by default.
@@ -165,6 +165,7 @@ class CoverPage(QWidget):
 
     def _build_settings_panel(self):
         panel = QFrame(); panel.setObjectName("coverSettings"); panel.setMinimumWidth(286); panel.setMaximumWidth(340); form = QVBoxLayout(panel); form.setContentsMargins(16, 14, 16, 14); form.setSpacing(9)
+        self.workflow_steps = WorkflowSteps(); form.addWidget(self.workflow_steps)
         form.addWidget(_label("目标声音", "sectionLabel")); self.profile_combo = VoiceSelector(project_root=self.project); self.profile_combo.voice_selected.connect(self._profile_selected); form.addWidget(self.profile_combo)
         self.voice_capabilities = QLabel("✓ AI 翻唱    ✓ 本地处理"); self.voice_capabilities.setObjectName("capabilities"); form.addWidget(self.voice_capabilities)
         form.addWidget(_label("翻唱设置", "cardTitle")); pitch_row = QHBoxLayout(); pitch_row.addWidget(QLabel("音调")); self.pitch = QSpinBox(); self.pitch.setRange(-12, 12); self.pitch.setSuffix(" 半音"); pitch_row.addWidget(self.pitch); self.auto_pitch_button = QPushButton("自动建议"); self.auto_pitch_button.setObjectName("miniButton"); self.auto_pitch_button.clicked.connect(self.suggest_transpose); pitch_row.addWidget(self.auto_pitch_button); form.addLayout(pitch_row)
@@ -248,7 +249,8 @@ class CoverPage(QWidget):
         if index == 3: self.stems[index].name_label.setText("AI 人声  AI生成")
         if index == 0:
             self.song_title.setText(self.cover_project.title if self.cover_project else Path(session.audio_path).stem); m = session.metadata; self.song_meta.setText(f"{Path(session.audio_path).suffix.upper().lstrip('.')} · {m.duration_seconds:.1f}s · {m.sample_rate} Hz · {m.channels}ch")
-            self.lyrics.set_lyrics(session.lyrics); self.lyric_status.setText("已载入 LRC" if session.lyrics else "未载入")
+            editable = bool(session.lyrics)
+            self.lyrics.set_lyrics(session.lyrics, editable=editable); self.lyric_status.setText(("已载入 LRC · 自动识别" if (self.cover_project and self.cover_project.lyrics_origin == "auto") else "已载入 LRC") if session.lyrics else "未载入")
             if self.cover_project: self.cover_project.duration_ms = duration; self._save_cover(self.cover_project)
             self._select_track(0, False)
         if self.cover_project:
@@ -262,7 +264,65 @@ class CoverPage(QWidget):
         if not self.cover_project: return
         path, _ = QFileDialog.getOpenFileName(self, "导入歌词", str(self.project), "歌词 (*.lrc *.txt)")
         if path:
-            destination = self._copy_lyrics(self.cover_project, Path(path)); self.lyrics.set_lyrics(parse_lrc(destination.read_text(encoding="utf-8-sig", errors="replace"))); self.lyric_status.setText("已手动载入 LRC")
+            destination = self._copy_lyrics(self.cover_project, Path(path)); self.lyrics.set_lyrics(parse_lrc(destination.read_text(encoding="utf-8-sig", errors="replace")), editable=True); self.lyric_status.setText("已手动载入 LRC")
+            self._reload_lyrics_session()
+
+    def _lyric_previous(self):
+        self.lyrics.move_previous()
+
+    def _lyric_next(self):
+        self.lyrics.move_next()
+
+    def _edit_lyric_line(self, old_position_ms: int, new_position_ms: int, text: str) -> None:
+        if not self.cover_project or not self.cover_project.lyrics_path:
+            return
+        session = self.sessions.get(0)
+        if not session:
+            return
+        lines = list(session.lyrics)
+        target = next((i for i, line in enumerate(lines) if abs(line.timestamp_seconds * 1000 - old_position_ms) < 5), None)
+        if target is None:
+            self.song_meta.setText("编辑失败：找不到对应歌词行"); return
+        lines[target] = LyricLine(new_position_ms / 1000.0, text)
+        session.lyrics = sorted(lines, key=lambda line: line.timestamp_seconds)
+        lrc_path = self.cover_project.root / self.cover_project.lyrics_path
+        write_lrc(lrc_path, session.lyrics)
+        self.cover_project.set_lyrics(lrc_path, origin="manual")
+        self.lyrics.set_lyrics(session.lyrics, editable=True)
+        self.lyric_status.setText("已手动编辑")
+        self.song_meta.setText("歌词已保存")
+
+    def _reload_lyrics_session(self):
+        if not self.cover_project or not self.cover_project.lyrics_path:
+            return
+        lrc_path = self.cover_project.root / self.cover_project.lyrics_path
+        if not lrc_path.is_file():
+            return
+        session = self.sessions.get(0)
+        if session:
+            session.lyrics = parse_lrc(lrc_path.read_text(encoding="utf-8-sig", errors="replace"))
+
+    def auto_transcribe_lyrics(self):
+        if not self.cover_project or not self.worker:
+            self.song_meta.setText("请先导入歌曲"); return
+        try:
+            payload = self.cover_service.create_lyrics_transcription_command(self.cover_project.id, language="zh").to_worker_payload()
+        except Exception as exc:
+            self.song_meta.setText(str(exc)); return
+        self.lyric_auto.setEnabled(False); self.lyric_auto.setText("识别中…"); self.song_meta.setText("正在本地识别歌词（自动识别 ≠ 官方歌词）")
+        try: self._lyrics_request = self.worker.send("transcribe_lyrics", payload)
+        except Exception as exc:
+            self._lyrics_request = ""; self.lyric_auto.setEnabled(True); self.lyric_auto.setText("自动识别歌词"); self.song_meta.setText(str(exc))
+
+    def _lyrics_finished(self, message):
+        self._lyrics_request = ""; self.lyric_auto.setEnabled(True); self.lyric_auto.setText("自动识别歌词")
+        if not self.cover_project: return
+        self.cover_project = self._load_cover_project(self.cover_project.id)
+        self._reload_lyrics_session()
+        session = self.sessions.get(0)
+        self.lyrics.set_lyrics(session.lyrics if session else [], editable=True)
+        self.lyric_status.setText("已载入 LRC · 自动识别" if self.cover_project.lyrics_origin == "auto" else "已载入 LRC")
+        self.song_meta.setText(message)
 
     def refresh_profiles(self):
         try: self.profile_combo.project_root = self.project; self.profile_combo.set_profiles(self.store.list_profiles(self.project))
@@ -277,7 +337,26 @@ class CoverPage(QWidget):
         try: return next((p for p in self.store.list_profiles(self.project) if p.id == identifier), None)
         except (AttributeError, OSError, TypeError): return None
 
+    def _update_workflow_step(self):
+        """Derive the current 8-step cover stage from real project state."""
+        if not self.cover_project:
+            step = 0  # 导入歌曲
+        elif not self.cover_project.rights_confirmed:
+            step = 1  # 确认权利
+        elif not self.cover_project.get_asset(role="vocal"):
+            step = 2  # 分离
+        elif not self._selected_profile():
+            step = 3  # 选择声音
+        elif not self.cover_project.get_asset(role="ai_vocal"):
+            step = 4  # 生成 AI 人声
+        elif not self.cover_project.get_asset(role="final_mix"):
+            step = 5  # 调整
+        else:
+            step = 6  # 生成最终混音
+        self.workflow_steps.set_step(step)
+
     def _update_cover_button(self):
+        self._update_workflow_step()
         vocal = self.cover_project.get_asset(role="vocal") if self.cover_project else None
         vocal_path = self.cover_project.root / vocal.relative_path if vocal else None
         vocal_valid = bool(vocal and vocal.content_origin == "separated" and vocal_path and vocal_path.is_file() and vocal.sha256 == hashlib.sha256(vocal_path.read_bytes()).hexdigest())
@@ -373,6 +452,12 @@ class CoverPage(QWidget):
             self.worker.send("cancel", {"target_request_id": self._separation_request})
 
     def handle_worker_event(self, request_id, event, payload):
+        if request_id == self._lyrics_request:
+            if event == "progress": self.song_meta.setText(str(payload.get("message", "正在识别歌词")))
+            elif event == "result": self._lyrics_finished(f"歌词已识别：{payload.get('line_count', 0)} 行（自动识别，可能含误差）")
+            elif event == "error":
+                self._lyrics_request = ""; self.lyric_auto.setEnabled(True); self.lyric_auto.setText("自动识别歌词"); self.song_meta.setText("歌词识别失败：" + str(payload.get("message", "未知错误")))
+            return
         if request_id == self._pitch_request:
             self._pitch_request = ""; self.auto_pitch_button.setEnabled(True); self.auto_pitch_button.setText("自动建议")
             if event == "result":
