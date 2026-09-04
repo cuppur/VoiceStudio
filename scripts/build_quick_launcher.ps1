@@ -1,6 +1,9 @@
 ﻿param()
 
-$ErrorActionPreference = "Stop"
+# PS 5.1: PyInstaller logs to stderr, which under $ErrorActionPreference=Stop
+# surfaces as NativeCommandError and aborts even on success; rely on
+# $LASTEXITCODE checks instead.
+$ErrorActionPreference = "Continue"
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $python = @(
     (Join-Path $repoRoot ".venv310\Scripts\python.exe"),

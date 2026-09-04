@@ -1,11 +1,15 @@
-param(
+﻿param(
     [switch]$SkipInstaller,
     [switch]$Release,
     [ValidatePattern('^[0-9A-Fa-f]{40}$')][string]$CertificateThumbprint,
     [string]$TimestampUrl = "http://timestamp.digicert.com"
 )
 
-$ErrorActionPreference = "Stop"
+# PS 5.1: any stderr written by a native command (pip notices, PyInstaller
+# warnings, ISCC messages) is surfaced as NativeCommandError under
+# $ErrorActionPreference=Stop and would abort the build even on success.
+# The script checks $LASTEXITCODE after every native call instead.
+$ErrorActionPreference = "Continue"
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $python = @(
     (Join-Path $repoRoot ".venv310\Scripts\python.exe"),
@@ -22,7 +26,10 @@ Push-Location $repoRoot
 try {
     if ($Release -and $SkipInstaller) { throw "Release builds must include the signed installer" }
     if ($Release -and -not $CertificateThumbprint) { throw "Release builds require -CertificateThumbprint" }
-    & $python -m pip install -e ".[dev]"
+    # PS 5.1: pip writes notices to stderr; with $ErrorActionPreference=Stop that
+    # surfaces as NativeCommandError and aborts the build even on success.
+    # Discard stderr and rely on the exit code alone.
+    & $python -m pip install -e ".[dev]" 2>$null
     if ($LASTEXITCODE -ne 0) { throw "Development dependency installation failed" }
     $sourceRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "src"))
     Get-ChildItem -LiteralPath $sourceRoot -Recurse -Directory -Filter "__pycache__" | ForEach-Object {
