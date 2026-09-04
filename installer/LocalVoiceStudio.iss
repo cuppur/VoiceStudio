@@ -1,5 +1,5 @@
 #define MyAppName "本地声音工坊"
-#define MyAppVersion "0.3.0"
+#define MyAppVersion "1.0.0"
 #define MyAppPublisher "LocalVoiceStudio"
 #define MyAppExeName "LocalVoiceStudio.exe"
 
@@ -38,6 +38,29 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "启动 {#MyAppName}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+var
+  DeleteUserData: Boolean;
+
+function InitializeUninstall: Boolean;
+begin
+  DeleteUserData := False;
+  Result := True;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+  begin
+    if MsgBox('是否同时删除全部用户数据（项目、声音、录音与导出）？' + #13#10 +
+              '选择“是”将永久删除本软件的所有用户数据；选择“否”将保留数据。',
+              mbConfirmation, MB_YESNO) = IDYES then
+      DeleteUserData := True;
+  end
+  else if (CurUninstallStep = usPostUninstall) and DeleteUserData then
+    DelTree(ExpandConstant('{localappdata}\LocalVoiceStudio'), True, True, True);
+end;
 
 [UninstallDelete]
 ; 用户模型、项目、录音和输出均位于安装目录之外，卸载时故意保留。

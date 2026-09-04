@@ -48,6 +48,8 @@ try {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $requiredPackagedFiles[0] -DataRoot $probeRoot -FunctionsOnly
     if ($LASTEXITCODE -ne 0) { throw "Packaged bootstrap resource probe failed" }
     Copy-Item -LiteralPath "THIRD_PARTY_NOTICES.md" -Destination "dist\LocalVoiceStudio" -Force
+    Copy-Item -LiteralPath "README.md" -Destination "dist\LocalVoiceStudio" -Force
+    Copy-Item -LiteralPath "CHANGELOG.md" -Destination "dist\LocalVoiceStudio" -Force
     & (Join-Path $PSScriptRoot "build_quick_launcher.ps1")
     if ($LASTEXITCODE -ne 0) { throw "Quick launcher build failed" }
     if ($Release) {
