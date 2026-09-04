@@ -211,7 +211,7 @@ class CoverPage(QWidget):
         if not self.cover_project or not self.worker: return
         final = self.cover_project.get_asset(role="final_mix")
         if not final: return
-        dialog = ExportDialog(self.cover_project.title, self)
+        dialog = ExportDialog(f"{self.cover_project.title}_AI_VoiceStudio", self)
         if dialog.exec() != QDialog.Accepted: return
         try:
             payload = self.cover_service.create_export_command(
