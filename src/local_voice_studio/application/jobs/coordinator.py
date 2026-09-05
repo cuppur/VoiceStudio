@@ -43,6 +43,12 @@ class JobCoordinator:
         self.store.save_product_job(job)
         return job
 
+    def retry(self, job_id: str) -> ProductJob:
+        job = self._get(job_id)
+        job.retry()
+        self.store.save_product_job(job)
+        return job
+
     def mark_cancelling(self, job_id: str) -> ProductJob:
         job = self._get(job_id)
         job.cancel()

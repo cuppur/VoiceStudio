@@ -86,6 +86,18 @@ class ProductJob:
             self.current_stage = ""
         self.updated_at = utc_now()
 
+    def retry(self) -> None:
+        if self.status not in {ProductJobStatus.RECOVERABLE, ProductJobStatus.FAILED}:
+            raise ValueError("只有失败或可恢复任务可以重试")
+        if self.current_stage:
+            item = self.stage(self.current_stage)
+            item.status = ProductJobStatus.QUEUED
+            item.error = ""
+            item.progress = 0.0
+        self.error = ""
+        self.status = ProductJobStatus.QUEUED
+        self.updated_at = utc_now()
+
     def cancel(self) -> None:
         if self.status in {ProductJobStatus.SUCCEEDED, ProductJobStatus.PUBLISHED, ProductJobStatus.CANCELLED}:
             return

@@ -31,3 +31,15 @@ def test_store_persists_product_job_state(tmp_path):
     restored = store.load_product_job(job.id)
     assert restored.id == job.id and restored.kind == "ai_cover"
     assert store.list_product_jobs()[0].id == job.id
+
+
+def test_recoverable_job_can_retry_current_stage():
+    job = ProductJob("ai_cover", {}, [JobStage("separation")])
+    job.mark_stage_running("separation")
+    job.status = ProductJobStatus.RECOVERABLE
+    job.error = "temporary"
+    job.stage("separation").error = "temporary"
+    job.retry()
+    assert job.status == ProductJobStatus.QUEUED
+    assert job.stage("separation").status == ProductJobStatus.QUEUED
+    assert job.error == ""
