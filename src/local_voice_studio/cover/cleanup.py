@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import subprocess
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +12,7 @@ from ..audio import sha256_file
 from ..paths import AppPaths, ensure_within, validate_id
 from ..runtime import EngineRuntimeResolver
 from .errors import classify_backend_error
+from .process import ManagedProcess
 from .project import CoverAsset, CoverProject
 
 
@@ -73,41 +72,32 @@ class FFmpegVocalCleanupBackend:
         if executable is None:
             raise RuntimeError("人声清理需要已安装的私有 FFmpeg")
         self.executable = executable
-        self.process: subprocess.Popen | None = None
+        self.process: ManagedProcess | None = None
 
     def cancel(self) -> None:
-        if self.process and self.process.poll() is None:
-            if os.name == "nt":
-                subprocess.run(["taskkill", "/PID", str(self.process.pid), "/T", "/F"], capture_output=True)
-            else:
-                self.process.terminate()
+        if self.process is not None:
+            self.process.stop()
 
     def cleanup(self, source: Path, output: Path, settings: VocalCleanupSettings, cancel: Any = None) -> None:
         if not settings.denoise and settings.dereverb == "off":
             raise ValueError("未启用任何人声清理")
         output.parent.mkdir(parents=True, exist_ok=True)
         filters = _cleanup_filters(settings)
-        self.process = subprocess.Popen(
-            [str(self.executable), "-hide_banner", "-nostdin", "-y", "-i", str(source), "-af", filters,
+        process = ManagedProcess(
+            [str(self.executable), "-hide_banner", "-nostdin", "-y"] + (["-re"] if cancel is not None else []) + ["-i", str(source), "-af", filters,
              "-c:a", "pcm_s16le", str(output)],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            cancel=cancel,
         )
+        self.process = process
         try:
-            while self.process.poll() is None:
-                if cancel is not None and getattr(cancel, "is_set", lambda: False)():
-                    self.cancel()
-                    self.process.wait()
-                    raise InterruptedError("人声清理已取消")
-                if cancel is not None and hasattr(cancel, "wait"):
-                    cancel.wait(0.1)
-                else:
-                    import time
-                    time.sleep(0.1)
-            if self.process.wait() != 0:
-                error = (self.process.stderr.read() if self.process.stderr else b"").decode("utf-8", errors="replace")
-                raise RuntimeError(classify_backend_error("人声清理失败: " + error[-300:], error))
+            return_code = process.run()
+        except InterruptedError as exc:
+            raise InterruptedError("人声清理已取消") from exc
         finally:
             self.process = None
+        if return_code != 0:
+            error = process.stderr_tail
+            raise RuntimeError(classify_backend_error("人声清理失败: " + error, error))
 
 
 class VocalCleanupService:
@@ -175,9 +165,8 @@ def _cleanup_filters(settings: VocalCleanupSettings) -> str:
     """
     chain: list[str] = []
     if settings.dereverb == "light":
-        chain.append("anlmdn=s=1:p=1:sc=0.05")
+        chain.append("anlmdn=s=1:p=0.05")
     elif settings.dereverb == "strong":
-        chain.append("anlmdn=s=3:p=2:sc=0.08")
         chain.append("acompressor=threshold=0.5:ratio=2:attack=10:release=120")
     if settings.denoise:
         chain.append(f"afftdn=nf=-25")
@@ -193,4 +182,4 @@ def _valid_wav(path: Path) -> bool:
         with wave.open(str(path), "rb") as stream:
             return stream.getframerate() > 0 and stream.getnchannels() > 0 and stream.getnframes() > 0
     except (OSError, EOFError, wave.Error):
-        return False
+        return False\n

@@ -78,7 +78,7 @@ def test_cleanup_filters_map_presets_to_ffmpeg_chain():
     assert "anlmdn" not in _cleanup_filters(VocalCleanupSettings(denoise=True))
     light = _cleanup_filters(VocalCleanupSettings(denoise=True, dereverb="light"))
     strong = _cleanup_filters(VocalCleanupSettings(denoise=True, dereverb="strong"))
-    assert "anlmdn=s=1:p=1" in light and "anlmdn=s=3:p=2" in strong
+    assert "anlmdn=s=1:p=0.05" in light and "anlmdn" not in strong
     assert "acompressor" in strong and "acompressor" not in light
     assert "afftdn" in light and "highpass=f=80" in light
     with pytest.raises(ValueError, match="未启用"):
@@ -92,4 +92,4 @@ def test_dereverb_cache_key_changes_with_preset(tmp_path):
     strong = service.cleanup(cover.id, VocalCleanupSettings(dereverb="strong"))
     assert light["cache_hit"] is False and strong["cache_hit"] is False and backend.calls == 2
     assert light["asset_id"] != strong["asset_id"]
-    assert light["content_origin"] == "separated"
+    assert light["content_origin"] == "separated"\n
