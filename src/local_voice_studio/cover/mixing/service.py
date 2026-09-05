@@ -11,6 +11,7 @@ from typing import Any, Mapping
 
 from ...audio import probe_audio, sha256_file
 from ...paths import AppPaths, ensure_within, validate_id
+from ...product_models import CacheArtifact, SongProject
 from ..cancellation import as_cancellation_token
 from ..errors import (
     AssetValidationError,
@@ -222,3 +223,16 @@ class CoverMixer:
 # Name used by the application architecture brief; retained as an alias for
 # callers that still import the Phase 4 ``CoverMixer`` spelling.
 CoverMixService = CoverMixer
+
+def _register_product_mix_cache(project: Path, cache_key: str, asset_id: str, source_asset_id: str, profile_id: str, model_id: str) -> None:
+    manifest_path = Path(project) / "project.json"
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        product = SongProject.from_dict(payload.get("product_project", {}))
+        product.register_cache(CacheArtifact(operation="mix", cache_key=cache_key, asset_id=asset_id, source_sha256=source_asset_id, engine_version="voicestudio-mixer-v1", model_version=model_id, parameters_hash=cache_key))
+        payload["product_project"] = product.to_dict()
+        temporary = manifest_path.with_name(manifest_path.name + ".staging")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(manifest_path)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
