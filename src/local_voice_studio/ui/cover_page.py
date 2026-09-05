@@ -10,6 +10,8 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, Q
 
 from ..cover import CoverProject
 from ..cover.application import CoverApplicationService, SongAnalyzer
+from ..application.jobs import CoverPipelineController
+from ..application.jobs.coordinator import JobCoordinator
 from ..cover.mixing import CoverMixSettings, GainScale
 from ..cover.preview import PlaybackMode, PreviewMixPlanner, PreviewTrack, TrackRole
 from ..cover.separation import RoFormerRuntimeStatus, UVR5RuntimeStatus
@@ -93,7 +95,7 @@ class CoverPage(QWidget):
     def __init__(self, paths, store, project, worker=None, parent=None):
         super().__init__(parent); self.setObjectName("coverPage"); self.paths, self.store, self.project, self.worker = paths, store, Path(project), worker
         self.cover_project = None; self.sessions = {}; self.track_paths = {}; self._threads = set(); self._separation_request = ""; self._cleanup_request = ""; self._pitch_request = ""; self._pending_ai_payload = {}; self._ai_request = ""; self._render_request = ""; self._export_request = ""; self._lyrics_request = ""; self._last_export_payload = {}; self._selected_track = 0; self._playback_mode = PlaybackMode.MIX_PREVIEW
-        self.cover_service = CoverApplicationService(self.project, paths=self.paths, store=self.store)
+        self.cover_service = CoverApplicationService(self.project, paths=self.paths, store=self.store); self._separation_controller = None
         self.preview_controller = PreviewAudioController.create_qt(self, drift_tolerance_ms=50)
         self.sync_timer = QTimer(self); self.sync_timer.setInterval(750); self.sync_timer.timeout.connect(self._resync_preview)
         self._build(); self.refresh_profiles(); self.refresh_runtime_status(); self.restore_cover()
@@ -452,7 +454,12 @@ class CoverPage(QWidget):
         except Exception as exc:
             self._separation_failed(str(exc)); return
         self.stems[1].set_status(TrackStatus.PROCESSING); self.stems[2].set_status(TrackStatus.PROCESSING); self.progress.show(); self.progress.set_stage(0); self.separate_button.setEnabled(False); self.cancel_button.show()
-        try: self._separation_request = self.worker.send("separate_song", payload)
+        try:
+            coordinator = JobCoordinator(self.store)
+            job = coordinator.start("ai_cover", payload, ["separation"])
+            self._separation_controller = CoverPipelineController(job, self.worker.send, lambda value: self.store.save_product_job(value))
+            self.worker.attach_pipeline_controller(self._separation_controller)
+            self._separation_request = self._separation_controller.pipeline.dispatch_next() and self._separation_controller.pipeline.request_ids.get("separation", "")
         except Exception as exc: self._separation_failed(str(exc))
 
     def cancel_separation(self):
@@ -673,3 +680,4 @@ class CoverPage(QWidget):
         for channel in self.preview_controller.channels.values():
             channel.player.setSource(QUrl()); channel.player.setAudioOutput(None)
     def closeEvent(self, event): self.release_resources(); super().closeEvent(event)
+
