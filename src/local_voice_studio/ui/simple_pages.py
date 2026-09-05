@@ -617,10 +617,20 @@ class TaskCenterDialog(QDialog):
     def __init__(self, store: StudioStore, parent=None):
         super().__init__(parent); self.store = store; self.setWindowTitle("任务中心"); self.resize(880, 480); layout = QVBoxLayout(self); self.table = QTableWidget(0, 6); self.table.setHorizontalHeaderLabels(["时间", "类型", "状态", "进度", "说明 / 失败原因", "输出位置"]); self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch); self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch); self.table.cellDoubleClicked.connect(self._open); layout.addWidget(self.table); self.refresh()
     def refresh(self) -> None:
-        jobs = self.store.list_jobs(); self.table.setRowCount(len(jobs))
-        for row, job in enumerate(jobs):
-            values = [job.updated_at[:19].replace("T", " "), job.kind.value, job.status.value, f"{job.progress * 100:.0f}%", job.error or job.message, "、".join(job.outputs)]
-            for column, value in enumerate(values): self.table.setItem(row, column, QTableWidgetItem(value))
+        product_jobs = self.store.list_product_jobs()
+        legacy_jobs = self.store.list_jobs()
+        rows = []
+        for job in product_jobs:
+            rows.append((job.updated_at, job.kind, job.status.value, f"{job.progress * 100:.0f}%", job.error, "、".join(job.outputs)))
+        for job in legacy_jobs:
+            if str(job.kind).startswith("product:"):
+                continue
+            rows.append((job.updated_at, job.kind.value, job.status.value, f"{job.progress * 100:.0f}%", job.error or job.message, "、".join(job.outputs)))
+        rows.sort(key=lambda item: item[0], reverse=True)
+        self.table.setRowCount(len(rows))
+        for row, values in enumerate(rows):
+            for column, value in enumerate(values):
+                self.table.setItem(row, column, QTableWidgetItem(str(value)))
     def _open(self, row: int, _column: int) -> None:
         value = self.table.item(row, 5).text().split("、")[0]
         if value: QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(value).parent if Path(value).suffix else Path(value))))
