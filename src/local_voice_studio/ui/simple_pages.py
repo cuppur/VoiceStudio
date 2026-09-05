@@ -617,17 +617,18 @@ class TaskCenterDialog(QDialog):
     def __init__(self, store: StudioStore, client=None, parent=None):
         super().__init__(parent); self.store = store; self.client = client; self._rows = []; self.setWindowTitle("任务中心"); self.resize(880, 520); layout = QVBoxLayout(self)
         toolbar = QHBoxLayout(); toolbar.addWidget(QLabel("GPU 任务与本地处理历史")); toolbar.addStretch(); refresh = QPushButton("刷新"); refresh.clicked.connect(self.refresh); toolbar.addWidget(refresh); cancel = QPushButton("取消选中任务"); cancel.clicked.connect(self.cancel_selected); toolbar.addWidget(cancel); layout.addLayout(toolbar)
-        self.table = QTableWidget(0, 6); self.table.setHorizontalHeaderLabels(["时间", "类型", "状态", "进度", "说明 / 失败原因", "输出位置"]); self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch); self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch); self.table.cellDoubleClicked.connect(self._open); layout.addWidget(self.table); self.refresh()
+        self.table = QTableWidget(0, 7); self.table.setHorizontalHeaderLabels(["时间", "类型", "状态", "进度", "当前阶段", "说明 / 失败原因", "输出位置"]); self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch); self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch); self.table.cellDoubleClicked.connect(self._open); layout.addWidget(self.table); self.refresh()
     def refresh(self) -> None:
         product_jobs = self.store.list_product_jobs()
         legacy_jobs = self.store.list_jobs()
         rows = []
         for job in product_jobs:
-            rows.append((job.id, job.updated_at, job.kind, job.status.value, f"{job.progress * 100:.0f}%", job.error, "、".join(job.outputs)))
+            stage = job.current_stage or next((item.name for item in job.stages if item.status.value in {"running", "preparing", "cancelling"}), "-")
+            rows.append((job.id, job.updated_at, job.kind, job.status.value, f"{job.progress * 100:.0f}%", stage, job.error, "、".join(job.outputs)))
         for job in legacy_jobs:
             if str(job.kind).startswith("product:"):
                 continue
-            rows.append((job.id, job.updated_at, job.kind.value, job.status.value, f"{job.progress * 100:.0f}%", job.error or job.message, "、".join(job.outputs)))
+            rows.append((job.id, job.updated_at, job.kind.value, job.status.value, f"{job.progress * 100:.0f}%", "-", job.error or job.message, "、".join(job.outputs)))
         rows.sort(key=lambda item: item[0], reverse=True)
         self.table.setRowCount(len(rows))
         for row, values in enumerate(rows):
