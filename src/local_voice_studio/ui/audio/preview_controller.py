@@ -84,6 +84,30 @@ class PreviewAudioController:
 
     load = apply_plan
 
+    def load_ab(self, take_a_path: str, take_b_path: str) -> None:
+        """Load two real Take assets for A/B preview on the shared timeline."""
+        if not take_a_path or not take_b_path:
+            raise ValueError("A/B 试听需要两个有效音频文件")
+        self.stop()
+        for role, path in ((TrackRole.AI_VOCAL, take_a_path), (TrackRole.FINAL_MIX, take_b_path)):
+            channel = self.channels.get(role)
+            if channel is None:
+                continue
+            channel.set_source(str(path))
+            channel.set_gain(1.0 if role is TrackRole.AI_VOCAL else 0.0)
+        self.plan = None
+        self._ab_paths = {"A": str(take_a_path), "B": str(take_b_path)}
+        self._ab_active = "A"
+
+    def select_ab(self, side: str) -> None:
+        side = str(side).upper()
+        if side not in {"A", "B"} or not hasattr(self, "_ab_paths"):
+            raise ValueError("A/B 试听尚未加载")
+        self._ab_active = side
+        for role, gain in ((TrackRole.AI_VOCAL, 1.0 if side == "A" else 0.0), (TrackRole.FINAL_MIX, 1.0 if side == "B" else 0.0)):
+            channel = self.channels.get(role)
+            if channel: channel.set_gain(gain)
+
     def select(self, role: TrackRole | str) -> None:
         if self.plan is None: raise RuntimeError("preview plan has not been loaded")
         self.plan = PreviewMixPlan(PlaybackMode.SOLO_TRACK, TrackRole.parse(role), self.plan.tracks)

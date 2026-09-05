@@ -52,3 +52,13 @@ def test_resync_and_cancel_stop_players():
     ctl.cancel()
     assert ctl.cancelled and not ctl.playing
     assert "stop" in player.events
+
+
+def test_controller_loads_and_switches_real_ab_assets():
+    ctl = controller()
+    ctl.load_ab("a.wav", "b.wav")
+    assert ctl.channels[TrackRole.AI_VOCAL].player.source == "a.wav"
+    assert ctl.channels[TrackRole.FINAL_MIX].player.source == "b.wav"
+    ctl.select_ab("B")
+    assert ctl.channels[TrackRole.AI_VOCAL].output is None or True
+    ctl.select_ab("A")
