@@ -115,3 +115,5 @@ class ProductJob:
 
 from .scheduler import GpuJobScheduler, GpuTask, SchedulerStatus
 
+from .pipeline import CoverPipeline
+
