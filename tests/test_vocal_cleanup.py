@@ -92,4 +92,6 @@ def test_dereverb_cache_key_changes_with_preset(tmp_path):
     strong = service.cleanup(cover.id, VocalCleanupSettings(dereverb="strong"))
     assert light["cache_hit"] is False and strong["cache_hit"] is False and backend.calls == 2
     assert light["asset_id"] != strong["asset_id"]
-    assert light["content_origin"] == "separated"\n
+    assert light["content_origin"] == "separated"
+
+

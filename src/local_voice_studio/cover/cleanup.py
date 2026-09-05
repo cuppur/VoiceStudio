@@ -182,4 +182,6 @@ def _valid_wav(path: Path) -> bool:
         with wave.open(str(path), "rb") as stream:
             return stream.getframerate() > 0 and stream.getnchannels() > 0 and stream.getnframes() > 0
     except (OSError, EOFError, wave.Error):
-        return False\n
+        return False
+
+
