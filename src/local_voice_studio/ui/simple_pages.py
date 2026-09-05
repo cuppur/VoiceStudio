@@ -615,7 +615,9 @@ class OneClickGeneratePage(QWidget):
 
 class TaskCenterDialog(QDialog):
     def __init__(self, store: StudioStore, parent=None):
-        super().__init__(parent); self.store = store; self.setWindowTitle("任务中心"); self.resize(880, 480); layout = QVBoxLayout(self); self.table = QTableWidget(0, 6); self.table.setHorizontalHeaderLabels(["时间", "类型", "状态", "进度", "说明 / 失败原因", "输出位置"]); self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch); self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch); self.table.cellDoubleClicked.connect(self._open); layout.addWidget(self.table); self.refresh()
+        super().__init__(parent); self.store = store; self.setWindowTitle("任务中心"); self.resize(880, 520); layout = QVBoxLayout(self)
+        toolbar = QHBoxLayout(); toolbar.addWidget(QLabel("GPU 任务与本地处理历史")); toolbar.addStretch(); refresh = QPushButton("刷新"); refresh.clicked.connect(self.refresh); toolbar.addWidget(refresh); layout.addLayout(toolbar)
+        self.table = QTableWidget(0, 6); self.table.setHorizontalHeaderLabels(["时间", "类型", "状态", "进度", "说明 / 失败原因", "输出位置"]); self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch); self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch); self.table.cellDoubleClicked.connect(self._open); layout.addWidget(self.table); self.refresh()
     def refresh(self) -> None:
         product_jobs = self.store.list_product_jobs()
         legacy_jobs = self.store.list_jobs()
