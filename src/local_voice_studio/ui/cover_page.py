@@ -277,6 +277,11 @@ class CoverPage(QWidget):
             if self.cover_project: self.cover_project.duration_ms = duration; self._save_cover(self.cover_project)
             self._select_track(0, False)
         self._update_ab_buttons()
+        if self.global_player and self.cover_project:
+            ai_asset = self.cover_project.get_asset(role="ai_vocal")
+            final_asset = self.cover_project.get_asset(role="final_mix")
+            if ai_asset and final_asset and Path(self.track_paths.get(3, "")).is_file() and Path(self.track_paths.get(4, "")).is_file():
+                self.global_player.load_take_pair(self.cover_project.id, ai_asset.id, self.track_paths[3], final_asset.id, self.track_paths[4])
         if self.cover_project:
             key = ("original", "vocals", "instrumental")[index] if index < 3 else str(index); cache = self.cover_project.root / "waveform" / f"{session.sha256}.json"
             if cache.is_file(): self._set_waveform(self.cover_project, cache, key)
