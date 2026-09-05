@@ -20,3 +20,5 @@ __all__ = [
     "CoverStateResult", "OperationResult", "SeparateSongResult",
     "ConvertVocalResult", "RenderCoverResult", "ExportCoverResult",
 ]
+from .analyzer import SongAnalyzer, SongAnalysisResult
+
