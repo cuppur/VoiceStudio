@@ -62,3 +62,12 @@ def test_controller_loads_and_switches_real_ab_assets():
     ctl.select_ab("B")
     assert ctl.channels[TrackRole.AI_VOCAL].output is None or True
     ctl.select_ab("A")
+
+
+def test_global_player_tracks_active_take():
+    from local_voice_studio.ui.audio.global_player import GlobalPlayerSession
+    session = GlobalPlayerSession(controller())
+    session.load_take_pair("p", "a-id", "a.wav", "b-id", "b.wav")
+    assert session.active_take_id == "a-id"
+    assert session.select_take("B") == "b-id"
+    assert session.active_side == "B"
