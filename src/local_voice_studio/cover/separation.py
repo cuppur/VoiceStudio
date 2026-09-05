@@ -264,6 +264,21 @@ class SongSeparationPipeline:
             cover.output_paths = {"vocal": cover.vocal_path, "instrumental": cover.instrumental_path}
             cover.output_hashes = {"vocal": sha256_file(final_vocal), "instrumental": sha256_file(final_instrumental)}
             cover.save()
+            manifest_path = cover.root.parent.parent / "project.json"
+            if manifest_path.is_file():
+                try:
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    if manifest.get("product_project"):
+                        product = SongProject.from_dict(manifest["product_project"])
+                        vocal_asset = cover.get_asset(role="vocal")
+                        if vocal_asset:
+                            product.register_cache(CacheArtifact(operation="separation", cache_key=cache_key, asset_id=vocal_asset.id, source_sha256=actual_source_sha, engine_version=descriptor.version, model_version=descriptor.id, model_sha256=descriptor.model_sha256))
+                            manifest["product_project"] = product.to_dict()
+                            temporary = manifest_path.with_name(manifest_path.name + ".staging")
+                            temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+                            os.replace(temporary, manifest_path)
+                except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                    pass
             if progress: progress(1.0, "saving_project", "分离结果已保存")
             return self._result(cover, actual_source_sha, descriptor.model_sha256, cache_hit=False, separator=descriptor.id, version=descriptor.version)
         except InterruptedError:
@@ -294,6 +309,7 @@ def _valid_wav(path: Path) -> bool:
         return len(header) == 12 and header[:4] in {b"RIFF", b"RF64"} and header[8:12] == b"WAVE"
     except OSError:
         return False
+
 
 
 
