@@ -206,10 +206,23 @@ class CoverPage(QWidget):
         product = self.store.load_song_project(self.project)
         profile = self._selected_profile()
         voice_id = str(getattr(profile, "id", ""))
-        take = product.takes[-1] if product.takes else None
-        if take is None or take.asset_ids != [ai_asset.id, final_asset.id]:
+        take = None
+        if product.active_take_id:
+            try:
+                candidate = product.get_take(product.active_take_id)
+                if candidate.asset_ids == [ai_asset.id, final_asset.id]:
+                    take = candidate
+            except KeyError:
+                pass
+        if take is None:
+            take = next((item for item in reversed(product.takes) if item.asset_ids == [ai_asset.id, final_asset.id]), None)
+        if take is None:
             take = Take(product.id, voice_id, name="当前翻唱 Take", parameters={"pitch_shift": self.pitch.value()}, asset_ids=[ai_asset.id, final_asset.id], status="ready")
             product.add_take(take)
+            self.store.save_song_project(self.project, product)
+        elif product.active_take_id != take.id:
+            product.active_take_id = take.id
+            product.active_voice_profile_id = take.voice_profile_id
             self.store.save_song_project(self.project, product)
         if self.global_player:
             self.global_player.active_take_id = take.id
