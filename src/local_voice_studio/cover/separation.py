@@ -12,6 +12,7 @@ from typing import Callable, Protocol
 from ..audio import sha256_file
 from ..paths import AppPaths, ensure_within, validate_sha256
 from ..runtime import EngineRuntimeResolver
+from ..infrastructure.cache import build_cache_key
 from .project import CoverProject
 
 MODEL_NAME = "HP2_all_vocals.pth"
@@ -208,7 +209,7 @@ class SongSeparationPipeline:
         actual_source_sha = sha256_file(source)
         if actual_source_sha != source_sha256 or actual_source_sha != cover.source_sha256:
             raise ValueError("歌曲输入文件 SHA-256 不匹配")
-        cache_key = hashlib.sha256(f"{actual_source_sha}:{descriptor.id}:{descriptor.version}:{descriptor.model_sha256}".encode()).hexdigest()
+        cache_key = build_cache_key(source_sha256=actual_source_sha, operation="separation", engine_version=descriptor.version, model_version=descriptor.id, model_sha256=descriptor.model_sha256, parameters={"engine": descriptor.id, "stems": ["vocal", "instrumental"]}, output_format="wav")
         if (cover.separation_status == "completed" and cover.separation_cache_key == cache_key
                 and cover.separator == descriptor.id and cover.separator_model_sha256 == descriptor.model_sha256
                 and cover.verify_outputs()):
@@ -292,3 +293,5 @@ def _valid_wav(path: Path) -> bool:
         return len(header) == 12 and header[:4] in {b"RIFF", b"RF64"} and header[8:12] == b"WAVE"
     except OSError:
         return False
+
+
