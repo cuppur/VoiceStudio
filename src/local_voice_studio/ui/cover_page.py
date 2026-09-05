@@ -95,7 +95,7 @@ class CoverPage(QWidget):
     def __init__(self, paths, store, project, worker=None, parent=None):
         super().__init__(parent); self.setObjectName("coverPage"); self.paths, self.store, self.project, self.worker = paths, store, Path(project), worker
         self.cover_project = None; self.sessions = {}; self.track_paths = {}; self._threads = set(); self._separation_request = ""; self._cleanup_request = ""; self._pitch_request = ""; self._pending_ai_payload = {}; self._ai_request = ""; self._render_request = ""; self._export_request = ""; self._lyrics_request = ""; self._last_export_payload = {}; self._selected_track = 0; self._playback_mode = PlaybackMode.MIX_PREVIEW
-        self.cover_service = CoverApplicationService(self.project, paths=self.paths, store=self.store); self._separation_controller = None
+        self.cover_service = CoverApplicationService(self.project, paths=self.paths, store=self.store); self._separation_controller = None; self._product_controllers = {}
         self.preview_controller = PreviewAudioController.create_qt(self, drift_tolerance_ms=50)
         self.sync_timer = QTimer(self); self.sync_timer.setInterval(750); self.sync_timer.timeout.connect(self._resync_preview)
         self._build(); self.refresh_profiles(); self.refresh_runtime_status(); self.restore_cover()
@@ -371,6 +371,15 @@ class CoverPage(QWidget):
             except TypeError: ready = ready and profile.singing_status() == "ready"
         self.cover_button.setEnabled(ready)
 
+    def _send_product_stage(self, command: str, payload: dict, stage: str) -> str:
+        coordinator = JobCoordinator(self.store)
+        job = coordinator.start("ai_cover", payload, [stage])
+        controller = CoverPipelineController(job, self.worker.send, lambda value: self.store.save_product_job(value))
+        self._product_controllers[stage] = controller
+        self.worker.attach_pipeline_controller(controller)
+        controller.pipeline.dispatch_next()
+        return controller.pipeline.request_ids[stage]
+
     def generate_ai_vocal(self):
         profile = self._selected_profile()
         if not self.cover_project or not profile: self.song_meta.setText("请选择已授权且已验证歌唱模型的声音"); return
@@ -391,11 +400,11 @@ class CoverPage(QWidget):
             except Exception as exc:
                 self._ai_failed(str(exc)); return
             self._pending_ai_payload = payload; self.cover_button.setText("人声清理中…"); self.song_meta.setText("正在清理已分离人声")
-            try: self._cleanup_request = self.worker.send("cleanup_vocal", cleanup)
+            try: self._cleanup_request = self._send_product_stage("cleanup_vocal", cleanup, "post_process")
             except Exception as exc: self._ai_failed(str(exc))
             return
         self.cover_button.setText("AI 人声生成中…"); self.song_meta.setText("正在生成 AI 人声")
-        try: self._ai_request = self.worker.send("convert_vocal", payload)
+        try: self._ai_request = self._send_product_stage("convert_vocal", payload, "voice_conversion")
         except Exception as exc: self._ai_failed(str(exc))
 
     def suggest_transpose(self):
