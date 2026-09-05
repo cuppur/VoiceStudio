@@ -92,11 +92,12 @@ class CoverPage(QWidget):
     profileChanged = Signal(str)
     render_requested = Signal(dict)
     export_requested = Signal()
-    def __init__(self, paths, store, project, worker=None, parent=None):
+    def __init__(self, paths, store, project, worker=None, parent=None, global_player=None):
         super().__init__(parent); self.setObjectName("coverPage"); self.paths, self.store, self.project, self.worker = paths, store, Path(project), worker
         self.cover_project = None; self.sessions = {}; self.track_paths = {}; self._threads = set(); self._separation_request = ""; self._cleanup_request = ""; self._pitch_request = ""; self._pending_ai_payload = {}; self._ai_request = ""; self._render_request = ""; self._export_request = ""; self._lyrics_request = ""; self._last_export_payload = {}; self._selected_track = 0; self._playback_mode = PlaybackMode.MIX_PREVIEW
         self.cover_service = CoverApplicationService(self.project, paths=self.paths, store=self.store); self._separation_controller = None; self._product_controllers = {}
-        self.preview_controller = PreviewAudioController.create_qt(self, drift_tolerance_ms=50)
+        self.global_player = global_player
+        self.preview_controller = global_player.controller if global_player is not None else PreviewAudioController.create_qt(self, drift_tolerance_ms=50)
         self.sync_timer = QTimer(self); self.sync_timer.setInterval(750); self.sync_timer.timeout.connect(self._resync_preview)
         self._build(); self.refresh_profiles(); self.refresh_runtime_status(); self.restore_cover()
         if self.worker is not None:

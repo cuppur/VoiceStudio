@@ -19,6 +19,8 @@ from .simple_pages import MyVoicesPage, OneClickGeneratePage, OneClickTrainingPa
 from .cover_page import CoverPage
 from .theme import load_theme
 from .worker_client import WorkerClient
+from .audio import PreviewAudioController
+from .audio.global_player import GlobalPlayerSession
 
 
 class SetupDialog(QDialog):
@@ -94,7 +96,7 @@ class MainWindow(QMainWindow):
     def __init__(self, paths: AppPaths, store: StudioStore):
         super().__init__(); self.paths, self.store = paths, store; self.setWindowTitle("VoiceStudio · 本地 AI 声音创作工作室"); self.resize(1440, 900); self.setMinimumSize(1280, 720)
         self.session = ProjectSession(store, self); self.project = self.session.current
-        self.client = WorkerClient(paths, self); self._build(); self.session.project_changed.connect(self._switch_project); self.client.start(); self.statusBar().showMessage("本地工作进程正在启动……")
+        self.client = WorkerClient(paths, self); self.global_player = GlobalPlayerSession(PreviewAudioController.create_qt(self)); self._build(); self.session.project_changed.connect(self._switch_project); self.client.start(); self.statusBar().showMessage("本地工作进程正在启动……")
         self.client.state_changed.connect(self._state); self.client.event.connect(self._worker_event)
 
     def _build(self) -> None:
@@ -128,7 +130,7 @@ class MainWindow(QMainWindow):
             page = self.stack.widget(0)
             if hasattr(page, "release_resources"): page.release_resources()
             self.stack.removeWidget(page); page.deleteLater()
-        self.cover_page = CoverPage(self.paths, self.store, self.project, self.client); self.generate_page = OneClickGeneratePage(self.store, self.project, self.client); self.voice_page = MyVoicesPage(self.store, self.project); self.training_page = OneClickTrainingPage(self.store, self.project, self.client); self.settings_page = SimpleSettingsPage(self.paths, self.store, self.project, self.client)
+        self.cover_page = CoverPage(self.paths, self.store, self.project, self.client, global_player=self.global_player); self.generate_page = OneClickGeneratePage(self.store, self.project, self.client); self.voice_page = MyVoicesPage(self.store, self.project); self.training_page = OneClickTrainingPage(self.store, self.project, self.client); self.settings_page = SimpleSettingsPage(self.paths, self.store, self.project, self.client)
         for page in (self.cover_page, self.generate_page, self.voice_page, self.training_page, self.settings_page): self.stack.addWidget(page)
         self.stack.setCurrentIndex(row)
         self.voice_page.profiles_changed.connect(self.generate_page.refresh_profiles); self.voice_page.profiles_changed.connect(self.cover_page.refresh_profiles); self.training_page.profiles_changed.connect(self.generate_page.refresh_profiles); self.training_page.profiles_changed.connect(self.cover_page.refresh_profiles); self.training_page.profiles_changed.connect(self.voice_page.refresh); self.voice_page.generate_requested.connect(self._use_profile); self.voice_page.retrain_requested.connect(self._retrain_profile); self.generate_page.train_requested.connect(lambda: self.navigation.setCurrentRow(3)); self.settings_page.install_requested.connect(self._open_setup)
