@@ -35,6 +35,7 @@ class WorkerClient(QObject):
         self._buffer = b""
         self.ready = False
         self.pending: dict[str, str] = {}
+        self._pipeline_controllers: list[object] = []
 
     def _diagnostic(self, message: str) -> None:
         try:
@@ -91,6 +92,15 @@ class WorkerClient(QObject):
             self._diagnostic(f"send pending id={request_id} bytes={self.process.bytesToWrite()}")
         return request_id
 
+    def attach_pipeline_controller(self, controller: object) -> None:
+        """Route matching Worker events to a product pipeline before UI observers."""
+        if controller not in self._pipeline_controllers:
+            self._pipeline_controllers.append(controller)
+
+    def detach_pipeline_controller(self, controller: object) -> None:
+        if controller in self._pipeline_controllers:
+            self._pipeline_controllers.remove(controller)
+
     def restart(self) -> None:
         self.shutdown(); self.start()
 
@@ -116,7 +126,13 @@ class WorkerClient(QObject):
                     self.ready = True; self.ready_changed.emit(True)
                 if event in {"result", "error"} and request_id in self.pending:
                     command = self.pending.pop(request_id); self.request_finished.emit(request_id, command)
-                self.event.emit(request_id, event, dict(item.get("payload") or {}))
+                payload = dict(item.get("payload") or {})
+                for controller in tuple(self._pipeline_controllers):
+                    try:
+                        controller.handle(request_id, event, payload)
+                    except (KeyError, ValueError, RuntimeError, TypeError) as exc:
+                        self._diagnostic(f"pipeline event error: {exc}")
+                self.event.emit(request_id, event, payload)
             except Exception:
                 self.stderr_line.emit("无法解析工作进程消息: " + line.decode("utf-8", errors="replace"))
 
