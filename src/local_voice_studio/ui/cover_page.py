@@ -184,6 +184,8 @@ class CoverPage(QWidget):
         self.cover_button = QPushButton("开始 AI 翻唱"); self.cover_button.setObjectName("primaryButton"); self.cover_button.setAccessibleName("开始 AI 翻唱"); self.cover_button.setMinimumHeight(42); self.cover_button.setEnabled(False); self.cover_button.clicked.connect(self.generate_ai_vocal); form.addWidget(self.cover_button)
         self.render_button = QPushButton("生成最终翻唱"); self.render_button.setObjectName("primaryButton"); self.render_button.setAccessibleName("生成最终翻唱"); self.render_button.setEnabled(False); self.render_button.clicked.connect(self.request_final_render); form.addWidget(self.render_button)
         self.export_button = QPushButton("导出最终混音"); self.export_button.setObjectName("secondaryButton"); self.export_button.setAccessibleName("导出最终混音"); self.export_button.setEnabled(False); self.export_button.clicked.connect(self.export_final); form.addWidget(self.export_button)
+        ab_label = QLabel("A / B 试听"); ab_label.setObjectName("cardTitle"); form.addWidget(ab_label)
+        ab_row = QHBoxLayout(); self.ab_a_button = QPushButton("试听 A"); self.ab_b_button = QPushButton("试听 B"); self.ab_a_button.setEnabled(False); self.ab_b_button.setEnabled(False); self.ab_a_button.clicked.connect(lambda: self._select_ab("A")); self.ab_b_button.clicked.connect(lambda: self._select_ab("B")); ab_row.addWidget(self.ab_a_button); ab_row.addWidget(self.ab_b_button); form.addLayout(ab_row)
         return panel
 
     def _mixer_volume_changed(self, index: int, value: int) -> None:
@@ -191,6 +193,21 @@ class CoverPage(QWidget):
         if track_index >= 0:
             self.stems[track_index].set_volume(value)
             self._refresh_preview_plan()
+
+    def _select_ab(self, side: str) -> None:
+        a, b = self.track_paths.get(3, ""), self.track_paths.get(4, "")
+        if not a or not b or not Path(a).is_file() or not Path(b).is_file():
+            self.song_meta.setText("A/B 试听需要先生成 AI 人声和最终混音")
+            return
+        try:
+            self.preview_controller.load_ab(a, b); self.preview_controller.select_ab(side); self.preview_controller.play()
+            self.song_meta.setText(f"正在试听 Take {side}")
+        except (OSError, RuntimeError, ValueError) as exc:
+            self.song_meta.setText(f"A/B 试听失败：{exc}")
+
+    def _update_ab_buttons(self) -> None:
+        ready = all(Path(self.track_paths.get(index, "")).is_file() for index in (3, 4))
+        self.ab_a_button.setEnabled(ready); self.ab_b_button.setEnabled(ready)
 
     def request_final_render(self) -> None:
         profile = self._selected_profile()
@@ -258,6 +275,7 @@ class CoverPage(QWidget):
             self.lyrics.set_lyrics(session.lyrics, editable=editable); self.lyric_status.setText(("已载入 LRC · 自动识别" if (self.cover_project and self.cover_project.lyrics_origin == "auto") else "已载入 LRC") if session.lyrics else "未载入")
             if self.cover_project: self.cover_project.duration_ms = duration; self._save_cover(self.cover_project)
             self._select_track(0, False)
+        self._update_ab_buttons()
         if self.cover_project:
             key = ("original", "vocals", "instrumental")[index] if index < 3 else str(index); cache = self.cover_project.root / "waveform" / f"{session.sha256}.json"
             if cache.is_file(): self._set_waveform(self.cover_project, cache, key)
