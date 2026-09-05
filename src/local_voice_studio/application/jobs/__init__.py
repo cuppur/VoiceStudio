@@ -112,3 +112,6 @@ class ProductJob:
         return cls(kind=str(value.get("kind", "")), payload=dict(value.get("payload", {})), stages=stages, id=str(value.get("id", uuid4().hex)), status=ProductJobStatus(value.get("status", "queued")), current_stage=str(value.get("current_stage", "")), progress=float(value.get("progress", 0)), error=str(value.get("error", "")), outputs=list(value.get("outputs", [])), created_at=str(value.get("created_at", utc_now())), updated_at=str(value.get("updated_at", utc_now())))
 
 
+
+from .scheduler import GpuJobScheduler, GpuTask, SchedulerStatus
+
