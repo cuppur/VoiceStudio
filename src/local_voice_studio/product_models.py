@@ -123,3 +123,39 @@ class SongProject:
         payload["exports"] = [ExportRecord(**item) for item in payload.get("exports", [])]
         allowed = set(cls.__dataclass_fields__) - {"schema_version"}
         return cls(**{key: item for key, item in payload.items() if key in allowed})
+
+@dataclass
+class VoiceCapabilityStatus:
+    """User-facing capability/readiness view for one VoiceProfile."""
+    tts: str = "unavailable"
+    singing_conversion: str = "unavailable"
+    training: str = "available"
+    reasons: dict[str, str] = field(default_factory=dict)
+
+    def can(self, capability: str) -> bool:
+        return getattr(self, capability, "unavailable") == "ready"
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def voice_capabilities(profile: Any) -> VoiceCapabilityStatus:
+    """Derive capabilities from the existing legacy VoiceProfile safely.
+
+    This is intentionally read-only: missing runtime/model files remain
+    unavailable instead of being represented as a fake ready state.
+    """
+    tts_ready = bool(getattr(profile, "active_gpt_checkpoint", "") and getattr(profile, "active_sovits_checkpoint", ""))
+    singing_models = list(getattr(profile, "singing_models", []) or [])
+    singing_ready = any(str(getattr(model, "trust_status", "")) in {"verified", "active", "ready"} for model in singing_models)
+    reasons: dict[str, str] = {}
+    if not tts_ready:
+        reasons["tts"] = "尚未验证 GPT-SoVITS 模型"
+    if not singing_ready:
+        reasons["singing_conversion"] = "尚未验证 Singing/RVC 模型"
+    return VoiceCapabilityStatus(
+        tts="ready" if tts_ready else "unavailable",
+        singing_conversion="ready" if singing_ready else "unavailable",
+        training="available",
+        reasons=reasons,
+    )

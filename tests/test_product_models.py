@@ -45,3 +45,25 @@ def test_store_round_trips_product_project(tmp_path):
     assert restored.takes[0].voice_profile_id == "voice-1"
     assert store.load_project(project_path)["schema_version"] >= 4
 
+from local_voice_studio.models import VoiceProfile
+from local_voice_studio.product_models import voice_capabilities
+
+
+def test_voice_capabilities_never_fakes_model_readiness():
+    profile = VoiceProfile(name="empty", consent_confirmed=True)
+    status = voice_capabilities(profile)
+    assert status.tts == "unavailable"
+    assert status.singing_conversion == "unavailable"
+    assert not status.can("tts")
+    assert "tts" in status.reasons
+
+
+def test_voice_capabilities_exposes_verified_singing_model():
+    from local_voice_studio.singing.models import SingingModelVersion
+    profile = VoiceProfile(name="singing", consent_confirmed=True)
+    profile.active_gpt_checkpoint = "gpt.pth"
+    profile.active_sovits_checkpoint = "sovits.pth"
+    profile.singing_models = [SingingModelVersion(profile_id=profile.id, trust_status="verified")]
+    status = voice_capabilities(profile)
+    assert status.tts == "ready"
+    assert status.singing_conversion == "ready"
