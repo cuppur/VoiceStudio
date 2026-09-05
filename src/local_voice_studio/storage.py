@@ -12,6 +12,7 @@ from uuid import uuid4
 from .audio import sha256_file
 from .models import DatasetDraft, DatasetManifest, GenerationRecord, Job, JobKind, JobStatus, ModelVersion, SourceAsset, TrainingWorkflow, VoiceProfile, WorkflowStatus, dataset_snapshot_sha256, utc_now
 from .product_models import SongProject
+from .application.jobs import ProductJob
 from .paths import AppPaths, ensure_within, validate_id, validate_sha256
 
 
@@ -128,6 +129,23 @@ class StudioStore:
         if migrated != value:
             self._atomic_json(path, migrated)
         return migrated
+
+    def save_product_job(self, job: ProductJob) -> None:
+        now = utc_now()
+        payload = job.to_dict()
+        with self._connect() as db:
+            db.execute("""INSERT OR REPLACE INTO jobs (id,kind,status,progress,message,error,payload,outputs,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)""", (job.id, "product:" + job.kind, job.status.value, job.progress, job.current_stage, job.error, json.dumps(payload, ensure_ascii=False), json.dumps(job.outputs, ensure_ascii=False), job.created_at, now))
+
+    def load_product_job(self, job_id: str) -> ProductJob:
+        with self._connect() as db:
+            row = db.execute("SELECT payload FROM jobs WHERE id = ? AND kind LIKE 'product:%'", (job_id,)).fetchone()
+        if row is None: raise KeyError(job_id)
+        return ProductJob.from_dict(json.loads(row["payload"]))
+
+    def list_product_jobs(self, limit: int = 200) -> list[ProductJob]:
+        with self._connect() as db:
+            rows = db.execute("SELECT payload FROM jobs WHERE kind LIKE 'product:%' ORDER BY updated_at DESC LIMIT ?", (limit,)).fetchall()
+        return [ProductJob.from_dict(json.loads(row["payload"])) for row in rows]
 
     @staticmethod
     def _migrate_project(value: dict[str, Any], project: Path | None = None) -> dict[str, Any]:
@@ -467,5 +485,6 @@ class StudioStore:
         temporary = path.with_suffix(path.suffix + ".tmp")
         temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(path)
+
 
 

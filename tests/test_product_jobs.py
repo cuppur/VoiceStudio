@@ -18,3 +18,16 @@ def test_job_cancel_is_explicit():
     job = ProductJob("separation", {}, [JobStage("separation")])
     job.cancel(); assert job.status == ProductJobStatus.CANCELLING
     job.mark_cancelled(); assert job.status == ProductJobStatus.CANCELLED
+from local_voice_studio.application.jobs import JobStage, ProductJob
+
+
+def test_store_persists_product_job_state(tmp_path):
+    from local_voice_studio.paths import AppPaths
+    from local_voice_studio.storage import StudioStore
+    paths = AppPaths(tmp_path / "home", tmp_path / "projects", tmp_path / "runtime", tmp_path / "engine", tmp_path / "models", tmp_path / "logs", tmp_path / "db.sqlite3")
+    store = StudioStore(paths)
+    job = ProductJob("ai_cover", {"project": "p1"}, [JobStage("analyze")])
+    store.save_product_job(job)
+    restored = store.load_product_job(job.id)
+    assert restored.id == job.id and restored.kind == "ai_cover"
+    assert store.list_product_jobs()[0].id == job.id

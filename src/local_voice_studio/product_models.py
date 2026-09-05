@@ -8,9 +8,11 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from typing import Any, ClassVar
+from datetime import datetime, timezone
 from uuid import uuid4
 
-from .models import utc_now
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _id() -> str:
@@ -207,3 +209,4 @@ def asset_records_from_cover(cover: Any) -> list[AssetRecord]:
         source_asset_ids=list(asset.source_asset_ids), model_version_id=str(asset.model_id), status="ready",
         created_at=str(asset.created_at),
     ) for asset in list(getattr(cover, "assets", []) or [])]
+
