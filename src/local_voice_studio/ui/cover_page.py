@@ -376,9 +376,13 @@ class CoverPage(QWidget):
         job = coordinator.start("ai_cover", payload, [stage])
         controller = CoverPipelineController(job, self.worker.send, lambda value: self.store.save_product_job(value))
         self._product_controllers[stage] = controller
-        self.worker.attach_pipeline_controller(controller)
-        controller.pipeline.dispatch_next()
-        request_id = controller.pipeline.request_ids[stage]
+        attach = getattr(self.worker, "attach_pipeline_controller", None)
+        if callable(attach):
+            attach(controller)
+            controller.pipeline.dispatch_next()
+            request_id = controller.pipeline.request_ids[stage]
+        else:
+            request_id = self.worker.send(command, payload)
         job.payload["active_request_id"] = request_id
         self.store.save_product_job(job)
         return request_id
@@ -470,8 +474,12 @@ class CoverPage(QWidget):
             coordinator = JobCoordinator(self.store)
             job = coordinator.start("ai_cover", payload, ["separation"])
             self._separation_controller = CoverPipelineController(job, self.worker.send, lambda value: self.store.save_product_job(value))
-            self.worker.attach_pipeline_controller(self._separation_controller)
-            self._separation_request = self._separation_controller.pipeline.dispatch_next() and self._separation_controller.pipeline.request_ids.get("separation", "")
+            attach = getattr(self.worker, "attach_pipeline_controller", None)
+            if callable(attach):
+                attach(self._separation_controller)
+                self._separation_request = self._separation_controller.pipeline.dispatch_next() and self._separation_controller.pipeline.request_ids.get("separation", "")
+            else:
+                self._separation_request = self.worker.send("separate_song", payload)
         except Exception as exc: self._separation_failed(str(exc))
 
     def cancel_separation(self):

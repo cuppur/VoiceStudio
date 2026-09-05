@@ -127,7 +127,7 @@ class WorkerClient(QObject):
                 if event in {"result", "error"} and request_id in self.pending:
                     command = self.pending.pop(request_id); self.request_finished.emit(request_id, command)
                 payload = dict(item.get("payload") or {})
-                for controller in tuple(self._pipeline_controllers):
+                for controller in tuple(getattr(self, "_pipeline_controllers", ())):
                     try:
                         controller.handle(request_id, event, payload)
                     except (KeyError, ValueError, RuntimeError, TypeError) as exc:
