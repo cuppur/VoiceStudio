@@ -139,6 +139,11 @@ class WorkerService:
             if target and target != self.current_request_id:
                 self.emit(message.id, "result", {"cancel_requested": False, "reason": "目标任务已结束或不是当前任务", "target_request_id": target})
                 return
+            if target:
+                product_job_id = self._request_context.get("product_job_id")
+                if product_job_id:
+                    try: self.job_coordinator.mark_cancelling(product_job_id)
+                    except (KeyError, ValueError): pass
             self.cancel_event.set()
             self.engine.stop()
             self.training.cancel()
@@ -291,6 +296,12 @@ class WorkerService:
             error_payload = {"message": str(exc), "exception": type(exc).__name__, "status": event}
             if isinstance(exc, CoverError):
                 error_payload.update(cover_error_payload(exc))
+            product_job_id = self._request_context.get("product_job_id")
+            if cancelled and product_job_id:
+                try:
+                    self.job_coordinator.mark_cancelled(product_job_id)
+                except (KeyError, ValueError):
+                    pass
             if request_id and self._request_context.get("command") in {"separate_song", "cleanup_vocal", "convert_vocal", "render_cover", "export_cover", "transcribe_lyrics"}:
                 command = self._request_context["command"]
                 error_payload.setdefault("code", "cover.cancelled" if cancelled else f"cover.{command}.failed")
@@ -635,5 +646,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
 

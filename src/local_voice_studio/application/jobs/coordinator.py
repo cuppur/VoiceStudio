@@ -43,6 +43,18 @@ class JobCoordinator:
         self.store.save_product_job(job)
         return job
 
+    def mark_cancelling(self, job_id: str) -> ProductJob:
+        job = self._get(job_id)
+        job.cancel()
+        self.store.save_product_job(job)
+        return job
+
+    def mark_cancelled(self, job_id: str) -> ProductJob:
+        job = self._get(job_id)
+        job.mark_cancelled()
+        self.store.save_product_job(job)
+        return job
+
     def handle_error(self, job_id: str, error: str, recoverable: bool = True) -> ProductJob:
         job = self._get(job_id)
         job.error = str(error)
@@ -74,3 +86,4 @@ class JobCoordinator:
         if event == "error":
             return self.handle_error(job_id, str(payload.get("message", "Worker 失败")), recoverable=bool(payload.get("recoverable", True)))
         return job
+
