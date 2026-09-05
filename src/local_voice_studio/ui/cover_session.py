@@ -59,7 +59,11 @@ class SongSession:
         legacy_cache_file = Path(cache_dir) / f"{digest}.json" if cache_dir is not None else None
         if cache_file and not cache_file.is_file() and legacy_cache_file and legacy_cache_file.is_file():
             cache_file = legacy_cache_file
-        cache_file = Path(cache_dir) / f"{digest}.json" if cache_dir is not None else None
+        if cache_file and cache_file.is_file() and legacy_cache_file and legacy_cache_file.is_file():
+            try:
+                load_session_cache(legacy_cache_file, expected_sha256=digest)
+            except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+                cache_file = legacy_cache_file
         if cache_file and cache_file.is_file():
             try:
                 cached = load_session_cache(cache_file, expected_sha256=digest)
@@ -329,6 +333,12 @@ def save_session_cache(session: SongSession, cache_dir: Path) -> Path:
     temporary = path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(session.to_dict(), ensure_ascii=False), encoding="utf-8")
     temporary.replace(path)
+    # Keep the pre-productization digest filename as a compatibility alias.
+    legacy = cache_dir / f"{session.sha256}.json"
+    if legacy != path:
+        legacy_tmp = legacy.with_suffix(".json.tmp")
+        legacy_tmp.write_text(json.dumps(session.to_dict(), ensure_ascii=False), encoding="utf-8")
+        legacy_tmp.replace(legacy)
     return path
 
 
@@ -342,3 +352,6 @@ def load_session_cache(cache_file: Path, *, expected_sha256: str | None = None) 
     lyrics = [LyricLine(float(item["timestamp_seconds"]), str(item["text"])) for item in value.get("lyrics", [])]
     peaks = [tuple(int(v) for v in item[:2]) for item in value.get("peaks", [])]
     return SongSession(str(value["audio_path"]), lyrics, metadata, str(value["sha256"]), peaks, int(value.get("peak_count", 6000)))
+
+
+
