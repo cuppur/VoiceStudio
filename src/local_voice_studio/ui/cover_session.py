@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from ..paths import AppPaths
+from ..infrastructure.cache import build_cache_key
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,11 @@ class SongSession:
         audio_path = Path(audio_path).resolve()
         digest = sha256_file(audio_path)
         lyrics = parse_lrc(lrc_path.read_text(encoding="utf-8-sig") if lrc_path and lrc_path.is_file() else "")
+        cache_key = build_cache_key(source_sha256=digest, operation="waveform", engine_version="pcm-peaks-v1", parameters={"peak_count": max(1, int(peak_count))}, output_format="json")
+        cache_file = Path(cache_dir) / f"{cache_key}.json" if cache_dir is not None else None
+        legacy_cache_file = Path(cache_dir) / f"{digest}.json" if cache_dir is not None else None
+        if cache_file and not cache_file.is_file() and legacy_cache_file and legacy_cache_file.is_file():
+            cache_file = legacy_cache_file
         cache_file = Path(cache_dir) / f"{digest}.json" if cache_dir is not None else None
         if cache_file and cache_file.is_file():
             try:
@@ -318,7 +324,8 @@ def peaks_from_pcm_chunks(chunks: Iterable[bytes], *, total_samples: int, peak_c
 
 def save_session_cache(session: SongSession, cache_dir: Path) -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
-    path = cache_dir / f"{session.sha256}.json"
+    cache_key = build_cache_key(source_sha256=session.sha256, operation="waveform", engine_version="pcm-peaks-v1", parameters={"peak_count": session.peak_count}, output_format="json")
+    path = cache_dir / f"{cache_key}.json"
     temporary = path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(session.to_dict(), ensure_ascii=False), encoding="utf-8")
     temporary.replace(path)
