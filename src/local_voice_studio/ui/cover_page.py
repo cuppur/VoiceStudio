@@ -378,7 +378,10 @@ class CoverPage(QWidget):
         self._product_controllers[stage] = controller
         self.worker.attach_pipeline_controller(controller)
         controller.pipeline.dispatch_next()
-        return controller.pipeline.request_ids[stage]
+        request_id = controller.pipeline.request_ids[stage]
+        job.payload["active_request_id"] = request_id
+        self.store.save_product_job(job)
+        return request_id
 
     def generate_ai_vocal(self):
         profile = self._selected_profile()

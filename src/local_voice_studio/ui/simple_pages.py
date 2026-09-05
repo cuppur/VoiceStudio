@@ -614,25 +614,38 @@ class OneClickGeneratePage(QWidget):
 
 
 class TaskCenterDialog(QDialog):
-    def __init__(self, store: StudioStore, parent=None):
-        super().__init__(parent); self.store = store; self.setWindowTitle("任务中心"); self.resize(880, 520); layout = QVBoxLayout(self)
-        toolbar = QHBoxLayout(); toolbar.addWidget(QLabel("GPU 任务与本地处理历史")); toolbar.addStretch(); refresh = QPushButton("刷新"); refresh.clicked.connect(self.refresh); toolbar.addWidget(refresh); layout.addLayout(toolbar)
+    def __init__(self, store: StudioStore, client=None, parent=None):
+        super().__init__(parent); self.store = store; self.client = client; self._rows = []; self.setWindowTitle("任务中心"); self.resize(880, 520); layout = QVBoxLayout(self)
+        toolbar = QHBoxLayout(); toolbar.addWidget(QLabel("GPU 任务与本地处理历史")); toolbar.addStretch(); refresh = QPushButton("刷新"); refresh.clicked.connect(self.refresh); toolbar.addWidget(refresh); cancel = QPushButton("取消选中任务"); cancel.clicked.connect(self.cancel_selected); toolbar.addWidget(cancel); layout.addLayout(toolbar)
         self.table = QTableWidget(0, 6); self.table.setHorizontalHeaderLabels(["时间", "类型", "状态", "进度", "说明 / 失败原因", "输出位置"]); self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch); self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch); self.table.cellDoubleClicked.connect(self._open); layout.addWidget(self.table); self.refresh()
     def refresh(self) -> None:
         product_jobs = self.store.list_product_jobs()
         legacy_jobs = self.store.list_jobs()
         rows = []
         for job in product_jobs:
-            rows.append((job.updated_at, job.kind, job.status.value, f"{job.progress * 100:.0f}%", job.error, "、".join(job.outputs)))
+            rows.append((job.id, job.updated_at, job.kind, job.status.value, f"{job.progress * 100:.0f}%", job.error, "、".join(job.outputs)))
         for job in legacy_jobs:
             if str(job.kind).startswith("product:"):
                 continue
-            rows.append((job.updated_at, job.kind.value, job.status.value, f"{job.progress * 100:.0f}%", job.error or job.message, "、".join(job.outputs)))
+            rows.append((job.id, job.updated_at, job.kind.value, job.status.value, f"{job.progress * 100:.0f}%", job.error or job.message, "、".join(job.outputs)))
         rows.sort(key=lambda item: item[0], reverse=True)
         self.table.setRowCount(len(rows))
         for row, values in enumerate(rows):
-            for column, value in enumerate(values):
+            self.table.setItem(row, 0, QTableWidgetItem(str(values[1])))
+            for column, value in enumerate(values[2:], 1):
                 self.table.setItem(row, column, QTableWidgetItem(str(value)))
+        self._rows = rows
+    def cancel_selected(self) -> None:
+        row = self.table.currentRow()
+        if row < 0 or row >= len(self._rows) or self.client is None:
+            return
+        job_id = self._rows[row][0]
+        job = self.store.load_product_job(job_id)
+        request_id = str(job.payload.get("active_request_id", ""))
+        if request_id:
+            self.client.send("cancel", {"target_request_id": request_id})
+            self.refresh()
+
     def _open(self, row: int, _column: int) -> None:
         value = self.table.item(row, 5).text().split("、")[0]
         if value: QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(value).parent if Path(value).suffix else Path(value))))

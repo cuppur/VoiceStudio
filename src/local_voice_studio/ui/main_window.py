@@ -103,15 +103,15 @@ class MainWindow(QMainWindow):
         self.navigation = QListWidget(); self.navigation.setObjectName("navigation"); self.navigation.setAccessibleName("主导航"); self.navigation.setFrameShape(QListWidget.NoFrame); self.navigation.setItemDelegate(_NavigationDelegate(self.navigation)); side_layout.addWidget(self.navigation); task_center = QPushButton("任务中心"); task_center.setObjectName("sidebarButton"); task_center.setAccessibleName("任务中心"); task_center.clicked.connect(self._open_task_center); side_layout.addWidget(task_center); version = QLabel("GPT-SoVITS V2ProPlus\n完全本地 · 无遥测"); version.setObjectName("sidebarFoot"); side_layout.addWidget(version); root.addWidget(sidebar)
         workspace = QWidget(); workspace.setObjectName("workspace"); workspace_layout = QVBoxLayout(workspace); workspace_layout.setContentsMargins(0, 0, 0, 0); workspace_layout.setSpacing(0)
         topbar = QFrame(); topbar.setObjectName("topbar"); topbar_layout = QHBoxLayout(topbar); topbar_layout.setContentsMargins(26, 0, 26, 0); topbar_layout.setSpacing(8)
-        topbar_layout.addWidget(QLabel("创作")); topbar_layout.addWidget(QLabel("›")); current_title = QLabel("AI 翻唱工作台"); current_title.setObjectName("topbarTitle"); topbar_layout.addWidget(current_title); topbar_layout.addStretch()
-        self.topbar_status = QLabel("本地工作进程 · 启动中"); self.topbar_status.setObjectName("topbarStatus"); topbar_layout.addWidget(self.topbar_status)
+        topbar_layout.addWidget(QLabel("创作")); topbar_layout.addWidget(QLabel("›")); self.current_title = current_title = QLabel("AI 翻唱工作台"); current_title.setObjectName("topbarTitle"); topbar_layout.addWidget(current_title); topbar_layout.addStretch()
+        self.topbar_status = QLabel("本地工作进程 · 启动中"); self.topbar_status.setObjectName("topbarStatus"); topbar_layout.addWidget(self.topbar_status, 0, Qt.AlignVCenter)
         settings_button = QPushButton("设置"); settings_button.setObjectName("topbarButton"); settings_button.setAccessibleName("打开设置"); settings_button.clicked.connect(lambda: self.navigation.setCurrentRow(4)); topbar_layout.addWidget(settings_button)
         workspace_layout.addWidget(topbar)
         self.stack = QStackedWidget(); workspace_layout.addWidget(self.stack, 1); root.addWidget(workspace, 1)
         for icon, name in (("cover.svg", "AI 翻唱"), ("generate.svg", "文字生成"), ("voices.svg", "我的声音"), ("training.svg", "训练声音"), ("settings.svg", "设置")):
             item = QListWidgetItem(self._navigation_icon(icon), name)
             self.navigation.addItem(item)
-        self.navigation.currentRowChanged.connect(self.stack.setCurrentIndex); self.navigation.setCurrentRow(0)
+        self.navigation.currentRowChanged.connect(self.stack.setCurrentIndex); self.navigation.currentTextChanged.connect(self.current_title.setText); self.navigation.setCurrentRow(0)
         self._build_project_pages(); self._update_project_button()
 
     @staticmethod
@@ -162,7 +162,7 @@ class MainWindow(QMainWindow):
         self.project = Path(project); self._build_project_pages(); self._update_project_button(); self.statusBar().showMessage(f"已切换到项目：{self.session.display_name(self.project)}", 4000)
 
     def _open_task_center(self) -> None:
-        TaskCenterDialog(self.store, self).exec()
+        TaskCenterDialog(self.store, self.client, self).exec()
 
     def _use_profile(self, profile_id: str) -> None:
         self.generate_page.select_profile(profile_id); self.navigation.setCurrentRow(1)
