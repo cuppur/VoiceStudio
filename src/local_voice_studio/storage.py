@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from .audio import sha256_file
 from .models import DatasetDraft, DatasetManifest, GenerationRecord, Job, JobKind, JobStatus, ModelVersion, SourceAsset, TrainingWorkflow, VoiceProfile, WorkflowStatus, dataset_snapshot_sha256, utc_now
+from .product_models import SongProject
 from .paths import AppPaths, ensure_within, validate_id, validate_sha256
 
 
@@ -86,7 +87,7 @@ class StudioStore:
             index += 1
         for child in ("raw", "processed", "datasets", "checkpoints", "exports", "workflows", "drafts"):
             (project / child).mkdir(parents=True, exist_ok=True)
-        payload = {"schema_version": 4, "project_uid": uuid4().hex, "id": project.name, "name": name, "voice_profiles": [], "source_assets": [], "dataset_snapshots": [], "workflows": [], "generation_records": [], "created_at": utc_now()}
+        payload = {"schema_version": 4, "project_uid": uuid4().hex, "id": project.name, "name": name, "voice_profiles": [], "source_assets": [], "dataset_snapshots": [], "workflows": [], "generation_records": [], "product_project": SongProject(name=name, source_asset_id="").to_dict(), "created_at": utc_now()}
         self._atomic_json(project / "project.json", payload)
         with self._connect() as db:
             db.execute(
@@ -95,6 +96,25 @@ class StudioStore:
             )
         return project
 
+    def load_song_project(self, project: Path) -> SongProject:
+        """Load the product-level project record without changing legacy fields."""
+        manifest = self.load_project(project)
+        value = manifest.get("product_project")
+        if not value:
+            value = SongProject(name=str(manifest.get("name", project.name)), source_asset_id="", id=str(manifest.get("project_uid", uuid4().hex))).to_dict()
+            manifest["product_project"] = value
+            self._atomic_json(project / "project.json", manifest)
+        return SongProject.from_dict(value)
+
+    def save_song_project(self, project: Path, product: SongProject) -> None:
+        """Persist the product record alongside the legacy project schema."""
+        project = ensure_within(self.paths.projects_root, project)
+        manifest = self.load_project(project)
+        if product.name != manifest.get("name"):
+            product.name = str(manifest.get("name", product.name))
+        product.updated_at = utc_now()
+        manifest["product_project"] = product.to_dict()
+        self._atomic_json(project / "project.json", manifest)
     def list_projects(self) -> list[dict[str, str]]:
         with self._connect() as db:
             rows = db.execute("SELECT id,name,path,updated_at FROM projects ORDER BY updated_at DESC").fetchall()
@@ -447,3 +467,5 @@ class StudioStore:
         temporary = path.with_suffix(path.suffix + ".tmp")
         temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(path)
+
+

@@ -26,3 +26,22 @@ def test_song_project_rejects_take_from_another_project():
         assert "不属于" in str(exc)
     else:
         raise AssertionError("foreign take was accepted")
+from local_voice_studio.product_models import Take
+
+
+def test_store_round_trips_product_project(tmp_path):
+    from local_voice_studio.paths import AppPaths
+    from local_voice_studio.storage import StudioStore
+    paths = AppPaths(tmp_path / "home", tmp_path / "projects", tmp_path / "runtime", tmp_path / "engine", tmp_path / "models", tmp_path / "logs", tmp_path / "database.sqlite3")
+    store = StudioStore(paths)
+    project_path = store.create_project("产品工程")
+    product = store.load_song_project(project_path)
+    take = Take(project_id=product.id, voice_profile_id="voice-1", name="Take 01")
+    product.add_take(take)
+    store.save_song_project(project_path, product)
+    restored = store.load_song_project(project_path)
+    assert restored.id == product.id
+    assert restored.active_take_id == take.id
+    assert restored.takes[0].voice_profile_id == "voice-1"
+    assert store.load_project(project_path)["schema_version"] >= 4
+
