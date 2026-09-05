@@ -101,6 +101,22 @@ class SongProject:
         self.active_voice_profile_id = take.voice_profile_id
         self.updated_at = utc_now()
 
+    def get_take(self, take_id: str) -> Take:
+        for take in self.takes:
+            if take.id == take_id:
+                return take
+        raise KeyError(take_id)
+
+    def create_take_variant(self, parent_take_id: str, *, name: str | None = None, parameters: dict[str, Any] | None = None) -> Take:
+        parent = self.get_take(parent_take_id)
+        variant = Take(self.id, parent.voice_profile_id, name or f"{parent.name} B", parent_take_id=parent.id, parameters={**parent.parameters, **(parameters or {})})
+        self.add_take(variant)
+        return variant
+
+    def compare_takes(self, take_a_id: str, take_b_id: str) -> dict[str, Any]:
+        a, b = self.get_take(take_a_id), self.get_take(take_b_id)
+        return {"a": a.id, "b": b.id, "same_voice": a.voice_profile_id == b.voice_profile_id, "parameter_changes": {key: (a.parameters.get(key), b.parameters.get(key)) for key in sorted(set(a.parameters) | set(b.parameters)) if a.parameters.get(key) != b.parameters.get(key)}, "asset_changes": {"a_only": sorted(set(a.asset_ids) - set(b.asset_ids)), "b_only": sorted(set(b.asset_ids) - set(a.asset_ids))}}
+
     def register_cache(self, artifact: CacheArtifact) -> CacheArtifact:
         existing = next((item for item in self.cache_artifacts if item.cache_key == artifact.cache_key and item.status == "ready"), None)
         if existing is not None:

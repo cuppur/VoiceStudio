@@ -78,3 +78,15 @@ def test_legacy_model_versions_share_product_view():
     records = model_version_records(profile)
     assert {item.kind for item in records} == {"tts", "singing"}
     assert {item.id for item in records} == {"tts-1", "sing-1"}
+
+
+def test_take_variant_and_ab_compare():
+    project = SongProject("song", "source")
+    base = Take(project.id, "voice-a", parameters={"pitch": 0, "index": "a"}, asset_ids=["a1"])
+    project.add_take(base)
+    variant = project.create_take_variant(base.id, parameters={"pitch": 2}, name="Take B")
+    variant.asset_ids = ["b1"]
+    comparison = project.compare_takes(base.id, variant.id)
+    assert comparison["same_voice"]
+    assert comparison["parameter_changes"]["pitch"] == (0, 2)
+    assert comparison["asset_changes"] == {"a_only": ["a1"], "b_only": ["b1"]}
