@@ -13,6 +13,8 @@ from typing import Any
 
 from ...audio import sha256_file
 from ...paths import AppPaths, ensure_within
+from ...infrastructure.cache import build_cache_key
+from ...product_models import CacheArtifact, SongProject
 from ...runtime import EngineRuntimeResolver
 from ..cancellation import as_cancellation_token
 from ..errors import AssetValidationError, CoverError, ExportConflictError, RightsRequiredError
@@ -135,7 +137,13 @@ class CoverExporter:
         if source.producer not in {"voicestudio_mixer", "ffmpeg-mixer"}:
             raise AssetValidationError("final_mix 资产不是由 VoiceStudio Mixer 生成")
         source_path = ensure_within(cover.root, cover.root / source.relative_path)
-        if not source_path.is_file() or not source.sha256 or sha256_file(source_path) != source.sha256:
+        if not source_path.is_file() or not source.sha256:
+            raise AssetValidationError("final_mix 缺失或 Hash 不匹配")
+        try:
+            source_hash = sha256_file(source_path, cancel=token)
+        except InterruptedError as exc:
+            raise self._cancel_error() from exc
+        if source_hash != source.sha256:
             raise AssetValidationError("final_mix 缺失或 Hash 不匹配")
         try:
             source_probe = self.validator.probe(source_path, cancel=token)
@@ -203,6 +211,7 @@ class CoverExporter:
                 publication_rights_ack=True,
                 input_asset_ids=list(source.source_asset_ids),
                 inputs=list(source.source_asset_ids),
+                asset_lineage=ProvenanceManifestBuilder.asset_lineage(cover, source),
                 mix_settings=getattr(mix_settings, "canonical", lambda: mix_settings)() if mix_settings is not None else stored_settings,
                 outputs=[{"path": target.name, "format": target.suffix.lstrip("."), "sha256": sha256_file(staging)} for target, staging in zip(targets, staged)],
             )
@@ -244,4 +253,20 @@ class CoverExporter:
                     cover.register_output(target, target.stem)
             except ValueError:
                 pass
-        return {"outputs": [str(path) for path in targets], "sidecar": str(sidecar), "provenance": payload}
+        export_key = build_cache_key(source_sha256=source.sha256, operation="export", engine_version="voicestudio-export-v1", model_version=model_id or source.model_id, model_sha256=str(source.metadata.get("settings_sha256", "")) if isinstance(source.metadata, dict) else "", parameters={"formats": formats, "mix_settings": getattr(mix_settings, "canonical", lambda: mix_settings)() if mix_settings is not None else stored_settings}, output_format="+".join(formats))
+        _register_product_export_cache(project, export_key, source.id, source.sha256, formats, model_id or source.model_id)
+        return {"outputs": [str(path) for path in targets], "sidecar": str(sidecar), "provenance": payload, "cache_key": export_key}
+
+def _register_product_export_cache(project: Path, cache_key: str, asset_id: str, source_sha256: str, formats: tuple[str, ...], model_id: str) -> None:
+    manifest_path = Path(project) / "project.json"
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        product = SongProject.from_dict(payload.get("product_project", {}))
+        product.register_cache(CacheArtifact(operation="export", cache_key=cache_key, asset_id=asset_id, source_sha256=source_sha256, engine_version="voicestudio-export-v1", model_version=model_id, parameters_hash="+".join(formats)))
+        payload["product_project"] = product.to_dict()
+        temporary = manifest_path.with_name(manifest_path.name + ".staging")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(manifest_path)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
+
