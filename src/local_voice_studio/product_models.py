@@ -159,3 +159,51 @@ def voice_capabilities(profile: Any) -> VoiceCapabilityStatus:
         training="available",
         reasons=reasons,
     )
+
+@dataclass
+class ModelVersionRecord:
+    """Unified product view of TTS or singing model versions."""
+    profile_id: str
+    kind: str
+    id: str = field(default_factory=_id)
+    engine: str = ""
+    engine_version: str = ""
+    checkpoint_path: str = ""
+    checkpoint_sha256: str = ""
+    index_path: str = ""
+    index_sha256: str = ""
+    trust_status: str = "unverified"
+    origin: str = "trained-local"
+    created_at: str = field(default_factory=utc_now)
+
+
+def model_version_records(profile: Any) -> list[ModelVersionRecord]:
+    """Expose legacy TTS and singing versions through one product view."""
+    result: list[ModelVersionRecord] = []
+    for item in list(getattr(profile, "model_versions", []) or []):
+        result.append(ModelVersionRecord(
+            profile_id=str(getattr(profile, "id", "")), kind="tts", id=str(getattr(item, "id", _id())),
+            engine="gpt-sovits", engine_version=str(getattr(profile, "engine_version", "")),
+            checkpoint_path=str(getattr(item, "sovits_checkpoint", "")), checkpoint_sha256=str(getattr(item, "sovits_sha256", "")),
+            trust_status=str(getattr(item, "trust_status", "unverified")), origin=str(getattr(item, "origin", "trained-local")),
+            created_at=str(getattr(item, "created_at", utc_now())),
+        ))
+    for item in list(getattr(profile, "singing_models", []) or []):
+        result.append(ModelVersionRecord(
+            profile_id=str(getattr(profile, "id", "")), kind="singing", id=str(getattr(item, "id", _id())),
+            engine=str(getattr(item, "engine", "rvc")), engine_version=str(getattr(item, "engine_version", "")),
+            checkpoint_path=str(getattr(item, "checkpoint_relative_path", "")), checkpoint_sha256=str(getattr(item, "checkpoint_sha256", "")),
+            index_path=str(getattr(item, "index_relative_path", "")), index_sha256=str(getattr(item, "index_sha256", "")),
+            trust_status=str(getattr(item, "trust_status", "unverified")), origin=str(getattr(item, "origin", "trained-local")),
+            created_at=str(getattr(item, "created_at", utc_now())),
+        ))
+    return result
+
+
+def asset_records_from_cover(cover: Any) -> list[AssetRecord]:
+    """Map legacy CoverAsset entries without mutating the CoverProject."""
+    return [AssetRecord(
+        id=str(asset.id), kind=str(asset.role), relative_path=str(asset.relative_path), sha256=str(asset.sha256),
+        source_asset_ids=list(asset.source_asset_ids), model_version_id=str(asset.model_id), status="ready",
+        created_at=str(asset.created_at),
+    ) for asset in list(getattr(cover, "assets", []) or [])]

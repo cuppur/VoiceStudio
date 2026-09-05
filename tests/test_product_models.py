@@ -67,3 +67,14 @@ def test_voice_capabilities_exposes_verified_singing_model():
     status = voice_capabilities(profile)
     assert status.tts == "ready"
     assert status.singing_conversion == "ready"
+
+def test_legacy_model_versions_share_product_view():
+    from local_voice_studio.models import ModelVersion, VoiceProfile
+    from local_voice_studio.singing.models import SingingModelVersion
+    from local_voice_studio.product_models import model_version_records
+    profile = VoiceProfile(name="mixed", consent_confirmed=True)
+    profile.model_versions = [ModelVersion(id="tts-1", sovits_checkpoint="sovits.pth", trust_status="verified")]
+    profile.singing_models = [SingingModelVersion(id="sing-1", profile_id=profile.id, engine="rvc", trust_status="verified")]
+    records = model_version_records(profile)
+    assert {item.kind for item in records} == {"tts", "singing"}
+    assert {item.id for item in records} == {"tts-1", "sing-1"}
