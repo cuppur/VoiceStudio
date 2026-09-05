@@ -206,7 +206,7 @@ class CoverPage(QWidget):
         except Exception as exc:
             self._render_failed(str(exc)); return
         self.render_requested.emit(payload); self.render_button.setEnabled(False); self.render_button.setText("正在生成最终翻唱…"); self.cancel_final_button.show(); self.progress.show(); self.progress.set_stage(0)
-        try: self._render_request = self.worker.send("render_cover", payload)
+        try: self._render_request = self._send_product_stage("render_cover", payload, "mix")
         except Exception as exc: self._render_failed(str(exc))
 
     def export_final(self):
@@ -224,7 +224,7 @@ class CoverPage(QWidget):
         except Exception as exc:
             QMessageBox.warning(self, "无法准备导出", str(exc)); return
         self._last_export_payload = dict(payload); self.export_requested.emit(); self.export_button.setEnabled(False); self.export_button.setText("正在导出…"); self.cancel_final_button.show()
-        try: self._export_request = self.worker.send("export_cover", payload)
+        try: self._export_request = self._send_product_stage("export_cover", payload, "export")
         except Exception as exc: self._export_failed(str(exc))
 
     def import_song(self):
@@ -533,7 +533,7 @@ class CoverPage(QWidget):
             elif event == "error":
                 message = str(payload.get("message", "导出失败"))
                 if "已存在" in message and QMessageBox.question(self, "文件已经存在", "文件已经存在。是否覆盖？", QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel) == QMessageBox.Yes:
-                    retry = dict(self._last_export_payload); retry["existing_policy"] = "replace"; self._export_request = self.worker.send("export_cover", retry)
+                    retry = dict(self._last_export_payload); retry["existing_policy"] = "replace"; self._export_request = self._send_product_stage("export_cover", retry, "export")
                 else: self._export_failed(message)
             return
         if request_id == self._ai_request:
