@@ -17,6 +17,8 @@ from typing import Any, Callable, Mapping
 from ..cover.project import CoverProject, CoverAsset, RIGHTS_ATTESTATION_TEXT_HASH, content_origin
 from ..paths import AppPaths, ensure_within, validate_id, validate_sha256
 from ..runtime import EngineRuntimeResolver
+from ..infrastructure.cache import build_cache_key
+from ..product_models import CacheArtifact, SongProject
 from .models import RVCInferenceSettings, SingingModelVersion
 from .dataset import SourceAssetDatasetBuilder
 from .verification import SingingModelVerifier, validate_wav_quality
@@ -231,7 +233,7 @@ class SingingPipeline:
                 "cleanup_model_sha256": source.model_sha256 if source.producer != "separation" else "",
             },
         }, sort_keys=True, separators=(",", ":"))
-        cache_key = hashlib.sha256((source.sha256 + model.checkpoint_sha256 + model.index_sha256 + model.engine_version + cache_material).encode()).hexdigest()
+        cache_key = build_cache_key(source_sha256=source.sha256, operation="rvc_conversion", engine_version=model.engine_version or "rvc-v1", model_version=model.id, model_sha256=model.checkpoint_sha256 + model.index_sha256, parameters=json.loads(cache_material), output_format="wav")
         cached = next((a for a in reversed(cover.assets) if a.role == "ai_vocal" and a.content_origin == "ai_generated" and a.producer == "rvc_v2" and a.source_asset_ids == [source.id] and a.model_id == model.id and a.model_sha256 == model.checkpoint_sha256 and a.producer_version == cache_key), None)
         if cached:
             cached_path = ensure_within(cover.root, cover.root / cached.relative_path)
@@ -255,6 +257,7 @@ class SingingPipeline:
             _validate_wav(staging, reference=source_path, cancel=cancel)
             staging.replace(output)
             asset = CoverAsset(id=output_id, role="ai_vocal", relative_path=output.relative_to(cover.root).as_posix(), sha256=_sha256(output), content_origin="ai_generated", producer="rvc_v2", producer_version=cache_key, model_id=model.id, model_sha256=model.checkpoint_sha256, source_asset_ids=[source.id])
+            asset.metadata["inference_settings"] = settings.provenance()
             cover.add_asset(asset)
             return {"output_path": str(output), "output_sha256": asset.sha256, "content_origin": "ai_generated", "asset_id": asset.id, "cache_hit": False}
         except Exception:
@@ -308,3 +311,17 @@ class SingingPipeline:
         recommendation = recommend_transpose(source_analysis, targets)
         return {"suggested_transpose": recommendation, "source": source_analysis.__dict__,
                 "targets": [item.__dict__ for item in targets], "applied": False}
+
+def _register_product_conversion_cache(project_path: Path, cache_key: str, asset_id: str, source_sha256: str, model: SingingModelVersion) -> None:
+    manifest_path = Path(project_path) / "project.json"
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        product = SongProject.from_dict(payload.get("product_project", {}))
+        product.register_cache(CacheArtifact(operation="rvc_conversion", cache_key=cache_key, asset_id=asset_id, source_sha256=source_sha256, engine_version=model.engine_version or "rvc-v1", model_version=model.id, model_sha256=model.checkpoint_sha256, parameters_hash=cache_key))
+        payload["product_project"] = product.to_dict()
+        temporary = manifest_path.with_name(manifest_path.name + ".staging")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temporary, manifest_path)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
+
