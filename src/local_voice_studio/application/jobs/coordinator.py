@@ -58,3 +58,19 @@ class JobCoordinator:
             job = self.store.load_product_job(job_id)
             self.jobs[job_id] = job
         return job
+
+    def handle_worker_event(self, job_id: str, event: str, payload: dict[str, Any]) -> ProductJob:
+        job = self._get(job_id)
+        if event == "progress":
+            stage = str(payload.get("stage") or job.current_stage or job.stages[0].name)
+            if stage not in {item.name for item in job.stages}:
+                stage = job.current_stage or job.stages[0].name
+            return self.handle_progress(job_id, stage, float(payload.get("progress", 0.0)), str(payload.get("message", "")))
+        if event == "result":
+            stage = job.current_stage or job.stages[-1].name
+            outputs = payload.get("outputs") or payload.get("output_path") or payload.get("output_paths") or []
+            if isinstance(outputs, str): outputs = [outputs]
+            return self.handle_result(job_id, stage, list(outputs) if isinstance(outputs, list) else [])
+        if event == "error":
+            return self.handle_error(job_id, str(payload.get("message", "Worker 失败")), recoverable=bool(payload.get("recoverable", True)))
+        return job

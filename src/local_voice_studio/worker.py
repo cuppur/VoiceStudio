@@ -72,6 +72,12 @@ class WorkerService:
     def emit(self, request_id: str, event: str, payload: dict[str, Any]) -> None:
         if request_id == self.current_request_id and self._request_context:
             payload = {**payload, **self._request_context}
+        product_job_id = self._request_context.get("product_job_id") if request_id == self.current_request_id else ""
+        if product_job_id:
+            try:
+                self.job_coordinator.handle_worker_event(product_job_id, event, payload)
+            except (KeyError, ValueError, TypeError):
+                pass
         message = json.dumps({"id": request_id, "type": event, "payload": payload}, ensure_ascii=False)
         terminal = request_id == self.current_request_id and event in {"result", "error"}
         if terminal:
