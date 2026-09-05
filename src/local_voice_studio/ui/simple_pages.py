@@ -616,7 +616,7 @@ class OneClickGeneratePage(QWidget):
 class TaskCenterDialog(QDialog):
     def __init__(self, store: StudioStore, client=None, parent=None):
         super().__init__(parent); self.store = store; self.client = client; self._rows = []; self.setWindowTitle("任务中心"); self.resize(880, 520); layout = QVBoxLayout(self)
-        toolbar = QHBoxLayout(); toolbar.addWidget(QLabel("GPU 任务与本地处理历史")); toolbar.addStretch(); refresh = QPushButton("刷新"); refresh.clicked.connect(self.refresh); toolbar.addWidget(refresh); cancel = QPushButton("取消选中任务"); cancel.clicked.connect(self.cancel_selected); toolbar.addWidget(cancel); layout.addLayout(toolbar)
+        toolbar = QHBoxLayout(); toolbar.addWidget(QLabel("GPU 任务与本地处理历史")); toolbar.addStretch(); refresh = QPushButton("刷新"); refresh.clicked.connect(self.refresh); toolbar.addWidget(refresh); retry = QPushButton("重试选中任务"); retry.clicked.connect(self.retry_selected); toolbar.addWidget(retry); cancel = QPushButton("取消选中任务"); cancel.clicked.connect(self.cancel_selected); toolbar.addWidget(cancel); layout.addLayout(toolbar)
         self.table = QTableWidget(0, 7); self.table.setHorizontalHeaderLabels(["时间", "类型", "状态", "进度", "当前阶段", "说明 / 失败原因", "输出位置"]); self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch); self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch); self.table.cellDoubleClicked.connect(self._open); layout.addWidget(self.table); self.refresh()
     def refresh(self) -> None:
         product_jobs = self.store.list_product_jobs()
@@ -636,6 +636,20 @@ class TaskCenterDialog(QDialog):
             for column, value in enumerate(values[2:], 1):
                 self.table.setItem(row, column, QTableWidgetItem(str(value)))
         self._rows = rows
+    def retry_selected(self) -> None:
+        row = self.table.currentRow()
+        if row < 0 or row >= len(self._rows) or self.client is None:
+            return
+        job_id = self._rows[row][0]
+        job = self.store.load_product_job(job_id)
+        if job.status.value not in {"recoverable", "failed"}:
+            return
+        try:
+            self.client.retry_product_job(job_id)
+        except (RuntimeError, KeyError, ValueError) as exc:
+            QMessageBox.warning(self, "无法重试任务", str(exc))
+        self.refresh()
+
     def cancel_selected(self) -> None:
         row = self.table.currentRow()
         if row < 0 or row >= len(self._rows) or self.client is None:

@@ -101,6 +101,17 @@ class WorkerClient(QObject):
         if controller in self._pipeline_controllers:
             self._pipeline_controllers.remove(controller)
 
+    def retry_product_job(self, job_id: str) -> str:
+        for controller in tuple(getattr(self, "_pipeline_controllers", ())):
+            job = getattr(controller, "job", None)
+            if job is not None and getattr(job, "id", "") == job_id:
+                job.retry()
+                stage = controller.pipeline.dispatch_next()
+                if stage is None:
+                    raise RuntimeError("任务没有可重新派发的阶段")
+                return controller.pipeline.request_ids[stage]
+        raise RuntimeError("任务对应的 Worker 控制器已不存在，请重新执行该操作")
+
     def restart(self) -> None:
         self.shutdown(); self.start()
 
