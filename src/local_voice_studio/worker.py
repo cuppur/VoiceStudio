@@ -14,6 +14,8 @@ from .engine import GptSovitsEngine, safe_torch_load
 from .audio import sha256_file
 from .models import DatasetManifest, dataset_snapshot_sha256, utc_now
 from .paths import AppPaths, ensure_within, validate_id, validate_sha256
+from .storage import StudioStore
+from .application.jobs.coordinator import JobCoordinator
 from .protocol import COMMANDS, Message, validate_payload
 from .runtime import EngineRuntimeResolver
 from .text import split_text
@@ -44,6 +46,7 @@ class WorkerService:
         self.cancel_event = threading.Event()
         self.cancel_token = CancellationToken(self.cancel_event)
         self.write_lock = threading.Lock()
+        self.job_coordinator = JobCoordinator(StudioStore(self.paths))
         self.shutdown_event = threading.Event()
         self.separation: SongSeparationPipeline | None = None
         self.cleanup: VocalCleanupService | None = None
@@ -93,6 +96,9 @@ class WorkerService:
         except ValueError as exc:
             self.emit(message.id, "error", {"message": str(exc), "exception": type(exc).__name__})
             return
+        if message.type not in {"health", "load_profile", "cancel", "shutdown"}:
+            product_job = self.job_coordinator.start(message.type, message.payload, [message.type])
+            self._request_context = {"product_job_id": product_job.id, "product_job_kind": message.type}
         if message.type == "health":
             health = self.engine.gpu_health()
             integrity = EngineRuntimeResolver(self.paths).verify_install_manifest()
@@ -623,3 +629,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
