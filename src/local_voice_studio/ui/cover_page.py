@@ -186,6 +186,7 @@ class CoverPage(QWidget):
         self.cover_button = QPushButton("开始 AI 翻唱"); self.cover_button.setObjectName("primaryButton"); self.cover_button.setAccessibleName("开始 AI 翻唱"); self.cover_button.setMinimumHeight(42); self.cover_button.setEnabled(False); self.cover_button.clicked.connect(self.generate_ai_vocal); form.addWidget(self.cover_button)
         self.render_button = QPushButton("生成最终翻唱"); self.render_button.setObjectName("primaryButton"); self.render_button.setAccessibleName("生成最终翻唱"); self.render_button.setEnabled(False); self.render_button.clicked.connect(self.request_final_render); form.addWidget(self.render_button)
         self.export_button = QPushButton("导出最终混音"); self.export_button.setObjectName("secondaryButton"); self.export_button.setAccessibleName("导出最终混音"); self.export_button.setEnabled(False); self.export_button.clicked.connect(self.export_final); form.addWidget(self.export_button)
+        self.take_selector = QComboBox(); self.take_selector.setEnabled(False); self.take_selector.currentIndexChanged.connect(self._select_persisted_take); form.addWidget(QLabel("当前 Take")); form.addWidget(self.take_selector)
         ab_label = QLabel("A / B 试听"); ab_label.setObjectName("cardTitle"); form.addWidget(ab_label)
         ab_row = QHBoxLayout(); self.ab_a_button = QPushButton("试听 A"); self.ab_b_button = QPushButton("试听 B"); self.ab_a_button.setEnabled(False); self.ab_b_button.setEnabled(False); self.ab_a_button.clicked.connect(lambda: self._select_ab("A")); self.ab_b_button.clicked.connect(lambda: self._select_ab("B")); ab_row.addWidget(self.ab_a_button); ab_row.addWidget(self.ab_b_button); form.addLayout(ab_row)
         return panel
@@ -226,6 +227,37 @@ class CoverPage(QWidget):
             self.store.save_song_project(self.project, product)
         if self.global_player:
             self.global_player.active_take_id = take.id
+
+    def _refresh_take_selector(self) -> None:
+        if not hasattr(self, "take_selector"):
+            return
+        self.take_selector.blockSignals(True); self.take_selector.clear()
+        try:
+            product = self.store.load_song_project(self.project)
+            for take in product.takes:
+                self.take_selector.addItem(take.name, take.id)
+            index = self.take_selector.findData(product.active_take_id)
+            self.take_selector.setCurrentIndex(index if index >= 0 else 0)
+            self.take_selector.setEnabled(self.take_selector.count() > 0)
+        finally:
+            self.take_selector.blockSignals(False)
+
+    def _select_persisted_take(self, index: int) -> None:
+        if index < 0 or not self.cover_project:
+            return
+        take_id = self.take_selector.itemData(index)
+        if not take_id:
+            return
+        product = self.store.load_song_project(self.project)
+        try:
+            take = product.get_take(str(take_id))
+        except KeyError:
+            return
+        product.active_take_id = take.id; product.active_voice_profile_id = take.voice_profile_id
+        self.store.save_song_project(self.project, product)
+        if self.global_player:
+            self.global_player.active_take_id = take.id
+        self.song_meta.setText(f"已切换到 {take.name}")
 
     def _select_ab(self, side: str) -> None:
         a, b = self.track_paths.get(3, ""), self.track_paths.get(4, "")
@@ -310,6 +342,7 @@ class CoverPage(QWidget):
             self._select_track(0, False)
         self._update_ab_buttons()
         self._sync_product_take()
+        self._refresh_take_selector()
         if self.global_player and self.cover_project:
             ai_asset = self.cover_project.get_asset(role="ai_vocal")
             final_asset = self.cover_project.get_asset(role="final_mix")
