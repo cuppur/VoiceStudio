@@ -13,6 +13,7 @@ from ..audio import sha256_file
 from ..paths import AppPaths, ensure_within, validate_sha256
 from ..runtime import EngineRuntimeResolver
 from ..infrastructure.cache import build_cache_key
+from ..product_models import CacheArtifact, SongProject
 from .project import CoverProject
 
 MODEL_NAME = "HP2_all_vocals.pth"
@@ -293,5 +294,6 @@ def _valid_wav(path: Path) -> bool:
         return len(header) == 12 and header[:4] in {b"RIFF", b"RF64"} and header[8:12] == b"WAVE"
     except OSError:
         return False
+
 
 
