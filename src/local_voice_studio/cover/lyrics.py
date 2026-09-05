@@ -17,6 +17,8 @@ from typing import Any, Callable
 
 from ..audio import sha256_file
 from ..paths import AppPaths, ensure_within
+from ..infrastructure.cache import build_cache_key
+from ..product_models import CacheArtifact, SongProject
 from .project import CoverProject
 
 LYRICS_ORIGIN_AUTO = "auto"
@@ -86,6 +88,12 @@ class CoverLyricsService:
         vocal_path = ensure_within(cover.root, cover.root / vocal.relative_path)
         if not vocal_path.is_file() or sha256_file(vocal_path) != vocal.sha256:
             raise ValueError("已分离人声资产缺失或 Hash 不匹配")
+        lyrics_key = build_cache_key(source_sha256=vocal.sha256, operation="lyrics", engine_version="sensevoice-v1", parameters={"language": language}, output_format="lrc")
+        cached = _product_cache(self.project_path, lyrics_key)
+        if cached and cover.lyrics_path:
+            candidate = ensure_within(cover.root, cover.root / cover.lyrics_path)
+            if candidate.is_file():
+                return {"lyrics_path": str(candidate), "line_count": len(candidate.read_text(encoding="utf-8", errors="replace").splitlines()), "origin": cover.lyrics_origin, "language": language, "cache_hit": True}
         if progress:
             progress(0.1, "正在准备语音识别模型")
         python = self._engine_python()
@@ -94,7 +102,8 @@ class CoverLyricsService:
         segments_json = output_root / f".{cover.id}.segments.jsonl"
         command = [str(python), "-X", "utf8", "-u", "-m", "local_voice_studio.lyrics_cli",
                    "--input", str(vocal_path), "--output", str(segments_json),
-                   "--language", str(language)]
+                   "--language", str(language), "--model-dir", str(self.paths.sensevoice_model_root),
+                   "--vad-dir", str(self.paths.fsmn_vad_model_root)]
         env = self._engine_env()
         process = subprocess.Popen(command, cwd=str(self.paths.engine_root), env=env,
                                    stdin=subprocess.DEVNULL,
@@ -121,6 +130,7 @@ class CoverLyricsService:
             lrc_path = output_root / "lyrics.lrc"
             _write_lrc_atomic(lrc_path, segments)
             cover.set_lyrics(lrc_path, origin=LYRICS_ORIGIN_AUTO)
+            _register_product_cache(self.project_path, lyrics_key, vocal.id, vocal.sha256)
             if progress:
                 progress(1.0, "歌词识别完成")
             return {"lyrics_path": str(lrc_path), "line_count": len(segments),
@@ -200,3 +210,26 @@ def _write_lrc_atomic(path: Path, segments: list[LyricSegment]) -> None:
 
 
 __all__ = ["CoverLyricsService", "LyricSegment", "serialize_lrc_lines", "LYRICS_ORIGIN_AUTO"]
+
+def _product_cache(project_path: Path, cache_key: str) -> CacheArtifact | None:
+    manifest_path = Path(project_path) / "project.json"
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        product = SongProject.from_dict(payload.get("product_project", {}))
+        return next((item for item in product.cache_artifacts if item.cache_key == cache_key and item.status == "ready"), None)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def _register_product_cache(project_path: Path, cache_key: str, asset_id: str, source_sha256: str) -> None:
+    manifest_path = Path(project_path) / "project.json"
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        product = SongProject.from_dict(payload.get("product_project", {}))
+        product.register_cache(CacheArtifact(operation="lyrics", cache_key=cache_key, asset_id=asset_id, source_sha256=source_sha256, engine_version="sensevoice-v1", model_version="sensevoice", parameters_hash=cache_key))
+        payload["product_project"] = product.to_dict()
+        temporary = manifest_path.with_name(manifest_path.name + ".staging")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temporary, manifest_path)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
