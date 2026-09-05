@@ -9,6 +9,7 @@ from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox, QVBoxLayout, QWidget
 
 from ..cover import CoverProject
+from ..product_models import Take
 from ..cover.application import CoverApplicationService, SongAnalyzer
 from ..application.jobs import CoverPipelineController
 from ..application.jobs.coordinator import JobCoordinator
@@ -195,6 +196,24 @@ class CoverPage(QWidget):
             self.stems[track_index].set_volume(value)
             self._refresh_preview_plan()
 
+    def _sync_product_take(self) -> None:
+        if not self.cover_project:
+            return
+        ai_asset = self.cover_project.get_asset(role="ai_vocal")
+        final_asset = self.cover_project.get_asset(role="final_mix")
+        if not ai_asset or not final_asset:
+            return
+        product = self.store.load_song_project(self.project)
+        profile = self._selected_profile()
+        voice_id = str(getattr(profile, "id", ""))
+        take = product.takes[-1] if product.takes else None
+        if take is None or take.asset_ids != [ai_asset.id, final_asset.id]:
+            take = Take(product.id, voice_id, name="当前翻唱 Take", parameters={"pitch_shift": self.pitch.value()}, asset_ids=[ai_asset.id, final_asset.id], status="ready")
+            product.add_take(take)
+            self.store.save_song_project(self.project, product)
+        if self.global_player:
+            self.global_player.active_take_id = take.id
+
     def _select_ab(self, side: str) -> None:
         a, b = self.track_paths.get(3, ""), self.track_paths.get(4, "")
         if not a or not b or not Path(a).is_file() or not Path(b).is_file():
@@ -277,6 +296,7 @@ class CoverPage(QWidget):
             if self.cover_project: self.cover_project.duration_ms = duration; self._save_cover(self.cover_project)
             self._select_track(0, False)
         self._update_ab_buttons()
+        self._sync_product_take()
         if self.global_player and self.cover_project:
             ai_asset = self.cover_project.get_asset(role="ai_vocal")
             final_asset = self.cover_project.get_asset(role="final_mix")
