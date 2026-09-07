@@ -571,7 +571,10 @@ class OneClickGeneratePage(QWidget):
             if not self.profiles: raise ValueError("请先训练一个可用声音")
             text = self.text.toPlainText().strip()
             if not text: raise ValueError("请输入要生成的文字")
-            profile = self.profiles[self.profile.currentIndex()]; ref = next(item for item in profile.reference_assets if item.approved and item.transcript.strip() and Path(item.path).is_file())
+            profile = next((item for item in self.profiles if item.id == self.profile.currentData()), None)
+            if profile is None:
+                raise ValueError("请选择搜索结果中的可用声音")
+            ref = next(item for item in profile.reference_assets if item.approved and item.transcript.strip() and Path(item.path).is_file())
             payload = {"text": text, "text_lang": self.language.currentData(), "ref_audio_path": ref.path, "prompt_text": ref.transcript, "prompt_lang": ref.language, "output_dir": self.output.text(), "speed_factor": self.speed.value(), "fragment_interval": self.pause.value(), "seed": self.seed.value(), "max_chars": 120, "profile_id": profile.id}
             job = Job(JobKind.SYNTHESIZE, payload); self.store.save_job(job); self.job_created.emit(job)
             profile_payload = profile.to_dict(); profile_payload["project_path"] = str(self.project)
