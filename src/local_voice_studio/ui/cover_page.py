@@ -147,9 +147,9 @@ class CoverPage(QWidget):
         self.song_title = QLabel("还没有导入歌曲"); self.song_title.setObjectName("songTitle"); copy.addWidget(self.song_title)
         self.song_meta = QLabel("支持 WAV / MP3 / FLAC · 导入后自动寻找同名 LRC"); self.song_meta.setObjectName("muted"); copy.addWidget(self.song_meta); header_layout.addLayout(copy, 1)
         self.separate_button = QPushButton("重新分离"); self.separate_button.setObjectName("secondaryButton"); self.separate_button.clicked.connect(self.separate_song); header_layout.addWidget(self.separate_button)
-        self.import_button = QPushButton("导入歌曲"); self.import_button.setObjectName("secondaryButton"); self.import_button.setAccessibleName("导入歌曲"); self.import_button.clicked.connect(self.import_song); header_layout.addWidget(self.import_button); root.addWidget(header)
+        self.import_button = QPushButton("导入歌曲"); self.import_button.setObjectName("secondaryButton"); self.import_button.setAccessibleName("导入歌曲"); self.import_button.clicked.connect(self.import_song); header_layout.addWidget(self.import_button)
 
-        center = QHBoxLayout(); center.setSpacing(14); left = QVBoxLayout(); left.setSpacing(12); center.addLayout(left, 1)
+        center = QHBoxLayout(); center.setSpacing(14); left = QVBoxLayout(); left.setSpacing(12); left.addWidget(header); center.addLayout(left, 1)
         timeline = QFrame(); timeline.setObjectName("timelineCard"); timeline_layout = QVBoxLayout(timeline); timeline_layout.setContentsMargins(0, 0, 0, 0); timeline_layout.setSpacing(0)
         timeline_head = QHBoxLayout(); timeline_head.setContentsMargins(16, 0, 12, 0); timeline_head.addWidget(_label("多轨波形", "cardTitle")); timeline_head.addWidget(_label("· 点击或拖拽波形可定位播放", "cardSub")); timeline_head.addStretch(); self.zoom_label = QLabel("适应宽度"); self.zoom_label.setObjectName("miniChip"); timeline_head.addWidget(self.zoom_label); timeline_layout.addLayout(timeline_head)
         tracks = QWidget(); tracks.setObjectName("tracks"); tracks_layout = QVBoxLayout(tracks); tracks_layout.setContentsMargins(12, 8, 12, 10); tracks_layout.setSpacing(5); self.stems = []
