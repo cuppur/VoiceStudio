@@ -3,14 +3,14 @@
 本文件记录「本地声音工坊」（LocalVoiceStudio）每个发布版本的用户可见变更。
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [1.0.0] - 2026-09-04
+## [1.0.0] - Release Candidate（未正式发布）
 
 ### 新增（相对 0.3.0）
 
 - **AI 翻唱完整工作流（Phase 4）**
   - 歌曲导入 → 不可变源文件副本 + SHA-256 校验 → 流式波形与 LRC 歌词 → 歌曲权利声明
   - UVR5 人声/伴奏分离（可选离线 RoFormer 引擎），五轨时间线、实时多源试听、Mute/Solo、同步 Seek、取消
-  - AI Vocal 生成（RVC v2），带音量/音色/混响/门限/均衡器后期处理、自动音准（Autotune）、RMVPE 音高建议、去混响预置
+  - AI Vocal 生成（RVC v2），带音量/音色/混响/门限/均衡器后期处理、音高平滑（Pitch Smoothing：关闭 / 轻度 / 中度）、RMVPE 音高建议、去混响预置
   - Quick Mixer：AI 人声 + 伴奏 + 可选原唱人声，48 kHz 立体声混音归一化、防削波、原子发布
   - 导出 WAV / 320 kbps MP3，绝不静默覆盖文件，同时生成 `.voicestudio.json` 侧车（AI 生成标识、权利声明、声音/模型、混音参数、输出 SHA-256）
   - 分离/人声清理/AI Vocal/混音/导出全流程取消支持与中断恢复
@@ -31,6 +31,11 @@
   - 正式「一键训练」：SourceAsset 快照 → RVC 训练 → Index 校验 → 真实推理验证
   - 声音授权记录（本人/授权使用）与模型可信哈希登记
 
+- **HTML v4 界面壳（QtWebEngine）**
+  - 默认界面由 QtWebEngine 渲染 `VoiceStudio_Full_UI_Prototype_v4.html` 的逐字节副本，视觉与原型一致；`--ui-qt` 可切回 PySide6 原生工作台
+  - 通过 QWebChannel 接入真实本地数据（工程、歌曲、声音、任务、导出、设置、引擎状态）以及项目切换、歌曲导入、文件打开与设置写入
+  - 分离、训练、生成等重操作在新界面明确提示「尚未接入」，仍可在经典界面执行；桥接仅允许访问 VoiceStudio 管理的目录
+
 ### 变更
 
 - 全部功能在本地运行，不向外部服务发送文字、音频或使用统计（无遥测）
@@ -47,4 +52,4 @@
 - 安装器不捆绑大模型；运行时组件（私有 Python / PyTorch / GPT-SoVITS / 分离模型）通过带 SHA-256 校验、断点续传与重试的引导脚本按清单下载
 - 卸载时默认保留用户数据（项目、声音、录音与导出）；模型、项目与输出均位于安装目录之外
 
-[1.0.0]: https://github.com/cuppur/VoiceStudio/releases/tag/v1.0.0
+[1.0.0]: https://github.com/cuppur/VoiceStudio

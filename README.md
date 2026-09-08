@@ -1,10 +1,12 @@
 # 本地声音工坊
 
+**状态：v1.0.0 Release Candidate。尚未通过全部发布硬门，不是正式发布版。**
+
 面向 Windows 10/11 的本地文字转语音、零样本声音克隆和 GPT-SoVITS V2ProPlus 微调桌面程序。界面、模型推理、转写和训练均在本机运行；除首次下载组件外，不向外部服务发送文字、音频或使用统计。
 
 ## 当前实现
 
-- PySide6 原生中文工作台，包含 AI 翻唱、文字生成、我的声音、训练声音、设置与全局任务中心。
+- 界面默认由 QtWebEngine 渲染 HTML v4 原型（与 `VoiceStudio_Full_UI_Prototype_v4.html` 视觉一致），并接入真实工程、歌曲、声音、任务、导出与设置数据；`--ui-qt` 可启动经典 PySide6 原生工作台（AI 翻唱、文字生成、我的声音、训练声音、设置与全局任务中心）。分离、训练、生成等重操作目前仍在经典界面执行。
 - AI 翻唱工作台已建立与正式 HTML 视觉基线对应的核心信息架构和功能工作流；完整视觉产品化将在后续 UI 阶段完成。当前已实现歌曲导入、项目内不可变源文件副本、SHA-256 校验、流式波形、LRC 歌词、歌曲权利声明、UVR5 人声/伴奏分离、五轨时间线、实时多源试听、Mute/Solo、同步 Seek、取消、缓存与重开恢复。
 - Singing Model 产品链已接入独立锁定的 RVC v2/RMVPE/HuBERT 运行时：正式“一键训练”页面只接受当前声音的 SourceAsset ID，由 Worker 在项目内构建不可变训练快照；RVC 模型经受限加载、Index 校验和授权短音频真实推理验证后才可启用。
 - 正式 AI 翻唱页面可从已分离 Vocal 生成带 `ai_generated` 标识的 AI Vocal，支持真实波形、Seek、原唱/AI 人声 A/B 单轨试听、Pitch、缓存、取消与重开恢复。
@@ -34,6 +36,12 @@ $env:PYTHONPATH = "src"
 & "C:\Users\cruelworld\AppData\Local\Programs\Python\Python310\python.exe" -m local_voice_studio
 ```
 
+默认启动 HTML v4 界面壳（QtWebEngine）。需要经典原生界面时追加 `--ui-qt`：
+
+```powershell
+& "C:\Users\cruelworld\AppData\Local\Programs\Python\Python310\python.exe" -m local_voice_studio --ui-qt
+```
+
 打开“设置”，点击“安装/修复本地引擎”。默认从 ModelScope 下载，适合中国大陆网络；也可在 PowerShell 中选择其他来源：
 
 ```powershell
@@ -61,7 +69,9 @@ $env:PYTHONPATH = "src"
 6. 点击“生成最终翻唱”得到真实 `final_mix` 波形；相同资产与混音参数直接命中缓存。随后可导出 WAV、MP3 或两者及 AI provenance sidecar。
 7. manifest、stem、歌词、波形和最终混音均保存在当前项目，关闭并重开后可恢复。
 
-当前尚未实现：AutoTune、和声分离、自动歌词、逐字歌词、云端服务、账号与支付。RVC 训练/推理和 RoFormer 高质量分离仅在独立运行时及其必需模型资产完成安装、校验后可用；未就绪时不会生成假文件。
+已实现音高平滑（Pitch Smoothing：关闭 / 轻度 / 中度），用于平滑 F0 曲线，不提供调式检测或音符吸附。自动歌词使用本地 SenseVoice/FSMN-VAD，需先完成固定模型安装；自动识别结果可编辑，并不代表官方歌词。
+
+当前尚未实现：音阶吸附式修音、和声分离、逐字歌词、云端服务、账号与支付。RVC 训练/推理和 RoFormer 高质量分离仅在独立运行时及其必需模型资产完成安装、校验后可用；未就绪时不会生成假文件。
 
 ### 声音训练与文字生成
 
