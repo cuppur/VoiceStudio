@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import json
+import time
 import wave
 from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QObject, Signal
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication
 
 from local_voice_studio.cover.mixing.models import GainScale
 from local_voice_studio.cover.project import CoverProject
@@ -14,6 +17,7 @@ from local_voice_studio.models import ReferenceAsset, VoiceProfile
 from local_voice_studio.paths import AppPaths
 from local_voice_studio.storage import StudioStore
 from local_voice_studio.ui.web.services.cover import CoverService
+from local_voice_studio.ui.web.services.training import TrainingService
 from local_voice_studio.ui.web.services.tts import TtsService
 from local_voice_studio.ui.web.services.voices import VoicesService
 
@@ -365,3 +369,69 @@ def test_voices_detail_lists_versions(tmp_path: Path):
     assert detail["preview"].endswith(".wav")
     # legacy checkpoints are migrated into a real model version by the store
     assert detail["versions"] and detail["versions"][0]["kind"] == "tts"
+
+
+# ------------------------------------------------------------------ training
+def _app() -> QApplication:
+    return QApplication.instance() or QApplication([])
+
+
+def test_training_import_registers_source_assets(tmp_path: Path):
+    _app()
+    paths, store, project, worker, _service = _fixture(tmp_path)
+    training = TrainingService(paths, store, project, worker)
+    received: dict[str, dict] = {}
+    training.event.connect(lambda name, payload: received.update({name: json.loads(payload)}))
+    source = _wav(tmp_path / "voice.wav", 2.0)
+    training.import_assets("", [str(source)], name="训练测试声音", consent=True)
+    deadline = time.time() + 60
+    while time.time() < deadline and "training.scanned" not in received and "training.error" not in received:
+        QTest.qWait(250)
+    assert "training.scanned" in received, received
+    payload = received["training.scanned"]
+    assert payload["added"] == 1
+    assets = store.list_source_assets(project)
+    assert len(assets) == 1
+    assert Path(assets[0].project_path).is_file()
+    state = training.state(payload["profile_id"])
+    assert state["profile"]["consent"] is True
+    assert "voice.wav" in state["assets"][0]["name"]
+
+
+def test_training_import_requires_consent_for_new_voice(tmp_path: Path):
+    _app()
+    paths, store, project, worker, _service = _fixture(tmp_path)
+    training = TrainingService(paths, store, project, worker)
+    with pytest.raises(ValueError):
+        training.import_assets("", [str(_wav(tmp_path / "v.wav"))], name="新声音", consent=False)
+
+
+def test_training_start_requires_assets_and_consent(tmp_path: Path):
+    _app()
+    paths, store, project, worker, _service = _fixture(tmp_path)
+    training = TrainingService(paths, store, project, worker)
+    profile = VoiceProfile(name="未授权", consent_confirmed=False)
+    store.save_profile(project, profile)
+    with pytest.raises(ValueError):
+        training.start(profile.id)
+
+
+def test_training_singing_requires_three_minutes(tmp_path: Path):
+    _app()
+    paths, store, project, worker, _service = _fixture(tmp_path)
+    training = TrainingService(paths, store, project, worker)
+    profile = _ready_profile(tmp_path, store, project, name="短素材声音")
+    with pytest.raises(ValueError) as error:
+        training.train_singing(profile.id)
+    assert "至少" in str(error.value)
+
+
+def test_training_state_reports_empty_project(tmp_path: Path):
+    _app()
+    paths, store, project, worker, _service = _fixture(tmp_path)
+    training = TrainingService(paths, store, project, worker)
+    state = training.state("")
+    assert state["profile"] is None
+    assert state["assets"] == []
+    assert state["workflow"] == {}
+    assert state["singing_min_seconds"] == 180.0

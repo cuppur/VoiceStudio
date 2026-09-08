@@ -502,12 +502,13 @@
         + '<button class="mini" data-action="engine.verify">重新检测</button></div>'
         + `<div class="path-row"><span>安装清单</span><div class="path">${manifest}</div><button class="mini">—</button></div>`
         + `<div class="path-row"><span>FFmpeg</span><div class="path">${esc(engine.ffmpeg || '未找到私有 FFmpeg')}</div><button class="mini">—</button></div>`
+        + `<div class="path-row"><span>安装 / 修复</span><div class="path">下载固定版本的 Python、PyTorch、FFmpeg 与模型</div>`
+        + '<button class="mini" data-action="engine.install">开始安装</button></div>'
         + switchRow('默认开启智能优化', '人声分离与降噪', settings.smart_optimization, 'smart_optimization')
         + '</div><div class="settings-section"><h3>模型目录</h3>'
         + pathRow('模型根目录', settings.paths ? settings.paths.models : '', 'models')
         + pathRow('运行时目录', storage.runtime_root || '', '')
-        + '</div>'
-        + '<div class="quality-alert">安装或修复本地引擎请使用经典界面（--ui-qt）；新界面暂不执行安装。</div>';
+        + '</div>';
     } else if (S.settingsTab === 'storage') {
       html = '<div class="settings-section"><h3>工程与缓存</h3>'
         + pathRow('工程目录', settings.paths ? settings.paths.projects : '', 'projects')
@@ -547,6 +548,9 @@
     });
     $$('[data-action="engine.verify"]', holder).forEach((node) => {
       node.onclick = () => invoke('engine.verify', {}, () => renderSettings('engine'));
+    });
+    $$('[data-action="engine.install"]', holder).forEach((node) => {
+      node.onclick = () => invoke('engine.install', { tools: true });
     });
     $$('[data-setting-select]', holder).forEach((node) => {
       node.onchange = () => invoke('settings.set', { key: node.dataset.settingSelect, value: node.value });
@@ -726,7 +730,7 @@
 
   // ------------------------------------------------------------------- wire
   const UNWIRED = [
-    '#sepStart', '#trainStart', '#previewRender', '#sepDrop', '#trainDrop',
+    '#previewRender',
   ];
 
   function wire() {

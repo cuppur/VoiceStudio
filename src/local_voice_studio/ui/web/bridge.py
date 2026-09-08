@@ -23,6 +23,9 @@ from ...storage import StudioStore
 from .data import StudioSnapshot
 from .services.base import WebService
 from .services.cover import CoverService
+from .services.engine import EngineService
+from .services.exports import ExportsService
+from .services.training import TrainingService
 from .services.tts import TtsService
 from .services.voices import VoicesService
 
@@ -66,6 +69,12 @@ class StudioBridge(QObject):
         self.tts.event.connect(self.event)
         self.voices = VoicesService(paths, store, self.project, client, self)
         self.voices.event.connect(self.event)
+        self.training = TrainingService(paths, store, self.project, client, self)
+        self.training.event.connect(self.event)
+        self.exports = ExportsService(paths, store, self.project, client, self)
+        self.exports.event.connect(self.event)
+        self.engine = EngineService(paths, store, self.project, client, self)
+        self.engine.event.connect(self.event)
         self._handlers: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
             "app.refresh": self._refresh,
             "engine.verify": self._engine_verify,
@@ -90,6 +99,7 @@ class StudioBridge(QObject):
             "cover.export": self._cover_export,
             "cover.lyrics": self._cover_lyrics,
             "cover.cancel": self._cover_cancel,
+            "separator.import": self._separator_import,
             "tts.generate": self._tts_generate,
             "tts.cancel": self._tts_cancel,
             "tts.history": self._tts_history,
@@ -99,13 +109,25 @@ class StudioBridge(QObject):
             "voices.archive": self._voices_archive,
             "voices.activate": self._voices_activate,
             "voices.import_model": self._voices_import,
+            "training.state": self._training_state,
+            "training.import": self._training_import,
+            "training.remove_asset": self._training_remove,
+            "training.start": self._training_start,
+            "training.confirm": self._training_confirm,
+            "training.resume": self._training_resume,
+            "training.cancel": self._training_cancel,
+            "training.singing": self._training_singing,
+            "exports.clean_cache": self._exports_clean,
+            "exports.open_folder": self._exports_open,
+            "engine.install": self._engine_install,
+            "engine.cancel_install": self._engine_cancel,
         }
 
     # ------------------------------------------------------------------
     def set_project(self, project: Path) -> None:
         self.project = Path(project)
         self.snapshot = StudioSnapshot(self.paths, self.store, self.project)
-        for service in (self.cover, self.tts, self.voices):
+        for service in (self.cover, self.tts, self.voices, self.training, self.exports, self.engine):
             service.set_project(self.project)
 
     def notify(self, name: str, payload: dict[str, Any] | None = None) -> None:
@@ -411,11 +433,102 @@ class StudioBridge(QObject):
         task = self._cover_service().cancel(str(data.get("request_id", "")))
         return {"ok": True, "message": "已请求取消任务", **task}
 
+    def _separator_import(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Import an audio file for the standalone separation page."""
+        raw = str(data.get("path", "")).strip()
+        source: Path | None = None
+        if raw:
+            source = self._resolve_owned(raw, field="音频路径")
+        elif self._window is not None:
+            chosen, _filter = QFileDialog.getOpenFileName(
+                self._window, "选择要分离的歌曲", "", "音频文件 (*.wav *.mp3 *.flac *.m4a *.aac *.ogg);;所有文件 (*)"
+            )
+            if chosen:
+                source = Path(chosen)
+        if source is None:
+            return {"ok": False, "message": "已取消选择"}
+        result = self._cover_service().import_song(source)
+        return {"ok": True, "message": f"已导入：{source.name}", "data": self.snapshot.state(), **result}
+
     def handle_worker_event(self, request_id: str, event: str, payload: dict[str, Any]) -> None:
         """Route worker events to the services that own the request."""
-        for service in (self.cover, self.tts):
+        for service in (self.cover, self.tts, self.training):
             if service is not None and service.handle_worker_event(request_id, event, payload):
                 return
+
+    # --------------------------------------------------------------- training
+    def _training_state(self, data: dict[str, Any]) -> dict[str, Any]:
+        return {"ok": True, "data": self.training.state(str(data.get("profile_id", "")))}
+
+    def _training_import(self, data: dict[str, Any]) -> dict[str, Any]:
+        paths = data.get("paths")
+        chosen = [str(item) for item in paths] if isinstance(paths, list) and paths else []
+        if not chosen:
+            if self._window is None:
+                raise ValueError("没有选择音频文件或文件夹")
+            files, _filter = QFileDialog.getOpenFileNames(
+                self._window, "选择声音素材", "", "音频文件 (*.wav *.mp3 *.flac *.m4a *.aac *.ogg);;所有文件 (*)"
+            )
+            chosen = [str(item) for item in files]
+        if not chosen:
+            return {"ok": False, "message": "已取消导入"}
+        result = self.training.import_assets(
+            str(data.get("profile_id", "")), chosen,
+            name=str(data.get("name", "")), consent=bool(data.get("consent", False)),
+        )
+        return {"ok": True, **result}
+
+    def _training_remove(self, data: dict[str, Any]) -> dict[str, Any]:
+        state = self.training.remove_asset(str(data.get("profile_id", "")), str(data.get("asset_id", "")))
+        return {"ok": True, "message": "已移除素材", "data": state}
+
+    def _training_start(self, data: dict[str, Any]) -> dict[str, Any]:
+        asset_ids = data.get("asset_ids")
+        result = self.training.start(
+            str(data.get("profile_id", "")), smart=bool(data.get("smart", True)),
+            asset_ids=[str(item) for item in asset_ids] if isinstance(asset_ids, list) else None,
+        )
+        return {"ok": True, "message": "已开始自动处理素材", **result}
+
+    def _training_confirm(self, data: dict[str, Any]) -> dict[str, Any]:
+        include = data.get("include") if isinstance(data.get("include"), list) else None
+        exclude = data.get("exclude") if isinstance(data.get("exclude"), list) else None
+        result = self.training.confirm(
+            str(data.get("draft_id", "")),
+            include=[str(item) for item in include] if include else None,
+            exclude=[str(item) for item in exclude] if exclude else None,
+        )
+        return {"ok": True, "message": "已确认并开始训练", **result}
+
+    def _training_resume(self, data: dict[str, Any]) -> dict[str, Any]:
+        result = self.training.resume(str(data.get("workflow_id", "")))
+        return {"ok": True, "message": "已继续上次任务", **result}
+
+    def _training_cancel(self, data: dict[str, Any]) -> dict[str, Any]:
+        result = self.training.cancel(str(data.get("workflow_id", "")))
+        return {"ok": True, **result}
+
+    def _training_singing(self, data: dict[str, Any]) -> dict[str, Any]:
+        task = self.training.train_singing(str(data.get("profile_id", "")))
+        return {"ok": True, "message": "已开始歌唱模型训练", **task}
+
+    # ---------------------------------------------------------------- exports
+    def _exports_clean(self, _data: dict[str, Any]) -> dict[str, Any]:
+        result = self.exports.clean_cache()
+        return {"ok": True, "message": result["message"], "data": result["data"]}
+
+    def _exports_open(self, data: dict[str, Any]) -> dict[str, Any]:
+        result = self.exports.open_folder(str(data.get("path", "")))
+        return {"ok": True, "message": result["message"]}
+
+    # ----------------------------------------------------------------- engine
+    def _engine_install(self, data: dict[str, Any]) -> dict[str, Any]:
+        result = self.engine.install(tools=bool(data.get("tools", True)))
+        return {"ok": True, **result}
+
+    def _engine_cancel(self, _data: dict[str, Any]) -> dict[str, Any]:
+        result = self.engine.cancel_install()
+        return {"ok": True, **result}
 
     # -------------------------------------------------------------------- tts
     def _tts_generate(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -468,6 +581,6 @@ class StudioBridge(QObject):
     # ------------------------------------------------------------------
     def cleanup(self) -> None:
         self._closing = True
-        for service in (self.cover, self.tts, self.voices):
+        for service in (self.cover, self.tts, self.voices, self.training, self.exports, self.engine):
             service.close()
         self._handlers.clear()

@@ -601,6 +601,327 @@ window.VS_PAGES = (function () {
     },
   };
 
+  // ---------------------------------------------------------------- training
+  const training = {
+    profileId: '',
+    state: null,
+
+    install() {
+      const drop = q('#trainDrop');
+      if (drop) { drop.onclick = () => this.importAssets(); }
+      const start = q('#trainStart');
+      if (start) { start.onclick = () => this.primary(); }
+      const restore = qq('[data-page-view="train"] .page-actions .btn')[0];
+      if (restore) { restore.onclick = () => this.resume(); }
+      this.refresh();
+    },
+
+    refresh(profileId) {
+      if (profileId) { this.profileId = profileId; }
+      S.invoke('training.state', { profile_id: this.profileId || '' }, (reply) => {
+        if (!reply.ok) { return; }
+        this.state = reply.data;
+        this.profileId = (reply.data.profile && reply.data.profile.id) || '';
+        this.paint();
+      });
+    },
+
+    paint() {
+      const state = this.state;
+      if (!state) { return; }
+      const assets = state.assets || [];
+      const list = q('#sampleList');
+      if (list) {
+        list.innerHTML = '';
+        if (!assets.length) {
+          list.innerHTML = '<div class="sample-row"><span></span><span>还没有导入素材</span>'
+            + '<div class="quality"><i style="width:0%"></i></div><span class="status">空</span></div>';
+        }
+        assets.slice(0, 40).forEach((asset) => {
+          const row = document.createElement('div');
+          row.className = 'sample-row';
+          const flags = (asset.flags || []).length;
+          const ratio = Math.max(0, Math.min(100, asset.seconds ? Math.round((asset.confirmed_seconds / asset.seconds) * 100) : 0));
+          row.innerHTML = `<button class="sample-play">▶</button><span>${esc(asset.name)}</span>`
+            + `<div class="quality"><i style="width:${ratio}%"></i></div>`
+            + `<span class="status ${flags ? 'orange' : 'ready'}">${flags ? '需检查' : (asset.confirmed_seconds ? '已确认' : '待处理')}</span>`;
+          const play = q('.sample-play', row);
+          if (play) {
+            play.onclick = () => (asset.exists ? S.playFile(asset.path, asset.name) : toast('素材文件已不存在'));
+          }
+          list.appendChild(row);
+        });
+      }
+      // 质量诊断卡：显示真实统计
+      const score = q('[data-page-view="train"] .score');
+      if (score) {
+        const total = state.total_seconds || 0;
+        const target = state.singing_min_seconds || 180;
+        score.innerHTML = `${Math.min(100, Math.round((total / target) * 100))} <small>/ 100</small>`;
+      }
+      const storage = q('[data-page-view="train"] .storage-bar i');
+      if (storage) {
+        storage.style.width = Math.min(100, Math.round(((state.total_seconds || 0) / (state.singing_min_seconds || 180)) * 100)) + '%';
+      }
+      const metrics = qq('[data-page-view="train"] .quality-metric b');
+      if (metrics.length >= 4) {
+        metrics[0].textContent = assets.length;
+        metrics[1].textContent = state.total_text || '0:00';
+        metrics[2].textContent = state.profile && state.profile.consent ? '已授权' : '未授权';
+        metrics[3].textContent = (state.workflow && state.workflow.stage) || '未开始';
+      }
+      const lines = qq('[data-page-view="train"] .diagnostic-line b');
+      if (lines.length >= 3) {
+        lines[0].textContent = (state.total_text || '0:00') + ' 已导入';
+        lines[1].textContent = `${assets.length} 个文件`;
+        lines[2].textContent = state.workflow ? (state.workflow.status || '') : '未开始';
+      }
+      const alert = q('[data-page-view="train"] .quality-alert');
+      if (alert) {
+        const flags = assets.reduce((sum, item) => sum + (item.flags || []).length, 0);
+        if (flags) { alert.textContent = `⚠ ${flags} 个素材存在质量标记，预处理阶段会进一步检查。`; alert.classList.remove('hidden'); }
+        else { alert.classList.add('hidden'); }
+      }
+      // 步骤条
+      const steps = qq('[data-page-view="train"] .step-item');
+      const stage = (state.workflow && state.workflow.stage) || '';
+      const index = { importing: 0, preprocessing: 1, review_required: 2, freezing: 3, feature_preparing: 3, training: 3, verifying: 4, saved: 4 }[stage];
+      steps.forEach((node, position) => node.classList.toggle('active', index === undefined ? position === 0 : position === index));
+      // 主按钮
+      const start = q('#trainStart');
+      if (start) {
+        const workflow = state.workflow || {};
+        if (workflow.running) { start.textContent = '取消当前任务'; }
+        else if (workflow.stage === 'review_required' && state.draft && state.draft.segments) { start.textContent = '确认并训练'; }
+        else if (workflow.can_resume) { start.textContent = '继续上次任务'; }
+        else if (assets.length) { start.textContent = '开始自动处理'; }
+        else { start.textContent = '导入素材'; }
+      }
+      const nameInput = q('[data-page-view="train"] .train-settings input');
+      if (nameInput && state.profile && !nameInput.value) { nameInput.value = state.profile.name; }
+      this.paintDraft();
+    },
+
+    paintDraft() {
+      const draft = this.state && this.state.draft;
+      if (!draft || !draft.segments) { return; }
+      const holder = q('#trainDraftPanel');
+      if (!holder) { return; }
+      const rows = draft.abnormal.length ? draft.abnormal : draft.segments.slice(0, 12);
+      holder.innerHTML = rows.map((segment) => `<div class="sample-row" data-segment="${esc(segment.id)}">`
+        + `<button class="sample-play" data-toggle>${segment.included ? '✓' : '✕'}</button>`
+        + `<span>${esc((segment.text || '(无识别文字)').slice(0, 24))}</span>`
+        + `<div class="quality"><i style="width:${Math.min(100, Math.round(segment.seconds * 20))}%"></i></div>`
+        + `<span class="status ${segment.eligible ? 'ready' : 'orange'}">${segment.seconds.toFixed(1)}s</span></div>`).join('');
+      holder.onclick = (event) => {
+        const button = event.target.closest('[data-toggle]');
+        if (!button) { return; }
+        const row = button.closest('[data-segment]');
+        const segment = draft.segments.find((item) => item.id === row.dataset.segment);
+        if (segment) { segment.included = !segment.included; button.textContent = segment.included ? '✓' : '✕'; }
+      };
+    },
+
+    async importAssets() {
+      const consent = this.state && this.state.profile && this.state.profile.consent;
+      if (!consent) {
+        const nameInput = q('[data-page-view="train"] .train-settings input');
+        const value = await openModal({
+          title: '导入声音素材',
+          body: '请先确认这是本人声音，或已经取得明确授权。原始文件不会被修改，会复制到当前工程。',
+          content: `<div class="field"><label>声音名称</label><input id="voiceName" value="${esc((nameInput && nameInput.value) || '我的声音')}"></div>`,
+          actions: [
+            { label: '取消', value: null },
+            { label: '确认并选择文件', kind: 'primary', onClick: (mask) => (q('#voiceName', mask) || {}).value || '我的声音' },
+          ],
+        });
+        if (!value) { return; }
+        S.invoke('training.import', { profile_id: '', name: value, consent: true });
+        return;
+      }
+      S.invoke('training.import', { profile_id: this.profileId });
+    },
+
+    async primary() {
+      const state = this.state || {};
+      const workflow = state.workflow || {};
+      if (workflow.running) { S.invoke('training.cancel', { workflow_id: workflow.id }); return; }
+      if (workflow.stage === 'review_required' && state.draft) { this.confirmDraft(); return; }
+      if (workflow.can_resume) { S.invoke('training.resume', { workflow_id: workflow.id }); return; }
+      if (!(state.assets || []).length) { this.importAssets(); return; }
+      const consent = state.profile && state.profile.consent;
+      if (!consent) { toast('请先确认授权后再开始训练'); return; }
+      const smart = q('[data-page-view="train"] .train-settings .switch');
+      S.invoke('training.start', {
+        profile_id: this.profileId,
+        smart: smart ? smart.classList.contains('on') : true,
+      });
+    },
+
+    async confirmDraft() {
+      const draft = this.state && this.state.draft;
+      if (!draft) { toast('还没有可确认的片段'); return; }
+      const abnormal = draft.abnormal || [];
+      if (!abnormal.length) {
+        S.invoke('training.confirm', { draft_id: draft.id });
+        return;
+      }
+      const ok = await openModal({
+        title: '确认训练片段',
+        body: `已识别 ${draft.segments.length} 个片段，其中 ${abnormal.length} 个需要检查。`
+          + `当前已确认 ${draft.confirmed_seconds.toFixed(1)} 秒（最低 60 秒）。`,
+        content: '<div id="trainDraftPanel" class="sample-list" style="max-height:280px;overflow:auto"></div>',
+        actions: [
+          { label: '取消', value: false },
+          { label: '确认并训练', kind: 'primary', value: true },
+        ],
+      });
+      if (!ok) { return; }
+      const include = [];
+      const exclude = [];
+      (draft.segments || []).forEach((segment) => (segment.included ? include : exclude).push(segment.id));
+      S.invoke('training.confirm', { draft_id: draft.id, include: include, exclude: exclude });
+    },
+
+    resume() {
+      const workflow = this.state && this.state.workflow;
+      if (!workflow || !workflow.can_resume) { toast('没有可恢复的训练任务'); return; }
+      S.invoke('training.resume', { workflow_id: workflow.id });
+    },
+
+    onEvent(name, data) {
+      if (name === 'training.scanned') {
+        toast(data.message || '素材已导入');
+        this.refresh(data.profile_id);
+      } else if (name === 'training.scanning') {
+        toast('正在检查素材文件……');
+      } else if (name === 'training.error') {
+        toast(data.message || '素材导入失败');
+      } else if (name === 'training.workflow') {
+        const workflow = data.workflow || {};
+        this.state = this.state || {};
+        this.state.workflow = workflow;
+        if (workflow.profile_id) { this.profileId = workflow.profile_id; }
+        if (workflow.running) { showTask('training-' + workflow.id, '训练声音'); updateTask('training-' + workflow.id, workflow.progress, workflow.message, ''); }
+        else if (workflow.stage === 'saved') { finishTask('training-' + workflow.id, '训练完成'); toast('新声音已验证并启用'); }
+        else if (workflow.status === 'failed') { finishTask('training-' + workflow.id, '失败'); toast(workflow.error || '训练失败'); }
+        this.refresh(workflow.profile_id);
+      } else if (name === 'training.draft') {
+        this.state = this.state || {};
+        this.state.draft = data.draft;
+        toast(`已识别 ${(data.draft.segments || []).length} 个片段，请确认`);
+        this.refresh(data.profile_id);
+      }
+    },
+  };
+
+  // --------------------------------------------------------------- separator
+  const separator = {
+    coverId: '',
+
+    install() {
+      const drop = q('#sepDrop');
+      if (drop) { drop.onclick = () => this.choose(); }
+      const start = q('#sepStart');
+      if (start) { start.onclick = () => this.start(); }
+      qq('[data-page-view="separator"] .mode').forEach((node, index) => {
+        node.dataset.mode = index === 0 ? 'uvr5' : 'roformer';
+        node.onclick = () => {
+          qq('[data-page-view="separator"] .mode').forEach((other) => other.classList.remove('active'));
+          node.classList.add('active');
+        };
+      });
+    },
+
+    mode() {
+      const active = q('[data-page-view="separator"] .mode.active');
+      return (active && active.dataset.mode) || 'uvr5';
+    },
+
+    choose() {
+      S.invoke('separator.import', {}, (reply) => {
+        if (!reply.ok) { return; }
+        this.coverId = reply.cover_id;
+        S.invoke('app.refresh');
+      });
+    },
+
+    async start() {
+      if (!this.coverId) {
+        const song = (S.songs || [])[0];
+        if (song) { this.coverId = song.id; }
+      }
+      if (!this.coverId) { toast('请先选择要分离的歌曲'); return; }
+      const ok = await openModal({
+        title: '歌曲权利确认',
+        body: esc(RIGHTS_TEXT) + '<br><br>这只是你的权利声明，VoiceStudio 不会替你取得版权。',
+        actions: [{ label: '取消', value: false }, { label: '我确认并开始分离', kind: 'primary', value: true }],
+      });
+      if (!ok) { return; }
+      S.invoke('cover.attest', { cover_id: this.coverId, confirmed: true }, (reply) => {
+        if (!reply.ok) { return; }
+        S.invoke('cover.separate', { cover_id: this.coverId, mode: this.mode() });
+      });
+    },
+  };
+
+  // ----------------------------------------------------------------- exports
+  const exportsPage = {
+    install() {
+      const buttons = qq('[data-page-view="exports"] .page-actions .btn');
+      if (buttons[0]) { buttons[0].onclick = () => S.invoke('exports.open_folder', {}); }
+      if (buttons[1]) { buttons[1].onclick = () => S.invoke('exports.clean_cache', {}); }
+      const openList = q('.export-table');
+      if (openList) {
+        openList.addEventListener('click', (event) => {
+          const row = event.target.closest('.export-row');
+          const button = event.target.closest('button');
+          if (!row || !button) { return; }
+          const name = q('b', row);
+          const item = (S.exports || []).find((entry) => name && entry.name === name.textContent);
+          if (item) { S.invoke('file.reveal', { path: item.path }); }
+        });
+      }
+    },
+  };
+
+  // ------------------------------------------------------------------ engine
+  const enginePage = {
+    install() {},
+
+    start() {
+      S.invoke('engine.install', { tools: true });
+    },
+
+    onEvent(name, data) {
+      if (name === 'engine.install.started') {
+        const mask = document.createElement('div');
+        mask.className = 'modal-mask show';
+        mask.id = 'engineInstallMask';
+        mask.innerHTML = '<div class="modal"><h3>安装 / 修复本地引擎</h3>'
+          + '<p>正在运行固定版本的安装脚本。可以关闭本窗口，安装会在后台继续。</p>'
+          + '<div class="sample-list" id="engineLog" style="max-height:260px;overflow:auto;font-size:8.5px"></div>'
+          + '<div class="modal-actions"><button class="btn ghost" id="engineClose">关闭</button></div></div>';
+        document.body.appendChild(mask);
+        const close = q('#engineClose', mask);
+        if (close) { close.onclick = () => mask.remove(); }
+      } else if (name === 'engine.install.log') {
+        const log = q('#engineLog');
+        if (log) {
+          const line = document.createElement('div');
+          line.textContent = data.line || '';
+          log.appendChild(line);
+          log.scrollTop = log.scrollHeight;
+        }
+      } else if (name === 'engine.install.done') {
+        toast(data.message || '安装结束');
+        const mask = q('#engineInstallMask');
+        if (mask) { setTimeout(() => mask.remove(), 1500); }
+        S.invoke('app.refresh');
+      }
+    },
+  };
+
   // ----------------------------------------------------------- unsupported UI
   const UNSUPPORTED = [
     '.recommend-row',        // 效果预设：后端没有预设概念
@@ -640,6 +961,15 @@ window.VS_PAGES = (function () {
       const text = node.textContent || '';
       if (text.includes('FLAC') || text.includes('M4A')) { node.classList.add('hidden'); }
     });
+    // 训练：训练质量下拉没有后端参数
+    qq('[data-page-view="train"] .train-settings .field').forEach((node) => {
+      const label = q('label', node);
+      if (label && label.textContent.includes('训练质量')) { node.classList.add('hidden'); }
+    });
+    // 训练：后端只支持 UVR5 / RoFormer 两种分离方式
+    qq('[data-page-view="separator"] .mode').forEach((node) => {
+      if ((node.textContent || '').includes('多轨')) { node.classList.add('hidden'); }
+    });
   }
 
   // ------------------------------------------------------------------- public
@@ -648,6 +978,7 @@ window.VS_PAGES = (function () {
     if (installed) {
       cover.refresh();
       tts.refreshHistory();
+      training.refresh();
       return;
     }
     installed = true;
@@ -655,6 +986,10 @@ window.VS_PAGES = (function () {
     cover.install();
     tts.install();
     voices.install();
+    training.install();
+    separator.install();
+    exportsPage.install();
+    enginePage.install();
   }
 
   function onEvent(name, data) {
@@ -665,8 +1000,10 @@ window.VS_PAGES = (function () {
       tts.onEvent(event, payload);
       return;
     }
-    if (event === 'voices.changed') { voices.onEvent(event, payload); }
+    if (event === 'voices.changed') { voices.onEvent(event, payload); return; }
+    if (event.indexOf('training.') === 0) { training.onEvent(event, payload); return; }
+    if (event.indexOf('engine.') === 0) { enginePage.onEvent(event, payload); }
   }
 
-  return { install, onEvent, cover, tts, voices, openModal };
+  return { install, onEvent, cover, tts, voices, training, separator, exportsPage, enginePage, openModal };
 })();
