@@ -231,6 +231,60 @@ def apply_preview_presentation(window) -> None:
             pass
         button.clicked.connect(lambda _checked=False, text=message: exports.storage.setText(text))
 
+    # Training uses the same five-step shell as the real workflow, but the
+    # preview carries a fixed sample set so the drop zone, sample quality
+    # rows, diagnosis card and training controls can be checked together.
+    training = window.training_page
+    training.name.setText("我的新声音")
+    training.consent.setChecked(False)
+    training._render_material_rows([
+        ("voice_sample_01.wav", 94, "优秀", "preview:voice_sample_01"),
+        ("voice_sample_02.wav", 87, "良好", "preview:voice_sample_02"),
+        ("voice_sample_03.wav", 72, "可用", "preview:voice_sample_03"),
+        ("voice_sample_04.wav", 43, "噪声高", "preview:voice_sample_04"),
+    ])
+    training.quality_summary.setText("86 / 100 · 适合训练")
+    training.quality_bar.setValue(86)
+    training.quality_details.setText("有效纯人声  ·  4:18\n舒适音域估计  ·  A2–E5\n预计训练相似度  ·  90–93%")
+    training.quality_metrics.setText("信噪比 92   ·   混响控制 84\n音域覆盖 78   ·   削波安全 95")
+    training.quality_alert.setText("⚠ voice_sample_04.wav 存在明显环境噪声；建议剔除。")
+    training.quality_alert.show()
+    # The reference right rail keeps only capability switches, name and
+    # quality in the visible settings card.  The real profile/status rows
+    # remain available in normal mode and are simply folded for this sample.
+    training_form = training.singing_card.layout()
+    for field in (training.singing_profile, training.singing_status, training.singing_detail, training.consent, training.singing_progress):
+        label = training_form.labelForField(field)
+        if label is not None:
+            label.hide()
+        field.hide()
+    training.singing_train_button.hide()
+    training.singing_cancel_button.hide()
+    training.singing_manage_button.hide()
+    for index in range(training.material_actions.count()):
+        widget = training.material_actions.itemAt(index).widget()
+        if widget is not None:
+            widget.hide()
+    for widget in (training.progress, training.status, training.more, training.record, training.cancel, training.training_run_label):
+        widget.hide()
+    for index in range(training.training_action_row.count()):
+        widget = training.training_action_row.itemAt(index).widget()
+        if widget is not None:
+            widget.hide()
+    training.status.setText("视觉预览：不会开始训练或写入声音库。")
+    training.primary.setText("检查训练能力")
+    try:
+        training.primary.clicked.disconnect()
+    except RuntimeError:
+        pass
+    training.primary.clicked.connect(lambda: training.status.setText("视觉预览不提交训练任务；正常模式会先检测授权和本地模型。"))
+    training.singing_train_button.setText("检查歌唱训练能力")
+    try:
+        training.singing_train_button.clicked.disconnect()
+    except RuntimeError:
+        pass
+    training.singing_train_button.clicked.connect(lambda: training.singing_status.setText("视觉预览不提交歌唱模型训练。"))
+
     window.recent_page.refresh()
 
 

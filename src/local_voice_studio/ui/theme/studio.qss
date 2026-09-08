@@ -431,6 +431,56 @@ QCheckBox::indicator:disabled { background: @color.disabled_surface; border-colo
 }
 #trainingPage #trainingQualitySummary { color:#2f2924; font-size:15px; font-weight:760; }
 #trainingPage #trainingRunStatus { color:#9b9087; font-size:9px; }
+#trainingPage #trainingSamplesCard {
+    background:#ffffff; border:1px solid #e9e1d8; border-radius:14px;
+}
+#trainingPage #trainingSampleRow {
+    background:#fffaf6; border:1px solid #eee3d8; border-radius:9px;
+}
+#trainingPage #trainingSampleName { color:#5f554d; font-size:9px; }
+#trainingPage #samplePlay {
+    color:#d86a18; background:#ffffff; border:1px solid #f0d3ba;
+    border-radius:7px; font-size:9px; padding:0;
+}
+#trainingPage #samplePlay:disabled { color:#c9bdb3; background:#fbf8f4; }
+#trainingPage #trainingSampleQuality, #trainingPage #qualityBar {
+    min-height:5px; max-height:5px; background:#eee5dc; border:0; border-radius:3px;
+}
+#trainingPage #trainingSampleQuality::chunk, #trainingPage #qualityBar::chunk {
+    background:#ff9b52; border-radius:3px;
+}
+#trainingPage #trainingSampleStatus {
+    color:#2c9567; background:#eaf7f1; border:1px solid #cdecdc;
+    border-radius:6px; padding:3px 6px; font-size:8px;
+}
+#trainingPage #trainingSampleRow:nth-child(4) #trainingSampleStatus {
+    color:#c95d3d; background:#fff0eb; border-color:#f0c6b8;
+}
+#trainingPage #trainingMaterialEmpty { color:#9b9087; font-size:9px; padding:8px; }
+#trainingPage #trainingQualityAlert {
+    color:#9d6243; background:#fff5eb; border:1px solid #f1d7bf;
+    border-radius:9px; padding:8px; font-size:8px; line-height:1.4;
+}
+#trainingPage #trainingQualityMetrics {
+    color:#75695f; background:#fffaf6; border:1px solid #eee3d8;
+    border-radius:9px; padding:8px; font-size:8px; line-height:1.65;
+}
+#trainingPage #trainingCapabilityToggle {
+    color:#5f554d; min-height:24px; font-size:9px;
+}
+#trainingPage #trainingCapabilityToggle::indicator {
+    width:27px; height:16px; border-radius:8px;
+    background:#e9e1d8; border:1px solid #ded3c8;
+}
+#trainingPage #trainingCapabilityToggle::indicator:checked {
+    background:#ff7a1a; border-color:#ff7a1a;
+}
+#trainingPage #trainingQualityChoice,
+#trainingPage #trainingSingingCard QLineEdit,
+#trainingPage #trainingSingingCard QComboBox {
+    background:#ffffff; border:1px solid #ead8c8; border-radius:8px;
+    padding:6px 8px; color:#5f554d;
+}
 
 /* HTML v4 voice grid cards. */
 #voicesPage, #voicesPage QScrollArea { background:#f6f3ef; border:0; }

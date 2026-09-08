@@ -255,22 +255,33 @@ class OneClickTrainingPage(QWidget):
         steps_panel = QFrame(); steps_panel.setObjectName("trainingStepsPanel"); steps_panel.setMinimumWidth(220); steps_panel.setMaximumWidth(220); steps_layout = QVBoxLayout(steps_panel); steps_layout.setContentsMargins(15, 15, 15, 15); steps_layout.setSpacing(8); steps_label = QLabel("训练流程"); steps_label.setObjectName("trainingSectionLabel"); steps_layout.addWidget(steps_label)
         self.timeline = StepTimeline(self.STEPS); self.steps = self.timeline.labels; self.timeline.rows[-1].hide(); steps_layout.addWidget(self.timeline); steps_layout.addStretch(); steps_note = QLabel("当前流程只会在本机处理授权素材。训练完成后仍需通过模型验证，才会加入声音库。"); steps_note.setObjectName("trainingStepsNote"); steps_note.setWordWrap(True); steps_layout.addWidget(steps_note); workspace.addWidget(steps_panel)
         center = QVBoxLayout(); center.setSpacing(14); workspace.addLayout(center, 1)
+        # Keep the real training controls in the right column, but present
+        # them in the same compact card hierarchy as the HTML reference.
+        self.name = QLineEdit("我的声音"); self.name.setPlaceholderText("例如：我的旁白声")
+        self.consent = QCheckBox("我确认这是本人声音，或已经取得明确授权")
+        self.training_quality = QComboBox(); self.training_quality.addItems(("标准 · 推荐", "快速", "高质量")); self.training_quality.setObjectName("trainingQualityChoice")
         self.singing_card = QGroupBox("训练能力"); self.singing_card.setObjectName("trainingSingingCard"); singing_form = QFormLayout(self.singing_card)
+        capability_row = QHBoxLayout()
+        self.tts_capability = QCheckBox("文字生成模型"); self.tts_capability.setChecked(True); self.tts_capability.setObjectName("trainingCapabilityToggle")
+        self.cover_capability = QCheckBox("AI 翻唱模型"); self.cover_capability.setChecked(True); self.cover_capability.setObjectName("trainingCapabilityToggle")
+        capability_row.addWidget(self.tts_capability); capability_row.addWidget(self.cover_capability); capability_row.addStretch()
+        singing_form.addRow("", capability_row)
         self.singing_profile = QComboBox(); self.singing_profile.currentIndexChanged.connect(self._refresh_singing_card)
         self.singing_status = QLabel("未选择声音"); self.singing_status.setObjectName("statusChip")
         self.singing_detail = QLabel("训练完成并通过验证后，才可在 AI 翻唱中使用。现在的训练流程会自动保存歌唱模型状态。"); self.singing_detail.setWordWrap(True); self.singing_detail.setObjectName("hint")
         singing_form.addRow("声音配置", self.singing_profile); singing_form.addRow("状态", self.singing_status); singing_form.addRow(self.singing_detail)
+        singing_form.addRow("声音名称", self.name); singing_form.addRow("训练质量", self.training_quality); singing_form.addRow("授权确认", self.consent)
         singing_actions = QHBoxLayout(); self.singing_train_button = QPushButton("训练歌唱模型"); self.singing_train_button.setObjectName("primaryButton"); self.singing_train_button.clicked.connect(self._start_singing_training); singing_actions.addWidget(self.singing_train_button); self.singing_cancel_button = QPushButton("取消训练"); self.singing_cancel_button.clicked.connect(self._cancel_singing_training); self.singing_cancel_button.hide(); singing_actions.addWidget(self.singing_cancel_button); self.singing_manage_button = QPushButton("管理版本"); self.singing_manage_button.clicked.connect(self._manage_singing_versions); singing_actions.addWidget(self.singing_manage_button); singing_form.addRow(singing_actions)
         self.singing_progress = QProgressBar(); self.singing_progress.setRange(0, 100); self.singing_progress.setValue(0); singing_form.addRow("训练进度", self.singing_progress)
         self.singing_model_card = self.singing_card; self.singing_model_status = self.singing_status; self.singing_model_profile = self.singing_profile; self.train_singing = self.singing_train_button
-        card = QGroupBox("导入声音素材"); card.setObjectName("trainingMaterialsCard"); form = QFormLayout(card); self.name = QLineEdit("我的声音"); self.name.setPlaceholderText("例如：我的旁白声"); self.consent = QCheckBox("我确认这是本人声音，或已经取得明确授权"); form.addRow("声音名称", self.name); form.addRow("授权确认", self.consent); self.drop = DropArea(); self.drop.paths_dropped.connect(self._scan); form.addRow(self.drop)
-        row = QHBoxLayout(); files = QPushButton("选择音频"); files.clicked.connect(self._files); folder = QPushButton("选择文件夹"); folder.clicked.connect(self._folder); manage = QPushButton("管理已导入素材"); manage.clicked.connect(self._manage_assets); row.addWidget(files); row.addWidget(folder); row.addWidget(manage); row.addStretch(); form.addRow(row); center.addWidget(card)
-        samples_card = QFrame(); samples_card.setObjectName("trainingSamplesCard"); samples_layout = QVBoxLayout(samples_card); samples_layout.setContentsMargins(16, 14, 16, 14); samples_head = QHBoxLayout(); sample_copy = QVBoxLayout(); sample_title = QLabel("素材列表"); sample_title.setObjectName("cardTitle"); sample_subtitle = QLabel("自动探测格式、时长和重复项；可随时管理已导入素材。"); sample_subtitle.setObjectName("hint"); sample_copy.addWidget(sample_title); sample_copy.addWidget(sample_subtitle); samples_head.addLayout(sample_copy); samples_head.addStretch(); clean = QPushButton("管理素材"); clean.clicked.connect(self._manage_assets); samples_head.addWidget(clean); samples_layout.addLayout(samples_head); self.material = QLabel("尚未导入素材"); self.material.setObjectName("trainingMaterialState"); self.material.setWordWrap(True); samples_layout.addWidget(self.material); center.addWidget(samples_card)
+        card = QGroupBox("导入声音素材"); card.setObjectName("trainingMaterialsCard"); form = QFormLayout(card); self.drop = DropArea(); self.drop.paths_dropped.connect(self._scan); form.addRow(self.drop)
+        row = QHBoxLayout(); files = QPushButton("选择音频"); files.clicked.connect(self._files); folder = QPushButton("选择文件夹"); folder.clicked.connect(self._folder); manage = QPushButton("管理已导入素材"); manage.clicked.connect(self._manage_assets); row.addWidget(files); row.addWidget(folder); row.addWidget(manage); row.addStretch(); self.material_actions = row; form.addRow(row); center.addWidget(card)
+        samples_card = QFrame(); samples_card.setObjectName("trainingSamplesCard"); samples_layout = QVBoxLayout(samples_card); samples_layout.setContentsMargins(16, 14, 16, 14); samples_head = QHBoxLayout(); sample_copy = QVBoxLayout(); sample_title = QLabel("素材列表"); sample_title.setObjectName("cardTitle"); sample_subtitle = QLabel("自动质检后可剔除低质量片段"); sample_subtitle.setObjectName("hint"); sample_copy.addWidget(sample_title); sample_copy.addWidget(sample_subtitle); samples_head.addLayout(sample_copy); samples_head.addStretch(); clean = QPushButton("自动清理"); clean.clicked.connect(self._manage_assets); samples_head.addWidget(clean); samples_layout.addLayout(samples_head); self.sample_rows = QVBoxLayout(); self.sample_rows.setSpacing(6); samples_layout.addLayout(self.sample_rows); self.material = QLabel("尚未导入素材"); self.material.setObjectName("trainingMaterialState"); self.material.setWordWrap(True); samples_layout.addWidget(self.material); center.addWidget(samples_card)
         self.review = QGroupBox("逐条试听并确认"); review_layout = QVBoxLayout(self.review); self.review_hint = QLabel("默认只审核异常片段；Space 播放，Enter 确认，Delete 排除，↑↓ 切换。"); self.review_hint.setObjectName("hint"); review_layout.addWidget(self.review_hint); self.review_card = ReviewSegmentCard(); self.review_card.changed.connect(self._review_changed); self.review_card.confirmed.connect(self._review_confirmed); self.review_card.navigate.connect(self._review_navigate); review_layout.addWidget(self.review_card)
         self.show_all = QCheckBox("查看全部片段表格"); self.show_all.toggled.connect(self._populate_review); review_layout.addWidget(self.show_all); self.table = QTableWidget(0, 5); self.table.setHorizontalHeaderLabels(["纳入", "片段", "时长", "识别文字", "问题"]); self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch); self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch); self.table.setVisible(False); review_layout.addWidget(self.table); self.review.setVisible(False); center.addWidget(self.review)
         advanced = QGroupBox("高级 / 查看旁白流程详情"); advanced.setCheckable(True); advanced.setChecked(False); advanced_layout = QVBoxLayout(advanced); self.smart = QCheckBox("智能优化（人声分离与降噪）"); self.smart.setChecked(bool(self.store.get_setting("smart_optimization", True))); advanced_layout.addWidget(self.smart); self.details = QPlainTextEdit(); self.details.setReadOnly(True); self.details.setMaximumHeight(100); advanced_layout.addWidget(self.details); fold_group(advanced); center.addWidget(advanced); center.addStretch()
-        right = QVBoxLayout(); right.setSpacing(14); workspace.addLayout(right); diagnostics = QFrame(); diagnostics.setObjectName("trainingDiagnosticsCard"); diagnostics.setMinimumWidth(245); diagnostics.setMaximumWidth(300); diagnostics_layout = QVBoxLayout(diagnostics); diagnostics_layout.setContentsMargins(16, 16, 16, 16); diagnostics_layout.setSpacing(9); diagnostic_label = QLabel("素材质量诊断"); diagnostic_label.setObjectName("trainingSectionLabel"); diagnostics_layout.addWidget(diagnostic_label); self.quality_summary = QLabel("等待导入授权素材"); self.quality_summary.setObjectName("trainingQualitySummary"); diagnostics_layout.addWidget(self.quality_summary); self.quality_bar = QProgressBar(); self.quality_bar.setRange(0, 100); self.quality_bar.setValue(0); self.quality_bar.setTextVisible(False); diagnostics_layout.addWidget(self.quality_bar); self.quality_details = QLabel("音频探测会显示有效时长、重复项与基础格式信息。不会把未检测到的数据标记为质量通过。"); self.quality_details.setObjectName("trainingQualityDetails"); self.quality_details.setWordWrap(True); diagnostics_layout.addWidget(self.quality_details); right.addWidget(diagnostics); right.addWidget(self.singing_card)
-        run_card = QFrame(); run_card.setObjectName("trainingRunCard"); run_layout = QVBoxLayout(run_card); run_layout.setContentsMargins(16, 16, 16, 16); run_layout.setSpacing(10); run_label = QLabel("旁白训练"); run_label.setObjectName("trainingSectionLabel"); run_layout.addWidget(run_label); self.progress = QProgressBar(); self.progress.setRange(0, 100); run_layout.addWidget(self.progress); self.status = QLabel("导入素材后即可开始"); self.status.setObjectName("trainingRunStatus"); self.status.setWordWrap(True); run_layout.addWidget(self.status); self.primary = QPushButton("导入素材"); self.primary.setObjectName("primaryButton"); self.primary.clicked.connect(self._primary_action); self.more = QPushButton("继续导入"); self.more.clicked.connect(self._files); self.record = QPushButton("录几句"); self.record.clicked.connect(self._record); self.cancel = QPushButton("取消当前任务"); self.cancel.clicked.connect(self._cancel); self.cancel.setVisible(False); run_layout.addWidget(self.primary); action_row = QHBoxLayout(); action_row.addWidget(self.more); action_row.addWidget(self.record); action_row.addStretch(); run_layout.addLayout(action_row); run_layout.addWidget(self.cancel); right.addWidget(run_card); right.addStretch()
+        right = QVBoxLayout(); right.setSpacing(14); workspace.addLayout(right); diagnostics = QFrame(); diagnostics.setObjectName("trainingDiagnosticsCard"); diagnostics.setMinimumWidth(245); diagnostics.setMaximumWidth(300); diagnostics_layout = QVBoxLayout(diagnostics); diagnostics_layout.setContentsMargins(16, 16, 16, 16); diagnostics_layout.setSpacing(9); diagnostic_label = QLabel("素材质量诊断"); diagnostic_label.setObjectName("trainingSectionLabel"); diagnostics_layout.addWidget(diagnostic_label); self.quality_summary = QLabel("等待导入授权素材"); self.quality_summary.setObjectName("trainingQualitySummary"); diagnostics_layout.addWidget(self.quality_summary); self.quality_bar = QProgressBar(); self.quality_bar.setRange(0, 100); self.quality_bar.setValue(0); self.quality_bar.setTextVisible(False); diagnostics_layout.addWidget(self.quality_bar); self.quality_details = QLabel("音频探测会显示有效时长、重复项与基础格式信息。不会把未检测到的数据标记为质量通过。"); self.quality_details.setObjectName("trainingQualityDetails"); self.quality_details.setWordWrap(True); diagnostics_layout.addWidget(self.quality_details); self.quality_alert = QLabel(""); self.quality_alert.setObjectName("trainingQualityAlert"); self.quality_alert.setWordWrap(True); self.quality_alert.hide(); diagnostics_layout.addWidget(self.quality_alert); self.quality_metrics = QLabel("信噪比  —   ·   混响控制  —\n音域覆盖  —   ·   削波安全  —"); self.quality_metrics.setObjectName("trainingQualityMetrics"); self.quality_metrics.setWordWrap(True); diagnostics_layout.addWidget(self.quality_metrics); right.addWidget(diagnostics); right.addWidget(self.singing_card)
+        run_card = QFrame(); run_card.setObjectName("trainingRunCard"); run_layout = QVBoxLayout(run_card); run_layout.setContentsMargins(16, 16, 16, 16); run_layout.setSpacing(10); run_label = QLabel("旁白训练"); run_label.setObjectName("trainingSectionLabel"); run_layout.addWidget(run_label); self.progress = QProgressBar(); self.progress.setRange(0, 100); run_layout.addWidget(self.progress); self.status = QLabel("导入素材后即可开始"); self.status.setObjectName("trainingRunStatus"); self.status.setWordWrap(True); run_layout.addWidget(self.status); self.primary = QPushButton("导入素材"); self.primary.setObjectName("primaryButton"); self.primary.clicked.connect(self._primary_action); self.more = QPushButton("继续导入"); self.more.clicked.connect(self._files); self.record = QPushButton("录几句"); self.record.clicked.connect(self._record); self.cancel = QPushButton("取消当前任务"); self.cancel.clicked.connect(self._cancel); self.cancel.setVisible(False); run_layout.addWidget(self.primary); action_row = QHBoxLayout(); action_row.addWidget(self.more); action_row.addWidget(self.record); action_row.addStretch(); self.training_action_row = action_row; run_layout.addLayout(action_row); run_layout.addWidget(self.cancel); right.addWidget(run_card); self.training_run_card = run_card; self.training_run_label = run_label; self.training_run_layout = run_layout; right.addStretch()
         self._refresh_singing_profiles()
 
     def _refresh_singing_profiles(self) -> None:
@@ -363,6 +374,43 @@ class OneClickTrainingPage(QWidget):
     def _files(self) -> None:
         values, _ = QFileDialog.getOpenFileNames(self, "批量选择声音素材", str(Path.cwd()), "音频 (*.wav *.flac *.mp3 *.m4a *.aac *.ogg)")
         if values: self._scan([Path(item) for item in values])
+
+    def _render_material_rows(self, rows=None) -> None:
+        """Render compact sample rows while keeping the real probe list authoritative."""
+        while self.sample_rows.count():
+            item = self.sample_rows.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        values = rows
+        if values is None:
+            values = []
+            for probe in self.probes:
+                flags = set(probe.quality_flags or [])
+                if probe.duplicate_of:
+                    status, score = "重复", 28
+                elif flags:
+                    status, score = "可用", 72
+                else:
+                    status, score = "优秀", 94
+                values.append((Path(probe.path).name, score, status, str(probe.path)))
+        if not values:
+            empty = QLabel("尚未导入素材")
+            empty.setObjectName("trainingMaterialEmpty")
+            self.sample_rows.addWidget(empty)
+            self.material.show()
+            return
+        self.material.hide()
+        for value in values:
+            name, score, status, source = (*value, "") if len(value) == 3 else value
+            row = QFrame(); row.setObjectName("trainingSampleRow")
+            layout = QHBoxLayout(row); layout.setContentsMargins(7, 5, 7, 5); layout.setSpacing(8)
+            play = QPushButton("▶"); play.setObjectName("samplePlay"); play.setFixedSize(24, 24); play.setEnabled(bool(source) and (str(source).startswith("preview:") or Path(source).is_file()))
+            play.clicked.connect(lambda _checked=False, path=source: self.material.setText(f"试听素材：{Path(path).name}"))
+            layout.addWidget(play)
+            title = QLabel(str(name)); title.setObjectName("trainingSampleName"); layout.addWidget(title, 1)
+            quality = QProgressBar(); quality.setRange(0, 100); quality.setValue(int(score)); quality.setTextVisible(False); quality.setObjectName("trainingSampleQuality"); quality.setFixedWidth(86); layout.addWidget(quality)
+            badge = QLabel(str(status)); badge.setObjectName("trainingSampleStatus"); layout.addWidget(badge)
+            self.sample_rows.addWidget(row)
     def _folder(self) -> None:
         value = QFileDialog.getExistingDirectory(self, "选择声音素材文件夹", str(Path.cwd() / "参考声音"))
         if value: self._scan([Path(value)])
@@ -378,6 +426,7 @@ class OneClickTrainingPage(QWidget):
             self.material.setText(f"已导入 {len(assets)} 个素材，共 {sum(item.duration_seconds for item in assets):.1f} 秒。可随时管理或继续导入。")
         else:
             self.material.setText("尚未导入素材")
+        self._render_material_rows()
     def _record(self) -> None:
         dialog = RecordingDialog(self.project / "raw" / "recordings", self)
         if dialog.exec() == QDialog.Accepted and dialog.paths: self._scan(dialog.paths)
@@ -401,6 +450,7 @@ class OneClickTrainingPage(QWidget):
             self.quality_bar.setValue(0)
             self.quality_details.setText("所有文件均为重复项或无法使用。请导入新的授权音频后重新检测。")
         self._set_step_result(0, f"{len(self.probes)} 个文件 · 排除 {duplicates} 个重复 · 有效 {total:.1f} 秒")
+        self._render_material_rows()
         self.primary.setText("开始自动处理"); self.status.setText("素材已就绪。点击一次，自动完成切片和文字识别。")
 
     def _primary_action(self) -> None:
