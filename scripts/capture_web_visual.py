@@ -38,7 +38,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from local_voice_studio.paths import AppPaths  # noqa: E402
 from local_voice_studio.storage import StudioStore  # noqa: E402
-from local_voice_studio.ui.preview import PreviewWorkerClient  # noqa: E402
+from local_voice_studio.ui.web.offline import OfflineWorkerClient  # noqa: E402
 from local_voice_studio.ui.web.shell import WebStudioWindow  # noqa: E402
 
 PAGES = (
@@ -103,7 +103,7 @@ def main() -> int:
     paths.ensure()
     store = StudioStore(paths)
     store.create_project("视觉验收工程")
-    window = WebStudioWindow(paths, store, client=PreviewWorkerClient())
+    window = WebStudioWindow(paths, store, client=OfflineWorkerClient())
     window.resize(options.width, options.height)
     if options.static:
         script = QWebEngineScript()

@@ -22,3 +22,14 @@ def test_job_coordinator_marks_recoverable_error(tmp_path):
     job = coordinator.start("separation", {}, ["separation"])
     failed = coordinator.handle_error(job.id, "模型缺失")
     assert failed.status == ProductJobStatus.RECOVERABLE
+from local_voice_studio.application.jobs import JobStage, ProductJob
+
+
+def test_mark_cancelling_persists_state(tmp_path):
+    from local_voice_studio.paths import AppPaths
+    from local_voice_studio.storage import StudioStore
+    from local_voice_studio.application.jobs.coordinator import JobCoordinator
+    paths = AppPaths(tmp_path / "home", tmp_path / "projects", tmp_path / "runtime", tmp_path / "engine", tmp_path / "models", tmp_path / "logs", tmp_path / "db.sqlite3")
+    coordinator = JobCoordinator(StudioStore(paths))
+    job = coordinator.start("separation", {}, ["separation"])
+    assert coordinator.mark_cancelling(job.id).status.value == "cancelling"

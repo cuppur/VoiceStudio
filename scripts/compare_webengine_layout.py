@@ -140,7 +140,7 @@ def engine_only(width: int, height: int, out: Path) -> int:
 
     from local_voice_studio.paths import AppPaths
     from local_voice_studio.storage import StudioStore
-    from local_voice_studio.ui.preview import PreviewWorkerClient
+    from local_voice_studio.ui.web.offline import OfflineWorkerClient
     from local_voice_studio.ui.web.shell import WebStudioWindow
 
     app = QApplication([])
@@ -154,7 +154,7 @@ def engine_only(width: int, height: int, out: Path) -> int:
     paths.ensure()
     store = StudioStore(paths)
     store.create_project("布局对照工程")
-    window = WebStudioWindow(paths, store, client=PreviewWorkerClient())
+    window = WebStudioWindow(paths, store, client=OfflineWorkerClient())
     window.resize(width, height)
     static = QWebEngineScript()
     static.setName("vs-static")

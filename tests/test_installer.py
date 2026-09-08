@@ -97,13 +97,15 @@ class InstallerSourceContractTests(unittest.TestCase):
         self.assertIn(".partial", source)
         self.assertLess(source.index("if ($Validator) { & $Validator $partial }"), source.index("Move-Item -LiteralPath $partial"))
         self.assertIn("Test-PrivatePython $envPython", source)
-        self.assertGreater(source.index("install-manifest.json"), source.index("Start-Step 7"))
+        manifest_write = source.index('$manifestPath = Join-Path $runtimeRoot "install-manifest.json"')
+        self.assertGreater(manifest_write, source.index("Start-Step 7"))
+        self.assertIn("Move-Item -LiteralPath $manifestTemp -Destination $manifestPath -Force", source)
 
     def test_gui_explicit_utf8_and_argument_list(self):
-        source = (ROOT / "src/local_voice_studio/ui/main_window.py").read_text(encoding="utf-8")
+        source = (ROOT / "src/local_voice_studio/ui/web/services/engine.py").read_text(encoding="utf-8")
         self.assertIn('decode("utf-8", errors="replace")', source)
-        self.assertIn('env.insert("PYTHONIOENCODING", "utf-8")', source)
-        self.assertIn('self.process.setArguments(arguments)', source)
+        self.assertIn('environment.insert("PYTHONIOENCODING", "utf-8")', source)
+        self.assertIn("process.setArguments(arguments)", source)
 
     def test_packaged_repair_includes_and_probes_security_resources(self):
         build = (ROOT / "scripts/build.ps1").read_text(encoding="utf-8-sig")

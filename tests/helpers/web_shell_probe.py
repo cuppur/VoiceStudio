@@ -27,7 +27,7 @@ from local_voice_studio.cover.project import CoverProject  # noqa: E402
 from local_voice_studio.models import VoiceProfile  # noqa: E402
 from local_voice_studio.paths import AppPaths  # noqa: E402
 from local_voice_studio.storage import StudioStore  # noqa: E402
-from local_voice_studio.ui.preview import PreviewWorkerClient  # noqa: E402
+from local_voice_studio.ui.web.offline import OfflineWorkerClient  # noqa: E402
 from local_voice_studio.ui.web.shell import WebStudioWindow  # noqa: E402
 
 PROBE_SCRIPT = """(() => {
@@ -101,7 +101,7 @@ def main() -> int:
     store.save_profile(project, VoiceProfile(name="测试声音", consent_confirmed=True))
     CoverProject.create(project, title="落日信号").save()
 
-    window = WebStudioWindow(paths, store, client=PreviewWorkerClient())
+    window = WebStudioWindow(paths, store, client=OfflineWorkerClient())
     window.resize(1440, 900)
     window.show()
     QTest.qWait(1500)

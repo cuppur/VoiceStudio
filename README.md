@@ -6,7 +6,7 @@
 
 ## 当前实现
 
-- 界面默认由 QtWebEngine 渲染 HTML v4 原型（与 `VoiceStudio_Full_UI_Prototype_v4.html` 视觉一致），并接入真实工程、歌曲、声音、任务、导出与设置数据；`--ui-qt` 可启动经典 PySide6 原生工作台（AI 翻唱、文字生成、我的声音、训练声音、设置与全局任务中心）。分离、训练、生成等重操作目前仍在经典界面执行。
+- 界面由 QtWebEngine 渲染 HTML v4 原型（与 `VoiceStudio_Full_UI_Prototype_v4.html` 视觉一致），全部工作流通过 QWebChannel 接入真实本地服务：AI 翻唱（导入、权利声明、UVR5/RoFormer 分离、变调建议、AI 人声、混音、导出）、文字生成、我的声音、训练声音、音频分离、导出中心、任务中心与设置。
 - AI 翻唱工作台已建立与正式 HTML 视觉基线对应的核心信息架构和功能工作流；完整视觉产品化将在后续 UI 阶段完成。当前已实现歌曲导入、项目内不可变源文件副本、SHA-256 校验、流式波形、LRC 歌词、歌曲权利声明、UVR5 人声/伴奏分离、五轨时间线、实时多源试听、Mute/Solo、同步 Seek、取消、缓存与重开恢复。
 - Singing Model 产品链已接入独立锁定的 RVC v2/RMVPE/HuBERT 运行时：正式“一键训练”页面只接受当前声音的 SourceAsset ID，由 Worker 在项目内构建不可变训练快照；RVC 模型经受限加载、Index 校验和授权短音频真实推理验证后才可启用。
 - 正式 AI 翻唱页面可从已分离 Vocal 生成带 `ai_generated` 标识的 AI Vocal，支持真实波形、Seek、原唱/AI 人声 A/B 单轨试听、Pitch、缓存、取消与重开恢复。
@@ -36,11 +36,7 @@ $env:PYTHONPATH = "src"
 & "C:\Users\cruelworld\AppData\Local\Programs\Python\Python310\python.exe" -m local_voice_studio
 ```
 
-默认启动 HTML v4 界面壳（QtWebEngine）。需要经典原生界面时追加 `--ui-qt`：
-
-```powershell
-& "C:\Users\cruelworld\AppData\Local\Programs\Python\Python310\python.exe" -m local_voice_studio --ui-qt
-```
+界面是 QtWebEngine 渲染的 HTML v4 工作台，启动后即可导入歌曲、训练声音、生成语音与导出成品。
 
 打开“设置”，点击“安装/修复本地引擎”。默认从 ModelScope 下载，适合中国大陆网络；也可在 PowerShell 中选择其他来源：
 

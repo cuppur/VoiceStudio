@@ -32,4 +32,5 @@ def test_phase4_payload_rejects_project_escape_and_busy_worker(tmp_path):
     worker.current_thread = type("Busy", (), {"is_alive": lambda self: True})()
     events = []; worker.emit = lambda *args: events.append(args)
     worker.handle(type("Msg", (), {"type": "render_cover", "id": "new", "payload": {}})())
-    assert events and events[-1][1] == "error"
+    assert events and events[-1][1] == "queued"
+    assert events[-1][2]["queue_position"] == 1

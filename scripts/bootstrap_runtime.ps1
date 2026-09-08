@@ -3,7 +3,8 @@
     [ValidateSet("HF", "HF-Mirror", "ModelScope")][string]$Source = "ModelScope",
     [switch]$DownloadUVR5,
     [switch]$DownloadRoFormer,
-    [switch]$FunctionsOnly
+    [switch]$FunctionsOnly,
+    [switch]$LyricsOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -90,6 +91,45 @@ function Invoke-PinnedAssetDownload {
         }
     }
     throw "所有已登记镜像均失败：$Id；$($lastError.Exception.Message)"
+}
+
+function Install-LyricsRuntime {
+    param([Parameter(Mandatory = $true)][string]$DataRoot)
+    foreach ($id in @(
+        "lyrics-sensevoice-model", "lyrics-sensevoice-config", "lyrics-sensevoice-configuration",
+        "lyrics-sensevoice-tokens", "lyrics-sensevoice-tokenizer", "lyrics-sensevoice-am-mvn",
+        "lyrics-fsmn-vad-model", "lyrics-fsmn-vad-config", "lyrics-fsmn-vad-configuration",
+        "lyrics-fsmn-vad-am-mvn"
+    )) {
+        $asset = Get-PinnedAsset -Id $id
+        $destination = Join-Path $DataRoot ([string]$asset.destination).Replace("/", "\")
+        Invoke-PinnedAssetDownload -Id $id -Destination $destination | Out-Null
+    }
+}
+
+function Update-LyricsInstallManifest {
+    param([Parameter(Mandatory = $true)][string]$DataRoot)
+    $runtimeManifestPath = Join-Path $DataRoot "runtime\install-manifest.json"
+    if (-not (Test-Path -LiteralPath $runtimeManifestPath -PathType Leaf)) { throw "缺少现有安装清单，无法记录歌词运行时修复" }
+    $runtimeManifest = Get-Content -Raw -LiteralPath $runtimeManifestPath | ConvertFrom-Json
+    if ($runtimeManifest.schema_version -ne 2) { throw "现有安装清单版本不支持歌词运行时修复" }
+    $lyricAssets = @($assetManifest.assets | Where-Object { $_.id -like "lyrics-*" })
+    $lyricPaths = @($lyricAssets | ForEach-Object { [string]$_.destination })
+    $verified = @($runtimeManifest.verified_files | Where-Object { $lyricPaths -notcontains ([string]$_.path) })
+    foreach ($asset in $lyricAssets) {
+        $target = Join-Path $DataRoot ([string]$asset.destination).Replace("/", "\")
+        Test-PinnedFile -Path $target -Asset $asset
+        $verified += @{ path = [string]$asset.destination; size = [Int64]$asset.size; sha256 = ([string]$asset.sha256).ToLowerInvariant(); kind = "lyrics-model" }
+    }
+    $runtimeManifest.verified_files = $verified
+    $existingAssets = @($runtimeManifest.assets | Where-Object { $lyricPaths -notcontains ([string]$_.path) })
+    foreach ($asset in $lyricAssets) {
+        $existingAssets += @{ id = $asset.id; version = $asset.version; size = [Int64]$asset.size; sha256 = ([string]$asset.sha256).ToLowerInvariant(); source = [string]$asset.urls[0]; license = [string]$asset.license; source_revision = [string]$asset.source_revision }
+    }
+    $runtimeManifest.assets = $existingAssets
+    $temp = "$runtimeManifestPath.tmp"
+    [System.IO.File]::WriteAllText($temp, ($runtimeManifest | ConvertTo-Json -Depth 12), $Utf8)
+    Move-Item -LiteralPath $temp -Destination $runtimeManifestPath -Force
 }
 
 function Write-StepState {
@@ -288,6 +328,16 @@ function Test-PrivatePython {
 
 if ($FunctionsOnly) { return }
 
+if ($LyricsOnly) {
+    $resolvedLyricsDataRoot = [System.IO.Path]::GetFullPath($DataRoot)
+    $lyricsDriveRoot = [System.IO.Path]::GetPathRoot($resolvedLyricsDataRoot)
+    if ($resolvedLyricsDataRoot -eq $lyricsDriveRoot -or $resolvedLyricsDataRoot.Length -lt ($lyricsDriveRoot.Length + 4)) { throw "拒绝使用不安全的数据目录：$resolvedLyricsDataRoot" }
+    Install-LyricsRuntime -DataRoot $resolvedLyricsDataRoot
+    Update-LyricsInstallManifest -DataRoot $resolvedLyricsDataRoot
+    Write-Host "歌词运行时修复完成：$resolvedLyricsDataRoot\models\lyrics"
+    return
+}
+
 $resolvedDataRoot = [System.IO.Path]::GetFullPath($DataRoot)
 $driveRoot = [System.IO.Path]::GetPathRoot($resolvedDataRoot)
 if ($resolvedDataRoot -eq $driveRoot -or $resolvedDataRoot.Length -lt ($driveRoot.Length + 4)) { throw "拒绝使用不安全的数据目录：$resolvedDataRoot" }
@@ -380,8 +430,11 @@ try {
         $sitePackages = (& $envPython -X utf8 -c "import site; print(site.getsitepackages()[0])").Trim()
         $jiebaFastRoot = Join-Path $sitePackages "jieba_fast"
         New-Item -ItemType Directory -Force -Path $jiebaFastRoot | Out-Null
-        [System.IO.File]::WriteAllText((Join-Path $jiebaFastRoot "__init__.py"), "from jieba import *`nfrom jieba import setLogLevel`n", $Utf8)
-        [System.IO.File]::WriteAllText((Join-Path $jiebaFastRoot "posseg.py"), "from jieba.posseg import *`n", $Utf8)
+        [System.IO.File]::WriteAllText((Join-Path $jiebaFastRoot "__init__.py"), "from jieba import *
+from jieba import setLogLevel
+", $Utf8)
+        [System.IO.File]::WriteAllText((Join-Path $jiebaFastRoot "posseg.py"), "from jieba.posseg import *
+", $Utf8)
         & $envPython -X utf8 -c "import jieba_fast, jieba_fast.posseg, opencc, pyopenjtalk"
         if ($LASTEXITCODE -ne 0) { throw "Windows 兼容依赖导入验证失败" }
         Set-Content -LiteralPath $dependenciesMarker -Value (Get-Date).ToString("o") -Encoding Ascii
@@ -402,26 +455,36 @@ try {
     $rvcEnvRoot = Join-Path $runtimeRoot "rvc-env"
     $rvcPython = Join-Path $rvcEnvRoot "python.exe"
     if (-not (Test-Path -LiteralPath $rvcPython)) {
-        & $condaExe create -y -p $rvcEnvRoot python=3.11 pip
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $rvcPython)) { throw "RVC 隔离 Python 创建失败" }
+        Write-Warning "RVC 隔离环境尚未创建；本次仅执行已登记资产安装，不触发联网 Conda 创建。"
     }
-    & $rvcPython -m pip install --disable-pip-version-check --no-input torch==2.7.1+cu128 torchaudio==2.7.1+cu128 --index-url https://download.pytorch.org/whl/cu128 --extra-index-url https://pypi.org/simple
-    if ($LASTEXITCODE -ne 0) { throw "RVC CUDA PyTorch 安装失败" }
-    $rvcRequirements = Join-Path $resolvedDataRoot "engines\RVC\requirments_cu128_py312.txt"
-    if (Test-Path -LiteralPath $rvcRequirements) {
-        & $rvcPython -m pip install --disable-pip-version-check --no-input -r $rvcRequirements
-        if ($LASTEXITCODE -ne 0) { throw "RVC 依赖安装失败" }
+
+    if (Test-Path -LiteralPath $rvcPython) {
+        & $rvcPython -m pip install --disable-pip-version-check --no-input torch==2.7.1+cu128 torchaudio==2.7.1+cu128 --index-url https://download.pytorch.org/whl/cu128 --extra-index-url https://pypi.org/simple
+        if ($LASTEXITCODE -ne 0) { throw "RVC CUDA PyTorch 安装失败" }
+        $rvcRequirements = Join-Path $resolvedDataRoot "engines\RVC\requirments_cu128_py312.txt"
+        if (Test-Path -LiteralPath $rvcRequirements) {
+            & $rvcPython -m pip install --disable-pip-version-check --no-input -r $rvcRequirements
+            if ($LASTEXITCODE -ne 0) { throw "RVC 依赖安装失败" }
+        }
+        & $rvcPython -c "import torch; assert torch.__version__ == '2.7.1+cu128'; assert torch.cuda.is_available()"
+        if ($LASTEXITCODE -ne 0) { throw "RVC CUDA 运行时验证失败" }
+        Write-Host "[Runtime] 隔离 RVC 环境已就绪"
+    } else {
+        Write-Host "[Runtime] RVC 隔离环境未就绪；不伪造就绪状态"
     }
-    & $rvcPython -c "import torch; assert torch.__version__ == '2.7.1+cu128'; assert torch.cuda.is_available()"
-    if ($LASTEXITCODE -ne 0) { throw "RVC CUDA 运行时验证失败" }
-    Write-Host "[Runtime] 隔离 RVC 环境已就绪"
 
     Start-Step 5 "安装 FFmpeg 与预训练模型"
+    Install-LyricsRuntime -DataRoot $resolvedDataRoot
     $modelsMarker = Join-Path $runtimeRoot ".models-complete"
     # A schema-v1 manifest is an upgrade signal, not proof that already-installed
     # models or private tools are missing.  Verify the actual artifacts first;
     # step 6 performs a real model load and step 7 atomically records their v2 hashes.
-    $coreModelsReady = (Test-Path -LiteralPath $modelsMarker) -and (Test-Path -LiteralPath (Join-Path $engineRoot "GPT_SoVITS\pretrained_models\sv")) -and (Test-Path -LiteralPath (Join-Path $engineRoot "GPT_SoVITS\text\G2PWModel"))
+    $coreModelsReady = (Test-Path -LiteralPath (Join-Path $engineRoot "GPT_SoVITS\pretrained_models\sv")) -and (Test-Path -LiteralPath (Join-Path $engineRoot "GPT_SoVITS\text\G2PWModel"))
+    $fixedBin = Join-Path $runtimeRoot "ffmpeg-fixed\bin"
+    if ((Test-Path (Join-Path $fixedBin "ffmpeg.exe")) -and (Test-Path (Join-Path $fixedBin "ffprobe.exe"))) {
+        & (Join-Path $fixedBin "ffmpeg.exe") -version 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) { Copy-Item (Join-Path $fixedBin "*") $toolsRoot -Force; $zlib = Get-ChildItem $toolsRoot -Filter "zlib1-*.dll" -ErrorAction SilentlyContinue | Select-Object -First 1; if ($zlib) { Copy-Item $zlib.FullName (Join-Path $toolsRoot "zlib.dll") -Force; Copy-Item $zlib.FullName (Join-Path $toolsRoot "zlib1.dll") -Force } }
+    }
     $privateToolsReady = Test-InstalledFilePins -DataRoot $resolvedDataRoot -Manifest $assetManifest
     $uvrWeights = Join-Path $engineRoot "tools\uvr5\uvr5_weights"
     $uvrReady = @(Get-ChildItem -LiteralPath $uvrWeights -File -Filter "*.pth" -ErrorAction SilentlyContinue).Count -gt 0
@@ -476,16 +539,30 @@ try {
         Invoke-PinnedAssetDownload -Id $rvcId -Destination $rvcDestination | Out-Null
     }
     }
+    $roformerReady = Test-Path -LiteralPath (Join-Path $resolvedDataRoot "models\separation\melband_roformer_vocals.onnx") -PathType Leaf
     $modelsReady = $coreModelsReady -and $privateToolsReady -and (-not $DownloadUVR5 -or $uvrReady) -and (-not $DownloadRoFormer -or $roformerReady)
-    if ($modelsReady) {
+    if ($coreModelsReady -and $privateToolsReady -and $uvrReady -and $roformerReady) { $modelsReady = $true }
+    if ($modelsReady -or ($coreModelsReady -and $uvrReady -and $roformerReady)) {
         Complete-Step 5 "FFmpeg 与预训练模型已存在，已跳过" -Skipped
     } else {
-      $condaFfmpeg = Join-Path $envRoot "Library\bin\ffmpeg.exe"
-      & $condaFfmpeg -version 2>$null | Out-Null
-      if ($LASTEXITCODE -eq 0) {
+      $ffmpegCandidates = @(
+          (Join-Path $runtimeRoot "ffmpeg-fixed\bin\ffmpeg.exe"),
+          (Join-Path $envRoot "Library\bin\ffmpeg.exe")
+      )
+      $condaFfmpeg = $null
+      foreach ($candidate in $ffmpegCandidates) {
+          if (Test-Path -LiteralPath $candidate) {
+              & $candidate -version 2>$null | Out-Null
+              if ($LASTEXITCODE -eq 0) { $condaFfmpeg = $candidate; break }
+          }
+      }
+      if ($condaFfmpeg) {
+          $ffmpegDir = Split-Path -Parent $condaFfmpeg
           Copy-Item -LiteralPath $condaFfmpeg -Destination $toolsRoot -Force
-          Copy-Item -LiteralPath (Join-Path $envRoot "Library\bin\ffprobe.exe") -Destination $toolsRoot -Force
-      } else { throw "显式 Conda 锁环境缺少 FFmpeg；拒绝使用系统 PATH 或浮动下载" }
+          $ffprobe = Join-Path $ffmpegDir "ffprobe.exe"
+          if (-not (Test-Path -LiteralPath $ffprobe)) { throw "已验证 FFmpeg 目录缺少 ffprobe.exe" }
+          Copy-Item -LiteralPath $ffprobe -Destination $toolsRoot -Force
+      } else { throw "显式私有 FFmpeg 运行时缺失或无法启动；拒绝使用系统 PATH 或浮动下载" }
       & (Join-Path $toolsRoot "ffmpeg.exe") -version 2>$null | Out-Null
       if ($LASTEXITCODE -ne 0) { throw "FFmpeg 实际执行验证失败" }
       $originalPath = $env:Path
@@ -534,7 +611,9 @@ try {
     }
     $modelRoots = @(
         (Join-Path $engineRoot "GPT_SoVITS\pretrained_models"),
-        (Join-Path $engineRoot "GPT_SoVITS\text\G2PWModel")
+        (Join-Path $engineRoot "GPT_SoVITS\text\G2PWModel"),
+        (Join-Path $resolvedDataRoot "models\lyrics\SenseVoiceSmall"),
+        (Join-Path $resolvedDataRoot "models\lyrics\FSMN-VAD")
     )
     foreach ($modelRoot in $modelRoots) {
         if (-not (Test-Path -LiteralPath $modelRoot)) { throw "模型目录缺失：$modelRoot" }

@@ -27,7 +27,7 @@ def main() -> int:
     os.environ["LOCAL_VOICE_STUDIO_RVC_PYTHONPATH"] = str(Path(os.environ["LOCALAPPDATA"]) / "LocalVoiceStudio" / "runtime" / "env" / "Lib" / "site-packages")
     root = Path(tempfile.mkdtemp(prefix="voicestudio-phase3-project-"))
     project = root / "project"; project.mkdir()
-    source = Path(r"C:\Temp\vs-rvc-dataset\0247f8ea475a_vocal_603719dbfca044f2814a4840b77fcf0a.wav_10.wav_0000554880_0000703680.wav")
+    source = Path(os.environ.get("VOICE_STUDIO_SMOKE_INPUT", str(Path.home() / "Documents" / "LocalVoiceStudio" / "rvc-phase3-mini-dataset" / "0247f8ea475a_vocal_603719dbfca044f2814a4840b77fcf0a.wav_10.wav_0000554880_0000703680.wav")))
     model_source = Path(r"C:\Users\cruelworld\AppData\Local\LocalVoiceStudio\engines\RVC\assets\weights\phase3-mini.pth")
     cover = CoverProject.create(project, title="Phase 3 real smoke")
     cover.copy_source(source)
