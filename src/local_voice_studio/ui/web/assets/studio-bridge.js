@@ -50,6 +50,7 @@
   };
   window.__vsBridge = S;
   S.fileUrl = fileUrl;
+  S.playFile = playFile;
   S.$ = $;
   S.$$ = $$;
   S.esc = esc;
@@ -234,6 +235,7 @@
     rows.forEach((voice, index) => {
       const row = document.createElement('div');
       row.className = 'voice-row' + (index === 0 ? ' active' : '');
+      row.dataset.voiceId = voice.id;
       row.innerHTML = `<div class="voice-badge">◉</div>`
         + `<div><b style="font-size:9.7px">${esc(voice.name)}</b>`
         + `<div style="font-size:7.8px;color:var(--muted);margin-top:3px">${esc(voice.subtitle)}</div></div>`
@@ -242,6 +244,7 @@
         $$('.voice-row').forEach((node) => node.classList.remove('active'));
         row.classList.add('active');
         setText('#nowSub', voice.name);
+        if (window.VS_PAGES && window.VS_PAGES.tts) { window.VS_PAGES.tts.voiceId = voice.id; }
         toast(`已选择声音：${voice.name}${voice.tts_ready ? '' : '（尚不可用于文字生成）'}`);
       };
       list.appendChild(row);
@@ -271,6 +274,7 @@
     rows.forEach((voice, index) => {
       const card = document.createElement('div');
       card.className = 'voice-card-grid' + (index === 0 ? ' active' : '');
+      card.dataset.voiceId = voice.id;
       const tags = [];
       tags.push(voice.tts_ready ? '<span class="cap ok">✓ 文字生成</span>' : '<span class="cap">文字生成未就绪</span>');
       tags.push(voice.cover_ready ? '<span class="cap ok">✓ AI 翻唱</span>' : '<span class="cap">AI 翻唱未就绪</span>');
@@ -290,6 +294,8 @@
 
   function renderVoiceDetail(voice) {
     S.voice = voice;
+    S.voiceId = voice.id;
+    if (window.VS_PAGES && window.VS_PAGES.voices) { window.VS_PAGES.voices.selectedId = voice.id; }
     setText('#detailName', voice.name);
     setText('#detailMeta', `创建于 ${voice.created_text} · ${voice.asset_count} 段素材 · ${voice.duration_text}`);
     const stats = $('[data-page-view="voices"] .stat-grid');
@@ -720,8 +726,7 @@
 
   // ------------------------------------------------------------------- wire
   const UNWIRED = [
-    '#sepStart', '#trainStart', '#ttsGenerate', '#coverRender', '#previewRender',
-    '#sepDrop', '#trainDrop',
+    '#sepStart', '#trainStart', '#previewRender', '#sepDrop', '#trainDrop',
   ];
 
   function wire() {

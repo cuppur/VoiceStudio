@@ -21,8 +21,10 @@ from ...models import utc_now
 from ...paths import AppPaths, ensure_within
 from ...storage import StudioStore
 from .data import StudioSnapshot
-from .services.cover import CoverService
 from .services.base import WebService
+from .services.cover import CoverService
+from .services.tts import TtsService
+from .services.voices import VoicesService
 
 AUDIO_SUFFIXES = (".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg")
 NOT_CONNECTED = "该功能尚未接入新界面（可用 --ui-qt 打开经典界面）"
@@ -60,6 +62,10 @@ class StudioBridge(QObject):
         self._closing = False
         self.cover = CoverService(paths, store, self.project, client, self)
         self.cover.event.connect(self.event)
+        self.tts = TtsService(paths, store, self.project, client, self)
+        self.tts.event.connect(self.event)
+        self.voices = VoicesService(paths, store, self.project, client, self)
+        self.voices.event.connect(self.event)
         self._handlers: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
             "app.refresh": self._refresh,
             "engine.verify": self._engine_verify,
@@ -84,14 +90,23 @@ class StudioBridge(QObject):
             "cover.export": self._cover_export,
             "cover.lyrics": self._cover_lyrics,
             "cover.cancel": self._cover_cancel,
+            "tts.generate": self._tts_generate,
+            "tts.cancel": self._tts_cancel,
+            "tts.history": self._tts_history,
+            "voices.detail": self._voices_detail,
+            "voices.create": self._voices_create,
+            "voices.rename": self._voices_rename,
+            "voices.archive": self._voices_archive,
+            "voices.activate": self._voices_activate,
+            "voices.import_model": self._voices_import,
         }
 
     # ------------------------------------------------------------------
     def set_project(self, project: Path) -> None:
         self.project = Path(project)
         self.snapshot = StudioSnapshot(self.paths, self.store, self.project)
-        if self.cover is not None:
-            self.cover.set_project(self.project)
+        for service in (self.cover, self.tts, self.voices):
+            service.set_project(self.project)
 
     def notify(self, name: str, payload: dict[str, Any] | None = None) -> None:
         self.event.emit(str(name), json.dumps(payload or {}, ensure_ascii=False))
@@ -398,13 +413,61 @@ class StudioBridge(QObject):
 
     def handle_worker_event(self, request_id: str, event: str, payload: dict[str, Any]) -> None:
         """Route worker events to the services that own the request."""
-        for service in (self.cover,):
+        for service in (self.cover, self.tts):
             if service is not None and service.handle_worker_event(request_id, event, payload):
                 return
+
+    # -------------------------------------------------------------------- tts
+    def _tts_generate(self, data: dict[str, Any]) -> dict[str, Any]:
+        task = self.tts.generate(
+            str(data.get("profile_id", "")), str(data.get("text", "")),
+            speed=float(data.get("speed", 1.0) or 1.0),
+            pause=float(data.get("pause", 0.3) or 0.3),
+            seed=int(data.get("seed", -1) or -1),
+            language=str(data.get("language", "zh")),
+            output_dir=str(data.get("output_dir", "")),
+        )
+        return {"ok": True, "message": "已开始生成语音", **task}
+
+    def _tts_cancel(self, data: dict[str, Any]) -> dict[str, Any]:
+        return {"ok": True, "message": "已请求取消生成", **self.tts.cancel(str(data.get("request_id", "")))}
+
+    def _tts_history(self, _data: dict[str, Any]) -> dict[str, Any]:
+        return {"ok": True, "data": {"history": self.tts.history(), "profiles": self.tts.usable_profiles(),
+                                     "output_dir": self.tts.default_output_dir()}}
+
+    # ----------------------------------------------------------------- voices
+    def _voices_detail(self, data: dict[str, Any]) -> dict[str, Any]:
+        return {"ok": True, "data": self.voices.detail(str(data.get("profile_id", "")))}
+
+    def _voices_create(self, data: dict[str, Any]) -> dict[str, Any]:
+        detail = self.voices.create(str(data.get("name", "")), bool(data.get("consent", False)))
+        return {"ok": True, "message": f"已创建声音：{detail['name']}", "data": detail}
+
+    def _voices_rename(self, data: dict[str, Any]) -> dict[str, Any]:
+        detail = self.voices.rename(str(data.get("profile_id", "")), str(data.get("name", "")))
+        return {"ok": True, "message": "已重命名", "data": detail}
+
+    def _voices_archive(self, data: dict[str, Any]) -> dict[str, Any]:
+        self.voices.archive(str(data.get("profile_id", "")))
+        return {"ok": True, "message": "已移除声音配置（素材与模型保留）", "data": self.snapshot.state()}
+
+    def _voices_activate(self, data: dict[str, Any]) -> dict[str, Any]:
+        detail = self.voices.activate_version(
+            str(data.get("profile_id", "")), str(data.get("version_id", "")), str(data.get("kind", "tts")),
+        )
+        return {"ok": True, "message": "已切换模型版本", "data": detail}
+
+    def _voices_import(self, data: dict[str, Any]) -> dict[str, Any]:
+        paths = data.get("paths")
+        if not isinstance(paths, list) or not paths:
+            raise ValueError("没有选择模型文件")
+        result = self.voices.import_model([str(item) for item in paths])
+        return {"ok": True, "message": result["message"], "data": result}
 
     # ------------------------------------------------------------------
     def cleanup(self) -> None:
         self._closing = True
-        if self.cover is not None:
-            self.cover.close()
+        for service in (self.cover, self.tts, self.voices):
+            service.close()
         self._handlers.clear()

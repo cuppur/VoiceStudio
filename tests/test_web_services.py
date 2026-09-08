@@ -10,10 +10,12 @@ from PySide6.QtCore import QObject, Signal
 
 from local_voice_studio.cover.mixing.models import GainScale
 from local_voice_studio.cover.project import CoverProject
-from local_voice_studio.models import VoiceProfile
+from local_voice_studio.models import ReferenceAsset, VoiceProfile
 from local_voice_studio.paths import AppPaths
 from local_voice_studio.storage import StudioStore
 from local_voice_studio.ui.web.services.cover import CoverService
+from local_voice_studio.ui.web.services.tts import TtsService
+from local_voice_studio.ui.web.services.voices import VoicesService
 
 
 class FakeWorker(QObject):
@@ -223,3 +225,143 @@ def test_export_requires_final_mix(tmp_path: Path):
     service.attest_rights(cover_id, True)
     with pytest.raises(Exception):
         service.export(cover_id, format="wav", file_name="out", destination=tmp_path / "exports")
+
+
+# ---------------------------------------------------------------------- TTS
+def _ready_profile(tmp_path: Path, store: StudioStore, project: Path, name: str = "可用声音"):
+    checkpoint = tmp_path / "gpt.ckpt"
+    sovits = tmp_path / "sovits.pth"
+    reference = _wav(tmp_path / f"ref-{name}.wav", 3.0)
+    checkpoint.write_bytes(b"gpt")
+    sovits.write_bytes(b"sovits")
+    profile = VoiceProfile(
+        name=name, consent_confirmed=True, consent_record="本人确认",
+        consent_confirmed_at="2026-01-01T00:00:00+00:00",
+        active_gpt_checkpoint=str(checkpoint), active_sovits_checkpoint=str(sovits),
+    )
+    profile.reference_assets = [ReferenceAsset(path=str(reference), sha256="a" * 64, transcript="你好", approved=True)]
+    store.save_profile(project, profile)
+    return profile
+
+
+def test_tts_generate_requires_text_and_voice(tmp_path: Path):
+    paths, store, project, _worker, _service = _fixture(tmp_path)
+    tts = TtsService(paths, store, project, _worker)
+    profile = _ready_profile(tmp_path, store, project)
+    with pytest.raises(ValueError):
+        tts.generate(profile.id, "   ")
+    with pytest.raises(ValueError):
+        tts.generate("missing", "你好")
+
+
+def test_tts_generate_requires_consent_and_reference(tmp_path: Path):
+    paths, store, project, _worker, _service = _fixture(tmp_path)
+    tts = TtsService(paths, store, project, _worker)
+    bare = VoiceProfile(name="未授权", consent_confirmed=False)
+    store.save_profile(project, bare)
+    with pytest.raises(ValueError) as error:
+        tts.generate(bare.id, "你好")
+    assert "授权" in str(error.value) or "训练" in str(error.value)
+    profile = _ready_profile(tmp_path, store, project)
+    profile.reference_assets = []
+    store.save_profile(project, profile)
+    with pytest.raises(ValueError) as error:
+        tts.generate(profile.id, "你好")
+    assert "参考音频" in str(error.value)
+
+
+def test_tts_two_step_flow_records_generation(tmp_path: Path):
+    paths, store, project, worker, _service = _fixture(tmp_path)
+    tts = TtsService(paths, store, project, worker)
+    profile = _ready_profile(tmp_path, store, project)
+    events = _events(tts)
+    task = tts.generate(profile.id, "你好世界", speed=1.0, pause=0.3)
+    assert worker.sent[-1][1] == "load_profile"
+    assert events[0][0] == "job.started"
+    # load_profile finished → synthesize is dispatched
+    tts.handle_worker_event(task["request_id"], "result", {"outputs": []})
+    assert worker.sent[-1][1] == "synthesize"
+    synthesis = worker.sent[-1][2]
+    assert synthesis["text"] == "你好世界"
+    assert synthesis["profile_id"] == profile.id
+    assert Path(synthesis["output_dir"]).is_dir()
+    synth_request = worker.sent[-1][0]
+    tts.handle_worker_event(synth_request, "progress", {"progress": 0.5, "message": "生成第 1/2 段"})
+    assert any(name == "job.progress" for name, _payload in events)
+    wav = tmp_path / "out.wav"
+    wav.write_bytes(b"RIFF")
+    tts.handle_worker_event(synth_request, "result", {"outputs": [str(wav)]})
+    records = store.list_generation_records(project)
+    assert records and records[0].text == "你好世界"
+    assert records[0].wav_path == str(wav)
+
+
+def test_tts_rejects_empty_outputs(tmp_path: Path):
+    paths, store, project, worker, _service = _fixture(tmp_path)
+    tts = TtsService(paths, store, project, worker)
+    profile = _ready_profile(tmp_path, store, project)
+    events = _events(tts)
+    task = tts.generate(profile.id, "你好")
+    tts.handle_worker_event(task["request_id"], "result", {"outputs": []})
+    synth_request = worker.sent[-1][0]
+    tts.handle_worker_event(synth_request, "result", {"outputs": [str(tmp_path / "missing.wav")]})
+    assert events[-1][0] == "job.error"
+    assert not store.list_generation_records(project)
+
+
+def test_tts_cancel_marks_job_cancelled(tmp_path: Path):
+    paths, store, project, worker, _service = _fixture(tmp_path)
+    tts = TtsService(paths, store, project, worker)
+    profile = _ready_profile(tmp_path, store, project)
+    events = _events(tts)
+    task = tts.generate(profile.id, "你好")
+    tts.cancel(task["request_id"])
+    tts.handle_worker_event(task["request_id"], "error", {"message": "任务已取消", "cancelled": True})
+    assert events[-1][0] == "job.cancelled"
+    assert store.list_jobs()[0].status.value == "cancelled"
+
+
+# ------------------------------------------------------------------- voices
+def test_voices_create_requires_consent(tmp_path: Path):
+    paths, store, project, _worker, _service = _fixture(tmp_path)
+    voices = VoicesService(paths, store, project, _worker)
+    with pytest.raises(ValueError):
+        voices.create("新声音", consent=False)
+    detail = voices.create("新声音", consent=True)
+    assert detail["consent"] is True
+    assert detail["name"] == "新声音"
+    assert store.list_profiles(project)
+
+
+def test_voices_rename_and_archive(tmp_path: Path):
+    paths, store, project, _worker, _service = _fixture(tmp_path)
+    voices = VoicesService(paths, store, project, _worker)
+    detail = voices.create("旧名字", consent=True)
+    renamed = voices.rename(detail["id"], "新名字")
+    assert renamed["name"] == "新名字"
+    with pytest.raises(ValueError):
+        voices.rename(detail["id"], "  ")
+    voices.archive(detail["id"])
+    assert voices._profile(detail["id"]).archived is True
+
+
+def test_voices_import_model_never_silently_enables(tmp_path: Path):
+    paths, store, project, _worker, _service = _fixture(tmp_path)
+    voices = VoicesService(paths, store, project, _worker)
+    model = tmp_path / "voice.pth"
+    model.write_bytes(b"x")
+    result = voices.import_model([str(model)])
+    assert result["registered"] == [str(model)]
+    assert "不会直接启用" in result["message"]
+    assert not store.list_profiles(project)
+
+
+def test_voices_detail_lists_versions(tmp_path: Path):
+    paths, store, project, _worker, _service = _fixture(tmp_path)
+    voices = VoicesService(paths, store, project, _worker)
+    profile = _ready_profile(tmp_path, store, project)
+    detail = voices.detail(profile.id)
+    assert detail["name"] == "可用声音"
+    assert detail["preview"].endswith(".wav")
+    # legacy checkpoints are migrated into a real model version by the store
+    assert detail["versions"] and detail["versions"][0]["kind"] == "tts"

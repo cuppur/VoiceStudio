@@ -133,7 +133,7 @@ def test_shell_renders_prototype_pages_with_real_data():
 def test_bridge_reports_unwired_actions_explicitly(tmp_path: Path):
     _paths, store, project = _project(tmp_path)
     bridge = StudioBridge(_paths, store, project)
-    reply = json.loads(bridge.invoke("tts.generate", "{}"))
+    reply = json.loads(bridge.invoke("training.start", "{}"))
     assert reply["ok"] is False
     assert "尚未接入" in reply["message"]
     unknown = json.loads(bridge.invoke("does.not.exist", "{}"))

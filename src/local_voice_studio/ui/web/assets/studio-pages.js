@@ -361,6 +361,246 @@ window.VS_PAGES = (function () {
     },
   };
 
+  // --------------------------------------------------------------------- tts
+  const tts = {
+    voiceId: '',
+    pending: '',
+
+    install() {
+      const button = q('#ttsGenerate');
+      if (button) { button.onclick = () => this.generate(); }
+      const clear = q('#clearScript');
+      if (clear) { clear.onclick = () => { const area = q('#scriptText'); if (area) { area.value = ''; this.updateChars(); } }; }
+      const area = q('#scriptText');
+      if (area) { area.oninput = () => this.updateChars(); this.updateChars(); }
+      const play = q('#ttsPlay');
+      if (play) { play.onclick = () => this.togglePlay(); }
+      const search = q('#ttsVoiceSearch');
+      if (search) { search.oninput = () => { /* 列表由适配层重渲染 */ }; }
+      this.refreshHistory();
+    },
+
+    updateChars() {
+      const area = q('#scriptText');
+      const counter = q('#charCount');
+      if (!area || !counter) { return; }
+      const count = area.value.replace(/\s/g, '').length;
+      counter.textContent = `${count} 字 · 预计 ${Math.max(1, Math.round(count / 3.2))} 秒`;
+    },
+
+    refreshHistory() {
+      S.invoke('tts.history', {}, (reply) => {
+        if (!reply.ok) { return; }
+        const data = reply.data || {};
+        const holder = q('.history-mini');
+        if (holder) {
+          const label = q('.section-label', holder);
+          holder.innerHTML = '';
+          if (label) { holder.appendChild(label); }
+          const rows = data.history || [];
+          if (!rows.length) {
+            const empty = document.createElement('div');
+            empty.className = 'history-item';
+            empty.innerHTML = '<b>暂无生成记录</b><div style="color:var(--muted);margin-top:4px">生成完成后会保留文字、声音与试听记录</div>';
+            holder.appendChild(empty);
+          }
+          rows.slice(0, 6).forEach((row) => {
+            const item = document.createElement('div');
+            item.className = 'history-item';
+            const text = esc(row.text);
+            item.innerHTML = `<b>${esc(row.created_text)} · ${esc(row.voice)}</b>`
+              + `<div style="color:var(--muted);margin-top:4px">${text}</div>`;
+            const output = (row.outputs || [])[0];
+            if (output && row.exists) {
+              item.onclick = () => S.invoke('file.open', { path: output });
+            }
+            holder.appendChild(item);
+          });
+        }
+        const output = q('[data-page-view="tts"] .script-foot');
+        if (output && data.output_dir) { output.title = '输出目录：' + data.output_dir; }
+      });
+    },
+
+    currentVoice() {
+      const active = q('#ttsVoiceList .voice-row.active');
+      return (active && active.dataset.voiceId) || this.voiceId || '';
+    },
+
+    generate() {
+      const voice = this.currentVoice();
+      const area = q('#scriptText');
+      const text = area ? area.value.trim() : '';
+      if (!voice) { toast('请先选择一个可用声音'); return; }
+      if (!text) { toast('请输入要生成的文字'); return; }
+      const speedRow = qq('[data-page-view="tts"] .setting-row');
+      const speed = speedRow[0] ? Number(q('input', speedRow[0]).value) / 100 : 1.0;
+      const pauseValue = speedRow[2] ? Number(q('input', speedRow[2]).value) : 55;
+      const pause = Math.max(0.1, Math.min(1.0, pauseValue / 100 + 0.05));
+      S.invoke('tts.generate', {
+        profile_id: voice, text, speed: speed, pause: pause, language: 'zh',
+      });
+    },
+
+    cancel() {
+      if (!this.pending) { toast('没有正在执行的生成任务'); return; }
+      S.invoke('tts.cancel', { request_id: this.pending });
+    },
+
+    togglePlay() {
+      const record = (S.generations || []).find((item) => item.exists);
+      if (!record) { toast('还没有可试听的生成结果'); return; }
+      S.playFile(record.path, record.text);
+    },
+
+    onEvent(name, data) {
+      if (data.kind !== 'tts') { return; }
+      if (name === 'job.started') {
+        this.pending = data.request_id;
+        showTask(data.request_id, '生成语音');
+      } else if (name === 'job.progress') {
+        updateTask(data.request_id, data.percent, data.stage === 'load' ? '加载声音模型' : '语音合成', data.message);
+      } else if (name === 'job.result') {
+        this.pending = '';
+        finishTask(data.request_id, '生成完成');
+        const wav = data.wav || (data.outputs || [])[0];
+        if (wav) { S.invoke('file.open', { path: wav }); }
+        S.invoke('app.refresh');
+        setTimeout(() => this.refreshHistory(), 400);
+      } else if (name === 'job.error') {
+        this.pending = '';
+        finishTask(data.request_id, '失败');
+        toast(data.message || '生成失败');
+        this.refreshHistory();
+      } else if (name === 'job.cancelled') {
+        this.pending = '';
+        finishTask(data.request_id, '已取消');
+        toast('已取消生成');
+        this.refreshHistory();
+      } else if (name === 'job.cancelling') {
+        toast('正在取消生成…');
+      }
+    },
+  };
+
+  // ------------------------------------------------------------------ voices
+  const voices = {
+    selectedId: '',
+
+    install() {
+      const actions = qq('[data-page-view="voices"] .detail-actions .btn');
+      const [audition, edit, reveal, remove] = actions;
+      if (audition) { audition.onclick = () => this.audition(); }
+      if (edit) { edit.onclick = () => this.rename(); }
+      if (reveal) { reveal.onclick = () => this.reveal(); }
+      if (remove) { remove.onclick = () => this.archive(); }
+      const versions = q('[data-page-view="voices"] .model-versions');
+      if (versions) {
+        versions.addEventListener('click', (event) => {
+          const button = event.target.closest('button[data-version]');
+          if (button) { this.activate(button.dataset.version, button.dataset.kind); }
+        });
+      }
+      const importButton = qq('[data-page-view="voices"] .page-actions .btn')[1];
+      if (importButton) { importButton.onclick = () => this.importModel(); }
+    },
+
+    detail(profileId, done) {
+      const id = profileId || this.selectedId;
+      if (!id) { toast('请先选择一个声音'); return; }
+      S.invoke('voices.detail', { profile_id: id }, (reply) => {
+        if (reply.ok) { this.selectedId = id; this.paint(reply.data); }
+        if (done) { done(reply); }
+      });
+    },
+
+    paint(detail) {
+      const versions = q('[data-page-view="voices"] .model-versions');
+      if (!versions) { return; }
+      if (!detail.versions.length) {
+        versions.innerHTML = '<div class="model-version"><div><b>尚无已保存模型</b>'
+          + '<span>完成训练后这里会列出真实版本</span></div><span class="status">未训练</span></div>';
+        return;
+      }
+      versions.innerHTML = detail.versions.map((item) => {
+        const action = item.active
+          ? '<span class="status ready">当前</span>'
+          : `<button class="mini" data-version="${esc(item.id)}" data-kind="${esc(item.kind)}"${item.usable ? '' : ' disabled'}>设为默认</button>`;
+        return `<div class="model-version"><div><b>${esc(item.name)}${item.active ? ' · 当前' : ''}</b>`
+          + `<span>${esc(item.meta)}</span></div>${action}</div>`;
+      }).join('');
+    },
+
+    audition() {
+      this.detail(this.selectedId, (reply) => {
+        if (!reply.ok) { return; }
+        const path = reply.data.preview;
+        if (!path) { toast('这个声音还没有可试听的音频'); return; }
+        S.playFile(path, reply.data.name);
+      });
+    },
+
+    async rename() {
+      const name = q('#detailName');
+      const current = name ? name.textContent : '';
+      const value = await openModal({
+        title: '重命名声音',
+        body: '只修改显示名称，素材与模型不受影响。',
+        content: `<div class="field"><label>新名称</label><input id="renameInput" value="${esc(current)}"></div>`,
+        actions: [
+          { label: '取消', value: null },
+          { label: '保存', kind: 'primary', onClick: (mask) => (q('#renameInput', mask) || {}).value || '' },
+        ],
+      });
+      if (!value) { return; }
+      S.invoke('voices.rename', { profile_id: this.selectedId, name: value });
+    },
+
+    reveal() {
+      const path = (S.data && S.data.project && S.data.project.path) || '';
+      if (!path) { toast('找不到工程目录'); return; }
+      S.invoke('file.reveal', { path: path });
+    },
+
+    async archive() {
+      const name = q('#detailName');
+      const ok = await openModal({
+        title: '移除声音配置',
+        body: `将移除「${esc(name ? name.textContent : '')}」的声音配置。原始素材、快照与模型文件都会保留。`,
+        actions: [{ label: '取消', value: false }, { label: '移除', kind: 'danger', value: true }],
+      });
+      if (!ok) { return; }
+      S.invoke('voices.archive', { profile_id: this.selectedId });
+    },
+
+    activate(versionId, kind) {
+      S.invoke('voices.activate', { profile_id: this.selectedId, version_id: versionId, kind: kind });
+    },
+
+    async importModel() {
+      const value = await openModal({
+        title: '导入模型',
+        body: '新界面不会直接启用未登记的文件：请先完成授权、版本登记与验证。请填写本地模型文件的完整路径。',
+        content: '<div class="field"><label>模型文件路径（多个用 ; 分隔）</label><input id="modelInput" placeholder="C:\\models\\voice.pth"></div>',
+        actions: [
+          { label: '取消', value: null },
+          { label: '登记', kind: 'primary', onClick: (mask) => (q('#modelInput', mask) || {}).value || '' },
+        ],
+      });
+      if (!value) { return; }
+      const paths = String(value).split(';').map((item) => item.trim()).filter(Boolean);
+      if (!paths.length) { return; }
+      S.invoke('voices.import_model', { paths: paths });
+    },
+
+    onEvent(name) {
+      if (name === 'voices.changed') {
+        S.invoke('app.refresh');
+        setTimeout(() => this.detail(this.selectedId), 400);
+      }
+    },
+  };
+
   // ----------------------------------------------------------- unsupported UI
   const UNSUPPORTED = [
     '.recommend-row',        // 效果预设：后端没有预设概念
@@ -387,6 +627,19 @@ window.VS_PAGES = (function () {
       const text = label ? label.textContent : '';
       if (text.includes('缺失时自动分离') || text.includes('自动音高校正')) { row.classList.add('hidden'); }
     });
+    // 文字生成：情绪与音高没有引擎参数，输出开关也没有对应实现
+    qq('[data-page-view="tts"] .emotion-grid').forEach((node) => node.classList.add('hidden'));
+    qq('[data-page-view="tts"] .param-card .divider').forEach((node) => node.classList.add('hidden'));
+    qq('[data-page-view="tts"] .setting-row').forEach((row) => {
+      const label = q('label', row);
+      if (label && label.textContent.includes('音高')) { row.classList.add('hidden'); }
+    });
+    qq('[data-page-view="tts"] .param-card:nth-of-type(2)').forEach((node) => node.classList.add('hidden'));
+    // 导出：后端只支持 WAV / MP3
+    qq('[data-page-view="exports"] .format-opt').forEach((node) => {
+      const text = node.textContent || '';
+      if (text.includes('FLAC') || text.includes('M4A')) { node.classList.add('hidden'); }
+    });
   }
 
   // ------------------------------------------------------------------- public
@@ -394,16 +647,26 @@ window.VS_PAGES = (function () {
     S = state;
     if (installed) {
       cover.refresh();
+      tts.refreshHistory();
       return;
     }
     installed = true;
     hideUnsupported();
     cover.install();
+    tts.install();
+    voices.install();
   }
 
   function onEvent(name, data) {
-    if (String(name).indexOf('job.') === 0) { cover.onEvent(String(name), data || {}); }
+    const event = String(name);
+    const payload = data || {};
+    if (event.indexOf('job.') === 0) {
+      cover.onEvent(event, payload);
+      tts.onEvent(event, payload);
+      return;
+    }
+    if (event === 'voices.changed') { voices.onEvent(event, payload); }
   }
 
-  return { install, onEvent, cover, openModal };
+  return { install, onEvent, cover, tts, voices, openModal };
 })();
