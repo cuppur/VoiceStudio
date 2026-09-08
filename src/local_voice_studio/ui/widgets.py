@@ -158,13 +158,14 @@ class StepTimeline(QFrame):
         self.names = names
         self.labels: list[QLabel] = []
         self.results: list[QLabel] = []
+        self.rows: list[QFrame] = []
         layout = QVBoxLayout(self); layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(4)
         for number, name in enumerate(names, 1):
             row = QFrame(); row_layout = QHBoxLayout(row); row_layout.setContentsMargins(10, 5, 10, 5)
             label = QLabel(f"○  {number}. {name}"); label.setObjectName("stepPending")
             result = QLabel(""); result.setObjectName("hint"); result.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             row_layout.addWidget(label); row_layout.addWidget(result, 1)
-            layout.addWidget(row); self.labels.append(label); self.results.append(result)
+            layout.addWidget(row); self.rows.append(row); self.labels.append(label); self.results.append(result)
 
     def update_state(self, current: int, results: dict[int, str] | None = None, failed: bool = False) -> None:
         results = results or {}

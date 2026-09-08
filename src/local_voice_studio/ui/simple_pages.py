@@ -237,7 +237,7 @@ class OneClickTrainingPage(QWidget):
     # These are the legacy narration/voice-data steps.  Singing training is
     # deliberately presented in its own card above and does not pass through
     # the transcription/review flow below.
-    STEPS = ("检查素材", "清理切片", "旁白识别", "确认数据", "训练模型", "验证并保存")
+    STEPS = ("导入素材", "素材质检", "预处理", "模型训练", "完成", "验证保存")
 
     def __init__(self, store: StudioStore, project: Path, client: WorkerClient):
         super().__init__(); self.store, self.project, self.client = store, project, client
@@ -248,14 +248,14 @@ class OneClickTrainingPage(QWidget):
         self._build(); self._restore()
 
     def _build(self) -> None:
-        self.setMinimumHeight(0); outer = QVBoxLayout(self); outer.setContentsMargins(0, 0, 0, 0); scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame); scroll.setMinimumHeight(0); scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored); content = QWidget(); root = QVBoxLayout(content); root.setContentsMargins(26, 22, 26, 24); root.setSpacing(18); outer.addWidget(scroll); scroll.setWidget(content); self.content_scroll = scroll
+        self.setMinimumHeight(0); outer = QVBoxLayout(self); outer.setContentsMargins(0, 0, 0, 0); scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame); scroll.setMinimumHeight(0); scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored); content = QWidget(); root = QVBoxLayout(content); root.setContentsMargins(18, 14, 18, 12); root.setSpacing(14); outer.addWidget(scroll); scroll.setWidget(content); self.content_scroll = scroll
         self.setObjectName("trainingPage")
         title_bar = QFrame(); title_bar.setObjectName("trainingTitleBar"); title_layout = QHBoxLayout(title_bar); title_layout.setContentsMargins(0, 0, 0, 0); copy = QVBoxLayout(); copy.setSpacing(4); title = QLabel("训练声音"); title.setObjectName("pageTitle"); subtitle = QLabel("从原始录音到可用于文字生成和 AI 翻唱的完整训练流程。所有原始音频保持不变。"); subtitle.setObjectName("pageSubtitle"); subtitle.setWordWrap(True); copy.addWidget(title); copy.addWidget(subtitle); title_layout.addLayout(copy); title_layout.addStretch(); restore = QPushButton("载入上次草稿"); restore.setObjectName("trainingRestore"); restore.clicked.connect(self._restore); title_layout.addWidget(restore); root.addWidget(title_bar)
-        workspace = QHBoxLayout(); workspace.setSpacing(18); root.addLayout(workspace, 1)
-        steps_panel = QFrame(); steps_panel.setObjectName("trainingStepsPanel"); steps_panel.setMinimumWidth(210); steps_panel.setMaximumWidth(250); steps_layout = QVBoxLayout(steps_panel); steps_layout.setContentsMargins(16, 16, 16, 16); steps_layout.setSpacing(10); steps_label = QLabel("训练流程"); steps_label.setObjectName("trainingSectionLabel"); steps_layout.addWidget(steps_label)
-        self.timeline = StepTimeline(self.STEPS); self.steps = self.timeline.labels; steps_layout.addWidget(self.timeline); steps_layout.addStretch(); steps_note = QLabel("当前流程只会在本机处理授权素材。训练完成后仍需通过模型验证，才会加入声音库。"); steps_note.setObjectName("trainingStepsNote"); steps_note.setWordWrap(True); steps_layout.addWidget(steps_note); workspace.addWidget(steps_panel)
+        workspace = QHBoxLayout(); workspace.setSpacing(14); root.addLayout(workspace, 1)
+        steps_panel = QFrame(); steps_panel.setObjectName("trainingStepsPanel"); steps_panel.setMinimumWidth(220); steps_panel.setMaximumWidth(220); steps_layout = QVBoxLayout(steps_panel); steps_layout.setContentsMargins(15, 15, 15, 15); steps_layout.setSpacing(8); steps_label = QLabel("训练流程"); steps_label.setObjectName("trainingSectionLabel"); steps_layout.addWidget(steps_label)
+        self.timeline = StepTimeline(self.STEPS); self.steps = self.timeline.labels; self.timeline.rows[-1].hide(); steps_layout.addWidget(self.timeline); steps_layout.addStretch(); steps_note = QLabel("当前流程只会在本机处理授权素材。训练完成后仍需通过模型验证，才会加入声音库。"); steps_note.setObjectName("trainingStepsNote"); steps_note.setWordWrap(True); steps_layout.addWidget(steps_note); workspace.addWidget(steps_panel)
         center = QVBoxLayout(); center.setSpacing(14); workspace.addLayout(center, 1)
-        self.singing_card = QGroupBox("AI 翻唱模型训练"); self.singing_card.setObjectName("trainingSingingCard"); singing_form = QFormLayout(self.singing_card)
+        self.singing_card = QGroupBox("训练能力"); self.singing_card.setObjectName("trainingSingingCard"); singing_form = QFormLayout(self.singing_card)
         self.singing_profile = QComboBox(); self.singing_profile.currentIndexChanged.connect(self._refresh_singing_card)
         self.singing_status = QLabel("未选择声音"); self.singing_status.setObjectName("statusChip")
         self.singing_detail = QLabel("训练完成并通过验证后，才可在 AI 翻唱中使用。现在的训练流程会自动保存歌唱模型状态。"); self.singing_detail.setWordWrap(True); self.singing_detail.setObjectName("hint")
@@ -561,11 +561,12 @@ class VoiceCard(QFrame):
     generate_requested = Signal(str); retrain_requested = Signal(str); selected = Signal(str); changed = Signal()
     def __init__(self, store: StudioStore, project: Path, profile: VoiceProfile, parent=None):
         super().__init__(parent); self.setObjectName("voiceCard"); self.store, self.project, self.profile = store, project, profile; assets = store.list_source_assets(project, profile.id); total = sum(item.duration_seconds for item in assets if not item.duplicate_of); current = next((item for item in profile.model_versions if item.id == profile.active_model_version_id), None)
-        layout = QVBoxLayout(self); top = QHBoxLayout(); name = QLabel(profile.name); name.setObjectName("cardTitle"); badge = QLabel("已训练模型" if current else "快速克隆"); badge.setObjectName("statusChip"); state = QLabel(profile.status(assets)); state.setObjectName("hint"); top.addWidget(name); top.addWidget(badge); top.addWidget(state); top.addStretch(); layout.addLayout(top)
-        created = format_timestamp(current.created_at if current else profile.updated_at); layout.addWidget(QLabel(f"{total:.1f} 秒素材 · {len(assets)} 个文件 · 当前：{current.name if current else '原始参考声音'} · {created}"))
-        target = self._preview_path(); self.player = InlineAudioPlayer(); self.player.set_source(target); layout.addWidget(self.player)
-        row = QHBoxLayout(); preview = QPushButton("▶ 试听"); preview.clicked.connect(self._preview); generate = QPushButton("用这个声音生成"); generate.setObjectName("primaryButton"); generate.clicked.connect(lambda: self.generate_requested.emit(profile.id)); rename = QPushButton("改名"); rename.clicked.connect(self._rename); retrain = QPushButton("追加训练"); retrain.clicked.connect(lambda: self.retrain_requested.emit(profile.id)); versions = QPushButton("版本历史 / A/B"); versions.clicked.connect(self._versions); row.addWidget(preview); row.addWidget(generate); row.addWidget(retrain); row.addWidget(versions); row.addWidget(rename); row.addStretch(); layout.addLayout(row)
-        advanced = QGroupBox("更多操作"); advanced.setCheckable(True); advanced.setChecked(False); form = QFormLayout(advanced); open_folder = QPushButton("打开文件位置"); open_folder.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(project / "checkpoints" / profile.id)))); remove = QPushButton("删除声音配置"); remove.clicked.connect(self._remove); form.addRow(open_folder, remove); fold_group(advanced); layout.addWidget(advanced)
+        self.setMinimumWidth(0); self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        layout = QVBoxLayout(self); layout.setContentsMargins(13, 13, 13, 12); layout.setSpacing(8); top = QHBoxLayout(); avatar = QLabel("◉"); avatar.setObjectName("voiceCardAvatar"); avatar.setAlignment(Qt.AlignCenter); avatar.setFixedSize(34, 34); top.addWidget(avatar); name = QLabel(profile.name); name.setObjectName("cardTitle"); name.setFixedWidth(104); badge = QLabel("已训练模型" if current else "快速克隆"); badge.setObjectName("statusChip"); state = QLabel(profile.status(assets)); state.setObjectName("hint"); state.setMinimumWidth(0); state.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred); state.hide(); top.addWidget(name); top.addWidget(badge); top.addWidget(state); top.addStretch(); layout.addLayout(top)
+        created = format_timestamp(current.created_at if current else profile.updated_at); metadata = QLabel(f"{total:.1f} 秒素材 · {len(assets)} 个文件 · 当前：{current.name if current else '原始参考声音'} · {created}"); metadata.setWordWrap(False); metadata.setMinimumWidth(0); metadata.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred); metadata.setToolTip(metadata.text()); layout.addWidget(metadata)
+        target = self._preview_path(); self.player = InlineAudioPlayer(); self.player.setObjectName("voiceCardPlayer"); self.player.set_source(target); layout.addWidget(self.player); self.player.hide()
+        row = QHBoxLayout(); preview = QPushButton("▶ 试听"); preview.clicked.connect(self._preview); generate = QPushButton("用这个声音生成"); generate.setObjectName("primaryButton"); generate.clicked.connect(lambda: self.generate_requested.emit(profile.id)); rename = QPushButton("改名"); rename.clicked.connect(self._rename); retrain = QPushButton("追加训练"); retrain.clicked.connect(lambda: self.retrain_requested.emit(profile.id)); versions = QPushButton("版本历史 / A/B"); versions.clicked.connect(self._versions); row.addWidget(preview); row.addWidget(generate); row.addWidget(retrain); row.addWidget(versions); row.addWidget(rename); row.addStretch(); action_box = QWidget(); action_box.setObjectName("voiceCardActions"); action_box.setLayout(row); layout.addWidget(action_box); action_box.hide()
+        advanced = QGroupBox("更多操作"); advanced.setCheckable(True); advanced.setChecked(False); form = QFormLayout(advanced); open_folder = QPushButton("打开文件位置"); open_folder.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(project / "checkpoints" / profile.id)))); remove = QPushButton("删除声音配置"); remove.clicked.connect(self._remove); form.addRow(open_folder, remove); fold_group(advanced); layout.addWidget(advanced); advanced.hide()
     def _preview_path(self) -> str:
         version = next((item for item in self.profile.model_versions if item.id == self.profile.active_model_version_id), None)
         if version:
@@ -606,7 +607,7 @@ class MyVoicesPage(QWidget):
     profiles_changed = Signal(); generate_requested = Signal(str); retrain_requested = Signal(str)
     def __init__(self, store: StudioStore, project: Path):
         super().__init__(); self.store, self.project, self._filter, self._selected_profile_id = store, project, "all", ""; self.setObjectName("voicesPage"); self.setMinimumHeight(0)
-        outer = QVBoxLayout(self); outer.setContentsMargins(0, 0, 0, 0); page_scroll = QScrollArea(); page_scroll.setWidgetResizable(True); page_scroll.setFrameShape(QFrame.NoFrame); page_scroll.setMinimumHeight(0); page_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored); content = QWidget(); root = QVBoxLayout(content); root.setContentsMargins(24, 20, 24, 18); root.setSpacing(14); outer.addWidget(page_scroll); page_scroll.setWidget(content); self.content_scroll = page_scroll
+        outer = QVBoxLayout(self); outer.setContentsMargins(0, 0, 0, 0); page_scroll = QScrollArea(); page_scroll.setWidgetResizable(True); page_scroll.setFrameShape(QFrame.NoFrame); page_scroll.setMinimumHeight(0); page_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored); content = QWidget(); root = QVBoxLayout(content); root.setContentsMargins(18, 14, 18, 12); root.setSpacing(14); outer.addWidget(page_scroll); page_scroll.setWidget(content); self.content_scroll = page_scroll
         titlebar = QHBoxLayout(); copy = QVBoxLayout(); copy.setSpacing(3); title = QLabel("我的声音"); title.setObjectName("pageTitle"); copy.addWidget(title); subtitle = QLabel("统一管理文字生成与 AI 翻唱音色能力。"); subtitle.setObjectName("pageSubtitle"); copy.addWidget(subtitle); titlebar.addLayout(copy, 1)
         self.new_voice = QPushButton("＋ 训练新声音"); self.new_voice.setObjectName("primaryButton"); self.new_voice.clicked.connect(lambda: self.retrain_requested.emit("")); titlebar.addWidget(self.new_voice)
         self.import_models = QPushButton("导入模型…"); self.import_models.setObjectName("secondaryButton"); self.import_models.clicked.connect(self._choose_model_files); titlebar.addWidget(self.import_models); root.addLayout(titlebar)
@@ -615,7 +616,7 @@ class MyVoicesPage(QWidget):
         for key, label in (("all", "全部"), ("tts", "文字生成"), ("cover", "AI 翻唱")):
             button = QPushButton(label); button.setObjectName("voiceFilter"); button.setCheckable(True); button.clicked.connect(lambda _checked=False, value=key: self._set_filter(value)); self.filter_buttons[key] = button; toolbar.addWidget(button)
         library_layout.addLayout(toolbar); self.scroll = QScrollArea(); self.scroll.setObjectName("voicesScroll"); self.scroll.setWidgetResizable(True); library_layout.addWidget(self.scroll, 1); workspace.addWidget(library, 1)
-        self.detail = QFrame(); self.detail.setObjectName("voiceDetail"); self.detail.setFixedWidth(320); detail_layout = QVBoxLayout(self.detail); detail_layout.setContentsMargins(18, 18, 18, 18); detail_layout.setSpacing(11)
+        self.detail = QFrame(); self.detail.setObjectName("voiceDetail"); self.detail.setFixedWidth(340); detail_layout = QVBoxLayout(self.detail); detail_layout.setContentsMargins(18, 18, 18, 18); detail_layout.setSpacing(11)
         detail_hero = QFrame(); detail_hero.setObjectName("voiceDetailHero"); hero_layout = QVBoxLayout(detail_hero); hero_layout.setContentsMargins(0, 0, 0, 12); hero_layout.setSpacing(5)
         self.detail_avatar = QLabel("◉"); self.detail_avatar.setObjectName("voiceDetailAvatar"); self.detail_avatar.setAlignment(Qt.AlignCenter); hero_layout.addWidget(self.detail_avatar, alignment=Qt.AlignCenter)
         self.detail_name = QLabel("选择一个声音"); self.detail_name.setObjectName("voiceDetailName"); self.detail_name.setAlignment(Qt.AlignCenter); hero_layout.addWidget(self.detail_name)
@@ -624,7 +625,11 @@ class MyVoicesPage(QWidget):
         for index, caption in enumerate(("授权素材", "可用时长", "文字生成", "AI 翻唱")):
             card = QFrame(); card.setObjectName("voiceStat"); card_layout = QVBoxLayout(card); card_layout.setContentsMargins(9, 8, 9, 8); card_layout.setSpacing(2); value = QLabel("—"); value.setObjectName("voiceStatValue"); caption_label = QLabel(caption); caption_label.setObjectName("voiceStatCaption"); card_layout.addWidget(value); card_layout.addWidget(caption_label); stats_layout.addWidget(card, index // 2, index % 2); self.detail_stats.append(value)
         detail_layout.addWidget(stats)
-        capability_label = QLabel("能力状态"); capability_label.setObjectName("sectionLabel"); detail_layout.addWidget(capability_label); self.detail_capabilities = QLabel("尚未选择声音"); self.detail_capabilities.setObjectName("voiceCapabilities"); self.detail_capabilities.setWordWrap(True); detail_layout.addWidget(self.detail_capabilities); version_label = QLabel("模型版本"); version_label.setObjectName("sectionLabel"); detail_layout.addWidget(version_label); self.detail_versions = QLabel("没有可显示的版本记录"); self.detail_versions.setObjectName("voiceVersions"); self.detail_versions.setWordWrap(True); detail_layout.addWidget(self.detail_versions); detail_layout.addStretch(); self.detail_note = QLabel("所有操作均使用本地项目中的授权、素材和模型记录。"); self.detail_note.setObjectName("hint"); self.detail_note.setWordWrap(True); detail_layout.addWidget(self.detail_note); workspace.addWidget(self.detail); root.addLayout(workspace, 1); self.refresh()
+        capability_label = QLabel("能力状态"); capability_label.setObjectName("sectionLabel"); detail_layout.addWidget(capability_label); self.detail_capabilities = QLabel("尚未选择声音"); self.detail_capabilities.setObjectName("voiceCapabilities"); self.detail_capabilities.setWordWrap(True); detail_layout.addWidget(self.detail_capabilities); version_label = QLabel("模型版本"); version_label.setObjectName("sectionLabel"); detail_layout.addWidget(version_label); self.detail_versions = QLabel("没有可显示的版本记录"); self.detail_versions.setObjectName("voiceVersions"); self.detail_versions.setWordWrap(True); detail_layout.addWidget(self.detail_versions); detail_layout.addStretch(); self.detail_note = QLabel("所有操作均使用本地项目中的授权、素材和模型记录。"); self.detail_note.setObjectName("hint"); self.detail_note.setWordWrap(True); detail_layout.addWidget(self.detail_note)
+        detail_actions = QWidget(); detail_actions.setObjectName("voiceDetailActions"); detail_grid = QGridLayout(detail_actions); detail_grid.setContentsMargins(0, 0, 0, 0); detail_grid.setSpacing(8)
+        preview_button = QPushButton("▶ 试听"); preview_button.clicked.connect(self._preview_selected); generate_button = QPushButton("用于生成"); generate_button.setObjectName("primaryButton"); generate_button.clicked.connect(self._generate_selected); retrain_button = QPushButton("追加训练"); retrain_button.clicked.connect(self._retrain_selected); versions_button = QPushButton("版本历史 / A/B"); versions_button.clicked.connect(self._versions_selected)
+        for index, button in enumerate((preview_button, generate_button, retrain_button, versions_button)): detail_grid.addWidget(button, index // 2, index % 2)
+        detail_layout.addWidget(detail_actions); workspace.addWidget(self.detail); root.addLayout(workspace, 1); self.refresh()
     def _set_filter(self, value: str) -> None:
         self._filter = value; self.refresh()
     def refresh(self) -> None:
@@ -638,7 +643,7 @@ class MyVoicesPage(QWidget):
         if not profiles:
             empty = QLabel("没有符合条件的声音。训练完成并确认授权后会显示在这里。"); empty.setObjectName("emptyState"); empty.setAlignment(Qt.AlignCenter); layout.addWidget(empty, 0, 0, 1, 2)
         for index, profile in enumerate(profiles):
-            card = VoiceCard(self.store, self.project, profile); card.generate_requested.connect(self.generate_requested); card.retrain_requested.connect(self.retrain_requested); card.selected.connect(self._select_profile); card.changed.connect(self._changed); layout.addWidget(card, index // 2, index % 2)
+            card = VoiceCard(self.store, self.project, profile); card.generate_requested.connect(self.generate_requested); card.retrain_requested.connect(self.retrain_requested); card.selected.connect(self._select_profile); card.changed.connect(self._changed); layout.addWidget(card, index // 3, index % 3)
         if profiles:
             if not any(item.id == self._selected_profile_id for item in profiles): self._selected_profile_id = profiles[0].id
             self._select_profile(self._selected_profile_id)
@@ -667,6 +672,35 @@ class MyVoicesPage(QWidget):
             active = next((item for item in profile.singing_models if item.id == profile.active_singing_model_id), profile.singing_models[-1])
             versions.append(f"AI 翻唱 · {active.engine} · {active.trust_status}")
         self.detail_versions.setText("\n".join(versions) if versions else "尚无已保存的模型版本")
+
+    def _selected_profile(self):
+        return next((item for item in self.store.list_profiles(self.project) if item.id == self._selected_profile_id and not item.archived), None)
+
+    def _preview_selected(self) -> None:
+        profile = self._selected_profile()
+        if not profile:
+            return
+        path = next((item.path for item in profile.reference_assets if item.approved and Path(item.path).is_file()), "")
+        if not path:
+            show_error(self, "这个声音还没有可试听文件")
+            return
+        player = InlineAudioPlayer(self); player.set_source(path); player.toggle(); self._detail_player = player
+
+    def _generate_selected(self) -> None:
+        if self._selected_profile_id:
+            self.generate_requested.emit(self._selected_profile_id)
+
+    def _retrain_selected(self) -> None:
+        if self._selected_profile_id:
+            self.retrain_requested.emit(self._selected_profile_id)
+
+    def _versions_selected(self) -> None:
+        profile = self._selected_profile()
+        if profile:
+            dialog = VersionHistoryDialog(self.store, self.project, profile, self)
+            dialog.changed.connect(self._changed)
+            dialog.exec()
+
     def _changed(self) -> None: self.refresh(); self.profiles_changed.emit()
 
     def _choose_model_files(self) -> None:

@@ -391,6 +391,60 @@ QCheckBox::indicator:disabled { background: @color.disabled_surface; border-colo
 #coverPage #trackStatus[state="error"] { color:#c64e4e; background:#fff0f0; }
 #coverPage #songList::item:hover { background:#faf7f3; color:#251f1a; }
 
+/* HTML v4 training workspace proportions and card treatment. */
+#trainingPage, #trainingPage QScrollArea {
+    background:#f6f3ef;
+}
+#trainingPage #trainingStepsPanel, #trainingPage #trainingMaterialsCard,
+#trainingPage #trainingDiagnosticsCard, #trainingPage #trainingSingingCard,
+#trainingPage #trainingRunCard {
+    background:#ffffff; border:1px solid #e9e1d8; border-radius:14px;
+}
+#trainingPage #trainingStepsPanel { padding:0; }
+#trainingPage #trainingSectionLabel {
+    color:#9c9188; font-size:9px; font-weight:760;
+}
+#trainingPage #stepPending, #trainingPage #stepActive,
+#trainingPage #stepDone, #trainingPage #stepFailed {
+    color:#90857b; font-size:9.5px; padding:9px; border-radius:10px;
+}
+#trainingPage #stepActive { color:#d86916; background:#fff3e8; }
+#trainingPage #stepDone { color:#2a865d; }
+#trainingPage #stepFailed { color:#c64e4e; background:#fff0f0; }
+#trainingPage #trainingStepsNote, #trainingPage #trainingQualityDetails {
+    color:#9d9288; font-size:8px; line-height:1.45;
+}
+#trainingPage #trainingSingingCard::title {
+    color:#9c9188; font-size:9px; font-weight:760;
+    subcontrol-origin:margin; left:13px; padding:0 5px;
+}
+#trainingPage #trainingSingingCard,
+#trainingPage #trainingMaterialsCard { padding:0; }
+#trainingPage #dropArea {
+    min-height:145px; border:1.5px dashed #e3c4ac; border-radius:14px;
+    background:#fffaf6;
+}
+#trainingPage #dropTitle { color:#d86a18; font-size:11px; }
+#trainingPage #trainingMaterialState {
+    color:#9b9087; background:#fbf8f4; border:1px solid #f0e7de;
+    border-radius:10px; padding:10px;
+}
+#trainingPage #trainingQualitySummary { color:#2f2924; font-size:15px; font-weight:760; }
+#trainingPage #trainingRunStatus { color:#9b9087; font-size:9px; }
+
+/* HTML v4 voice grid cards. */
+#voicesPage, #voicesPage QScrollArea { background:#f6f3ef; border:0; }
+#voicesPage #voiceCard {
+    background:#ffffff; border:1px solid #e9e1d8; border-radius:14px;
+}
+#voicesPage #voiceCard:hover { border-color:#f0c5a3; }
+#voicesPage #voiceCardAvatar, #voicesPage #voiceDetailAvatar {
+    color:#d86a18; background:linear-gradient(145deg,#fff0e2,#ffc795);
+    border-radius:11px; font-size:15px;
+}
+#voicesPage #voiceCard QLabel#hint { color:#9b9087; font-size:8px; }
+#voicesPage #voiceDetailActions QPushButton { min-height:30px; padding:5px 8px; font-size:9px; }
+
 /* Final override for the HTML v4 recent-project cards. */
 #recentProjectCard { background:#ffffff; border:1px solid #e9e1d8; border-radius:14px; padding:0; }
 #recentProjectCard:hover { background:#ffffff; border-color:#f0c5a3; }
