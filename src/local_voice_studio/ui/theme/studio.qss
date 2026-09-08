@@ -267,6 +267,24 @@ QCheckBox::indicator:disabled { background: @color.disabled_surface; border-colo
 #projectThumb3 { background:#eee4db; }
 #recentProjectTitle { color:#423932; font-size:12px; font-weight:700; margin-top:10px; }
 #recentProjectMeta { color:#978b80; font-size:10px; margin-top:4px; }
+#exportsPage #exportsStorageCard, #exportsPage #exportsFormatCard {
+    background:#fffaf6; border:1px solid #eee3d8; border-radius:11px;
+}
+#exportsPage #exportsStorage { color:#342d28; font-size:15px; font-weight:760; line-height:1.25; }
+#exportsPage #exportsStorageBar {
+    min-height:6px; max-height:6px; background:#eee5dc; border:0; border-radius:3px;
+}
+#exportsPage #exportsStorageBar::chunk { background:#ff9a4a; border-radius:3px; }
+#exportsPage #exportsStorageBreakdown { color:#9b9087; font-size:8px; line-height:1.5; }
+#exportsPage #exportFormatButton {
+    color:#72665c; background:#ffffff; border:1px solid #e9e1d8;
+    border-radius:8px; padding:7px 5px; font-size:9px;
+}
+#exportsPage #exportFormatButton:checked {
+    color:#d66916; background:#fff0e4; border-color:#ffc999;
+}
+#exportsPage #exportsBatchCard { background:#fff4ea; border:1px solid #f1d6be; border-radius:9px; }
+#exportsPage #exportsBatchTitle { color:#4e443c; font-size:10px; font-weight:700; }
 
 /* HTML v4 task drawer / task center */
 #taskCenterDialog { background:#f6f3ef; }
@@ -494,6 +512,9 @@ QCheckBox::indicator:disabled { background: @color.disabled_surface; border-colo
 }
 #voicesPage #voiceCard QLabel#hint { color:#9b9087; font-size:8px; }
 #voicesPage #voiceDetailActions QPushButton { min-height:30px; padding:5px 8px; font-size:9px; }
+#voicesPage #voiceDetailWave {
+    background:#fffaf5; border:1px solid #e9e1d8; border-radius:10px;
+}
 
 /* Final override for the HTML v4 recent-project cards. */
 #recentProjectCard { background:#ffffff; border:1px solid #e9e1d8; border-radius:14px; padding:0; }

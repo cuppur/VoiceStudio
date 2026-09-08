@@ -20,7 +20,7 @@ from ..storage import StudioStore
 from .studio_widgets import TrackStatus
 from .cover_session import LyricLine
 from .export_rows import ExportRowData, ExportTableRow
-from .html_pages import PreviewStemWave
+from .html_pages import PreviewStemWave, RecentProjectCard
 
 
 class PreviewWorkerClient(QObject):
@@ -216,7 +216,9 @@ def apply_preview_presentation(window) -> None:
         for kind, name, source in shown:
             exports.rows.addWidget(ExportTableRow(ExportRowData(name, source, kind, "", "视觉样例")))
         exports.rows.addStretch()
-        exports.storage.setText("视觉预览\n4 个布局样例 · 不占用本地存储\n\n正常模式只扫描真实本地导出文件。")
+        exports.storage.setText("63%\n126 / 200 GB\n视觉预览 · 不占用本地存储")
+        exports.storage_bar.setValue(63)
+        exports.storage_breakdown.setText("模型 78 GB · 工程 34 GB · 缓存 14 GB\n视觉预览不占用本地存储")
     render_preview_exports()
     for key, button in exports.filters.items():
         try:
@@ -285,7 +287,30 @@ def apply_preview_presentation(window) -> None:
         pass
     training.singing_train_button.clicked.connect(lambda: training.singing_status.setText("视觉预览不提交歌唱模型训练。"))
 
-    window.recent_page.refresh()
+    recent = window.recent_page
+    def clear_recent(layout) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
+            if item.widget() is not None:
+                widget = item.widget()
+                widget.hide()
+                widget.setParent(None)
+                widget.deleteLater()
+    clear_recent(recent.grid)
+    clear_recent(recent.activity)
+    project_paths = {str(item.get("name") or ""): Path(item["path"]) for item in window.store.list_projects()}
+    recent_samples = (
+        ("HTML v4 视觉样例", "落日信号 · AI 翻唱", "Studio Voice 01 · 刚刚编辑"),
+        ("晚风经过车站", "晚风经过车站", "AI 翻唱 · 今天 13:22"),
+        ("旁白文稿 · 九月", "旁白文稿 09-05", "文字生成 · 今天 12:18"),
+        ("星河旧梦 · 分轨", "星河旧梦 · 分轨", "音频分离 · 昨天"),
+    )
+    for index, (project_name, title, meta) in enumerate(recent_samples):
+        card = RecentProjectCard(project_paths.get(project_name, window.project), title, meta, index)
+        card.open_requested.connect(recent.project_selected.emit)
+        recent.grid.addWidget(card, index // 3, index % 3)
+    for title, meta in (("生成了翻唱成品", "落日信号 · 2 分钟前"), ("训练完成", "Studio Voice 02 · 今天 11:03"), ("导出 2 个文件", "WAV + MP3 · 昨天 23:40"), ("清理了音频缓存", "释放 2.4 GB · 昨天")):
+        activity = QLabel(f"{title}\n{meta}"); activity.setObjectName("recentActivityItem"); activity.setWordWrap(True); recent.activity.addWidget(activity)
 
 
 def create_preview_window():
@@ -325,10 +350,12 @@ def create_preview_window():
     window._header_layout.insertWidget(2, badge)
     apply_preview_presentation(window)
     window.voice_page.refresh()
+    window.voice_page.detail_wave.set_visual_sample(True)
+    window.voice_page.detail_wave.show()
+    window.voice_page.detail_note.hide()
     try:
         window.voice_page.import_models.clicked.disconnect()
     except RuntimeError:
         pass
     window.voice_page.import_models.clicked.connect(lambda: window.voice_page.detail_note.setText("视觉预览不打开文件选择器，也不会登记或启用模型文件。"))
-    window.recent_page.refresh()
     return window
