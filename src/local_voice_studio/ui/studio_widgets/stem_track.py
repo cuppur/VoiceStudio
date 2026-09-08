@@ -4,7 +4,7 @@ from enum import Enum
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QSlider, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSlider, QWidget
 
 from .waveform import WaveformWidget
 
@@ -40,8 +40,19 @@ class StemTrackWidget(QWidget):
         self.name_label = QLabel(name)
         self.name_label.setMinimumWidth(76)
         self.name_label.setMaximumWidth(112)
-        self.mute = QCheckBox("M")
-        self.solo = QCheckBox("S")
+        self.mute = QPushButton("M")
+        self.solo = QPushButton("S")
+        for button, label in ((self.mute, "静音"), (self.solo, "独奏")):
+            button.setCheckable(True)
+            button.setFixedSize(19, 19)
+            button.setAccessibleName(f"{name} · {label}")
+            button.setToolTip(label)
+            button.setStyleSheet("""
+                QPushButton {min-width:17px; min-height:17px; padding:0; background:#fbf9f6;
+                    color:#a2968b; border:1px solid #eee7df; border-radius:6px; font-size:8px;}
+                QPushButton:hover {background:#fff7ef; border-color:#ffd8ba;}
+                QPushButton:checked {color:#d56816; background:#fff0e4; border-color:#ffd8ba;}
+            """)
         self.volume = QSlider(Qt.Horizontal)
         self.volume.setMinimumWidth(72)
         self.volume.setMaximumWidth(130)
