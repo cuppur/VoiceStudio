@@ -151,11 +151,25 @@ def apply_preview_presentation(window) -> None:
     generate = window.generate_page
     generate.ui_preview = True
     generate.empty.hide(); generate.form.show()
-    generate.profile.addItem("清栀 · 视觉样例", "preview-voice")
+    generate.profile.clear()
+    for index, name in enumerate(("Studio Voice 01", "小岚", "旁白男声", "女声 A", "实验音色 02")):
+        generate.profile.addItem(f"{name} · 视觉样例", f"preview-voice-{index}")
     generate._populate_voice_rows()
     generate.text.setPlainText("这里的文字、语速与风格控件可用于校验布局；视觉预览不会生成文件。")
     generate.preview_wave.set_visual_sample(True)
     generate.generation_status.setText("视觉预览：本地 Worker 已隔离")
+    history_content = QFrame()
+    history_layout = QVBoxLayout(history_content)
+    history_layout.setContentsMargins(0, 0, 0, 0)
+    history_layout.setSpacing(7)
+    for stamp, excerpt in (("今天 14:42", "夜色慢慢落下来…"), ("今天 13:18", "欢迎回来，今天…"), ("昨天 22:06", "这封信写给…")):
+        item = QFrame(); item.setObjectName("ttsHistoryItem")
+        item_layout = QVBoxLayout(item); item_layout.setContentsMargins(9, 9, 9, 9); item_layout.setSpacing(4)
+        title = QLabel(stamp); title.setObjectName("ttsHistoryItemTitle"); item_layout.addWidget(title)
+        copy = QLabel(f"“{excerpt}”"); copy.setObjectName("ttsHistoryItemText"); copy.setWordWrap(True); item_layout.addWidget(copy)
+        history_layout.addWidget(item)
+    history_layout.addStretch()
+    generate.history.setWidget(history_content)
 
     separator = window.separator_page
     def clear_layout(layout) -> None:
