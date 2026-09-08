@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, QTimer, Qt, QUrl, Signal
 from PySide6.QtMultimedia import QMediaPlayer
-from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget
 
 from ..cover import CoverProject
 from ..product_models import Take
@@ -140,7 +140,7 @@ class CoverPage(QWidget):
         return CoverProject.load(self.project, cover_id)
 
     def _build(self):
-        root = QVBoxLayout(self); root.setContentsMargins(22, 18, 22, 14); root.setSpacing(12)
+        self.setMinimumHeight(0); outer = QVBoxLayout(self); outer.setContentsMargins(0, 0, 0, 0); page_scroll = QScrollArea(); page_scroll.setObjectName("coverScroll"); page_scroll.setWidgetResizable(True); page_scroll.setFrameShape(QFrame.NoFrame); page_scroll.setMinimumHeight(0); page_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored); content = QWidget(); content.setObjectName("coverContent"); root = QVBoxLayout(content); root.setContentsMargins(22, 18, 22, 14); root.setSpacing(12); outer.addWidget(page_scroll); page_scroll.setWidget(content); self.content_scroll = page_scroll
         header = QFrame(); header.setObjectName("songHeader"); header_layout = QHBoxLayout(header); header_layout.setContentsMargins(0, 0, 0, 0)
         self.cover_art = QFrame(); self.cover_art.setObjectName("coverArt"); self.cover_art.setFixedSize(68, 68); header_layout.addWidget(self.cover_art)
         copy = QVBoxLayout(); eyebrow = QLabel("当前歌曲工程  ·  STEMS"); eyebrow.setObjectName("eyebrow"); copy.addWidget(eyebrow)
@@ -149,7 +149,21 @@ class CoverPage(QWidget):
         self.separate_button = QPushButton("重新分离"); self.separate_button.setObjectName("secondaryButton"); self.separate_button.clicked.connect(self.separate_song); header_layout.addWidget(self.separate_button)
         self.import_button = QPushButton("导入歌曲"); self.import_button.setObjectName("secondaryButton"); self.import_button.setAccessibleName("导入歌曲"); self.import_button.clicked.connect(self.import_song); header_layout.addWidget(self.import_button)
 
-        center = QHBoxLayout(); center.setSpacing(14); left = QVBoxLayout(); left.setSpacing(12); left.addWidget(header); center.addLayout(left, 1)
+        center = QHBoxLayout(); center.setSpacing(14)
+        library = QFrame(); library.setObjectName("songLibrary"); library.setFixedWidth(242); self.song_library = library; library_layout = QVBoxLayout(library); library_layout.setContentsMargins(14, 14, 14, 14); library_layout.setSpacing(9)
+        library_head = QHBoxLayout(); library_head.addWidget(_label("歌曲库", "cardTitle")); library_head.addStretch(); self.song_count = _label("0 首", "songCount"); library_head.addWidget(self.song_count); library_layout.addLayout(library_head)
+        self.song_search = QLineEdit(); self.song_search.setObjectName("songSearch"); self.song_search.setPlaceholderText("搜索歌曲"); self.song_search.setClearButtonEnabled(True); self.song_search.textChanged.connect(self._refresh_song_library); library_layout.addWidget(self.song_search)
+        self._song_filter = "all"; self.song_filters = {}
+        filter_layout = QHBoxLayout(); filter_layout.setSpacing(5)
+        for key, label in (("all", "全部"), ("pending", "待处理"), ("complete", "已完成")):
+            button = QPushButton(label); button.setObjectName("songFilter"); button.setCheckable(True); button.setChecked(key == "all")
+            button.clicked.connect(lambda _checked=False, value=key: self._set_song_filter(value))
+            self.song_filters[key] = button; filter_layout.addWidget(button)
+        filter_layout.addStretch(); library_layout.addLayout(filter_layout)
+        library_import = QPushButton("＋ 导入歌曲到工程"); library_import.setObjectName("secondaryButton"); library_import.clicked.connect(self.import_song); library_layout.addWidget(library_import)
+        self.song_list = QListWidget(); self.song_list.setObjectName("songList"); self.song_list.itemActivated.connect(self._activate_library_cover); self.song_list.itemClicked.connect(self._activate_library_cover); library_layout.addWidget(self.song_list, 1)
+        library_note = _label("歌曲工程会保存 Stem、歌词、Take 与缓存。切换歌曲不会修改原始音频。", "songLibraryNote"); library_note.setWordWrap(True); library_layout.addWidget(library_note); center.addWidget(library)
+        left = QVBoxLayout(); left.setSpacing(12); left.addWidget(header); center.addLayout(left, 1)
         timeline = QFrame(); timeline.setObjectName("timelineCard"); timeline_layout = QVBoxLayout(timeline); timeline_layout.setContentsMargins(0, 0, 0, 0); timeline_layout.setSpacing(0)
         timeline_head = QHBoxLayout(); timeline_head.setContentsMargins(16, 0, 12, 0); timeline_head.addWidget(_label("多轨波形", "cardTitle")); timeline_head.addWidget(_label("· 点击或拖拽波形可定位播放", "cardSub")); timeline_head.addStretch(); self.zoom_label = QLabel("适应宽度"); self.zoom_label.setObjectName("miniChip"); timeline_head.addWidget(self.zoom_label); timeline_layout.addLayout(timeline_head)
         tracks = QWidget(); tracks.setObjectName("tracks"); tracks_layout = QVBoxLayout(tracks); tracks_layout.setContentsMargins(12, 8, 12, 10); tracks_layout.setSpacing(5); self.stems = []
@@ -157,6 +171,11 @@ class CoverPage(QWidget):
             track = StemTrackWidget(name); track.set_status(TrackStatus.EMPTY); track.seek_requested.connect(self._seek_all)
             track.solo_changed.connect(lambda _v, i=index: self._track_mix_changed(i)); track.mute_changed.connect(lambda _v, i=index: self._track_mix_changed(i)); track.volume_changed.connect(lambda _v, i=index: self._track_mix_changed(i)); self.stems.append(track); tracks_layout.addWidget(track)
         timeline_layout.addWidget(tracks, 1); left.addWidget(timeline, 1)
+        take_strip = QFrame(); take_strip.setObjectName("takeStrip"); take_layout = QHBoxLayout(take_strip); take_layout.setContentsMargins(11, 7, 11, 7); take_layout.setSpacing(8)
+        take_label = QLabel("生成版本"); take_label.setObjectName("takeStripLabel"); take_layout.addWidget(take_label)
+        self.take_selector = QComboBox(); self.take_selector.setObjectName("takeSelector"); self.take_selector.setEnabled(False); self.take_selector.currentIndexChanged.connect(self._select_persisted_take); take_layout.addWidget(self.take_selector, 1)
+        take_note = QLabel("切换 Take 会重新绑定真实音频资产"); take_note.setObjectName("takeStripNote"); take_layout.addWidget(take_note)
+        left.addWidget(take_strip)
         lower = QHBoxLayout(); lower.setSpacing(12)
         lyrics_card = QFrame(); lyrics_card.setObjectName("lyricsCard"); lyrics_layout = QVBoxLayout(lyrics_card); lyrics_layout.setContentsMargins(0, 0, 0, 0); lyric_header = QHBoxLayout(); lyric_header.setContentsMargins(14, 0, 10, 0); lyric_header.addWidget(_label("同步歌词", "cardTitle")); lyric_header.addStretch(); self.lyric_status = QLabel("未载入"); self.lyric_status.setObjectName("muted"); lyric_header.addWidget(self.lyric_status); self.lyric_prev = QPushButton("上一行"); self.lyric_prev.setObjectName("miniButton"); self.lyric_prev.clicked.connect(self._lyric_previous); lyric_header.addWidget(self.lyric_prev); self.lyric_next = QPushButton("下一行"); self.lyric_next.setObjectName("miniButton"); self.lyric_next.clicked.connect(self._lyric_next); lyric_header.addWidget(self.lyric_next); self.lyric_auto = QPushButton("自动识别歌词"); self.lyric_auto.setObjectName("miniButton"); self.lyric_auto.setToolTip("使用本地 SenseVoice 对已分离人声转写歌词（自动识别 ≠ 官方歌词）"); self.lyric_auto.clicked.connect(self.auto_transcribe_lyrics); lyric_header.addWidget(self.lyric_auto); self.lyric_import = QPushButton("导入 LRC"); self.lyric_import.setObjectName("miniButton"); self.lyric_import.clicked.connect(self.import_lyrics); lyric_header.addWidget(self.lyric_import); lyrics_layout.addLayout(lyric_header); self.lyrics = LyricView(); self.lyrics.seek_requested.connect(self._seek_all); self.lyrics.edit_requested.connect(self._edit_lyric_line); lyrics_layout.addWidget(self.lyrics, 1); lower.addWidget(lyrics_card, 1)
         self.mixer = QuickMixerPanel(); self.mixer.volume_changed.connect(self._mixer_volume_changed)
@@ -168,13 +187,27 @@ class CoverPage(QWidget):
         center.addWidget(self._build_settings_panel()); root.addLayout(center, 1)
         self.progress = TaskProgress(); self.progress.hide(); root.addWidget(self.progress)
         actions = QHBoxLayout(); actions.setSpacing(8); self.cancel_button = QPushButton("取消分离"); self.cancel_button.clicked.connect(self.cancel_separation); self.cancel_button.hide(); actions.addWidget(self.cancel_button); self.cancel_ai_button = QPushButton("取消 AI 生成"); self.cancel_ai_button.clicked.connect(self.cancel_ai_vocal); self.cancel_ai_button.hide(); actions.addWidget(self.cancel_ai_button); self.cancel_final_button = QPushButton("取消最终处理"); self.cancel_final_button.clicked.connect(self.cancel_final_task); self.cancel_final_button.hide(); actions.addWidget(self.cancel_final_button); actions.addStretch(); root.addLayout(actions)
-        self.transport = TransportWidget(); self.transport.setObjectName("globalTransport"); self.transport.play_requested.connect(self.toggle_playback); self.transport.seek_relative_requested.connect(lambda d: self._seek_all(max(0, min(self._timeline_duration(), self._position_ms() + d)))); self.transport.timeline.sliderMoved.connect(self._seek_all); self.transport.volume_changed.connect(self._set_master_volume); root.addWidget(self.transport)
+        self.transport = TransportWidget(); self.transport.setObjectName("globalTransport"); self.transport.play_requested.connect(self.toggle_playback); self.transport.seek_relative_requested.connect(lambda d: self._seek_all(max(0, min(self._timeline_duration(), self._position_ms() + d)))); self.transport.timeline.sliderMoved.connect(self._seek_all); self.transport.volume_changed.connect(self._set_master_volume); root.addWidget(self.transport); self.transport.hide()
 
     def _build_settings_panel(self):
-        panel = QFrame(); panel.setObjectName("coverSettings"); panel.setMinimumWidth(286); panel.setMaximumWidth(340); form = QVBoxLayout(panel); form.setContentsMargins(16, 14, 16, 14); form.setSpacing(9)
-        self.workflow_steps = WorkflowSteps(); form.addWidget(self.workflow_steps)
-        form.addWidget(_label("目标声音", "sectionLabel")); self.profile_combo = VoiceSelector(project_root=self.project); self.profile_combo.voice_selected.connect(self._profile_selected); form.addWidget(self.profile_combo)
-        self.voice_capabilities = QLabel("✓ AI 翻唱    ✓ 本地处理"); self.voice_capabilities.setObjectName("capabilities"); form.addWidget(self.voice_capabilities)
+        panel = QFrame(); panel.setObjectName("coverSettings"); panel.setMinimumWidth(320); panel.setMaximumWidth(320); self.cover_settings = panel
+        panel_layout = QVBoxLayout(panel); panel_layout.setContentsMargins(0, 0, 0, 0)
+        settings_scroll = QScrollArea(); settings_scroll.setObjectName("coverSettingsScroll"); settings_scroll.setWidgetResizable(True); settings_scroll.setFrameShape(QFrame.NoFrame); settings_scroll.setMinimumHeight(0)
+        settings_content = QWidget(); settings_content.setObjectName("coverSettingsContent"); form = QVBoxLayout(settings_content); form.setContentsMargins(16, 14, 16, 14); form.setSpacing(9)
+        settings_scroll.setWidget(settings_content); panel_layout.addWidget(settings_scroll)
+        # The HTML reference puts the workflow progress in the task drawer,
+        # while the cover sidebar starts with the target-voice card. Keep the
+        # progress widget alive for the real task state but out of this visual
+        # surface so the desktop layout follows that reference.
+        self.workflow_steps = WorkflowSteps(); self.workflow_steps.hide(); form.addWidget(self.workflow_steps)
+        voice_card = QFrame(); voice_card.setObjectName("voiceCard"); voice_layout = QVBoxLayout(voice_card); voice_layout.setContentsMargins(0, 0, 0, 0); voice_layout.setSpacing(8)
+        voice_layout.addWidget(_label("目标声音", "sectionLabel"))
+        voice_row = QHBoxLayout(); voice_row.setSpacing(8)
+        avatar = QLabel("◉"); avatar.setObjectName("voiceAvatar"); avatar.setAlignment(Qt.AlignCenter); avatar.setFixedSize(38, 38); voice_row.addWidget(avatar, 0, Qt.AlignTop)
+        self.profile_combo = VoiceSelector(project_root=self.project); self.profile_combo.voice_selected.connect(self._profile_selected); voice_row.addWidget(self.profile_combo, 1); voice_layout.addLayout(voice_row)
+        self.voice_capabilities = QLabel("✓ AI 翻唱    ✓ 本地处理"); self.voice_capabilities.setObjectName("capabilities"); voice_layout.addWidget(self.voice_capabilities)
+        self.smart_pitch = QLabel("智能移调建议\n歌曲与目标声音的音域将在生成前检查。"); self.smart_pitch.setObjectName("smartCard"); self.smart_pitch.setWordWrap(True); voice_layout.addWidget(self.smart_pitch)
+        form.addWidget(voice_card)
         form.addWidget(_label("翻唱设置", "cardTitle")); pitch_row = QHBoxLayout(); pitch_row.addWidget(QLabel("音调")); self.pitch = QSpinBox(); self.pitch.setRange(-12, 12); self.pitch.setSuffix(" 半音"); pitch_row.addWidget(self.pitch); self.auto_pitch_button = QPushButton("自动建议"); self.auto_pitch_button.setObjectName("miniButton"); self.auto_pitch_button.clicked.connect(self.suggest_transpose); pitch_row.addWidget(self.auto_pitch_button); form.addLayout(pitch_row)
         tune_row = QHBoxLayout(); tune_row.addWidget(QLabel("自动音高")); self.autotune = QComboBox(); self.autotune.addItem("关闭", "off"); self.autotune.addItem("轻度", "light"); self.autotune.addItem("中度", "medium"); tune_row.addWidget(self.autotune); form.addLayout(tune_row)
         self.cleanup_toggle = QCheckBox("人声清理（可选）"); self.cleanup_toggle.setChecked(False); self.cleanup_toggle.setObjectName("settingToggle"); form.addWidget(self.cleanup_toggle)
@@ -186,10 +219,21 @@ class CoverPage(QWidget):
         self.cover_button = QPushButton("开始 AI 翻唱"); self.cover_button.setObjectName("primaryButton"); self.cover_button.setAccessibleName("开始 AI 翻唱"); self.cover_button.setMinimumHeight(42); self.cover_button.setEnabled(False); self.cover_button.clicked.connect(self.generate_ai_vocal); form.addWidget(self.cover_button)
         self.render_button = QPushButton("生成最终翻唱"); self.render_button.setObjectName("primaryButton"); self.render_button.setAccessibleName("生成最终翻唱"); self.render_button.setEnabled(False); self.render_button.clicked.connect(self.request_final_render); form.addWidget(self.render_button)
         self.export_button = QPushButton("导出最终混音"); self.export_button.setObjectName("secondaryButton"); self.export_button.setAccessibleName("导出最终混音"); self.export_button.setEnabled(False); self.export_button.clicked.connect(self.export_final); form.addWidget(self.export_button)
-        self.take_selector = QComboBox(); self.take_selector.setEnabled(False); self.take_selector.currentIndexChanged.connect(self._select_persisted_take); form.addWidget(QLabel("当前 Take")); form.addWidget(self.take_selector)
         ab_label = QLabel("A / B 试听"); ab_label.setObjectName("cardTitle"); form.addWidget(ab_label)
         ab_row = QHBoxLayout(); self.ab_a_button = QPushButton("试听 A"); self.ab_b_button = QPushButton("试听 B"); self.ab_a_button.setEnabled(False); self.ab_b_button.setEnabled(False); self.ab_a_button.clicked.connect(lambda: self._select_ab("A")); self.ab_b_button.clicked.connect(lambda: self._select_ab("B")); ab_row.addWidget(self.ab_a_button); ab_row.addWidget(self.ab_b_button); form.addLayout(ab_row)
         return panel
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        """Follow the reference's 1280px compact column breakpoint."""
+        compact = self.width() <= 1300
+        width = 215 if compact else 242
+        settings_width = 292 if compact else 320
+        if hasattr(self, "song_library"):
+            self.song_library.setFixedWidth(width)
+        if hasattr(self, "cover_settings"):
+            self.cover_settings.setMinimumWidth(settings_width)
+            self.cover_settings.setMaximumWidth(settings_width)
+        super().resizeEvent(event)
 
     def _mixer_volume_changed(self, index: int, value: int) -> None:
         track_index = (3, 2, 1)[index] if 0 <= index < 3 else -1
@@ -253,10 +297,34 @@ class CoverPage(QWidget):
             take = product.get_take(str(take_id))
         except KeyError:
             return
+        # A Take is an asset selection, not only metadata. Rebind the real
+        # CoverProject files before publishing the new active selection.
+        missing = []
+        rebound = {}
+        for asset_id in take.asset_ids:
+            asset = self.cover_project.get_asset(str(asset_id))
+            if asset is None:
+                missing.append(str(asset_id)); continue
+            path = self.cover_project.root / asset.relative_path
+            if not path.is_file():
+                missing.append(str(asset_id)); continue
+            role_to_track = {"vocal": 1, "instrumental": 2, "ai_vocal": 3, "final_mix": 4}
+            if asset.role in role_to_track:
+                rebound[role_to_track[asset.role]] = path
+        if missing:
+            self.song_meta.setText(f"Take {take.name} 的音频资产缺失，已保留当前试听")
+            return
+        for index, path in rebound.items():
+            self._load_track(index, path)
         product.active_take_id = take.id; product.active_voice_profile_id = take.voice_profile_id
         self.store.save_song_project(self.project, product)
         if self.global_player:
             self.global_player.active_take_id = take.id
+            ai_path = str(rebound.get(3, self.track_paths.get(3, "")))
+            final_path = str(rebound.get(4, self.track_paths.get(4, "")))
+            if Path(ai_path).is_file() and Path(final_path).is_file():
+                self.global_player.load_take_pair(self.cover_project.id, take.id, ai_path, take.id, final_path)
+        self._update_ab_buttons()
         self.song_meta.setText(f"已切换到 {take.name}")
 
     def _select_ab(self, side: str) -> None:
@@ -317,8 +385,44 @@ class CoverPage(QWidget):
         try:
             self.cover_project = self._new_cover_project(Path(path).stem); self.rights_state.setText("歌曲权利：未确认"); copied = self._copy_source(self.cover_project, Path(path)); self.track_paths = {0: str(copied)}; lrc = Path(path).with_suffix(".lrc"); destination = None
             if lrc.is_file(): destination = self._copy_lyrics(self.cover_project, lrc)
-            self._reset_tracks(); self._load_track(0, copied, destination)
+            self._reset_tracks(); self._load_track(0, copied, destination); self._refresh_song_library()
         except Exception as exc: self.song_meta.setText("导入失败：" + str(exc))
+
+    def _refresh_song_library(self) -> None:
+        if not hasattr(self, "song_list"):
+            return
+        current_id = self.cover_project.id if self.cover_project else ""
+        query = self.song_search.text().strip().casefold()
+        try:
+            covers = sorted(self._list_cover_projects(), key=lambda item: item.updated_at, reverse=True)
+        except (OSError, ValueError):
+            covers = []
+        self.song_list.blockSignals(True); self.song_list.clear()
+        def matches(item: CoverProject) -> bool:
+            complete = bool(item.get_asset(role="final_mix"))
+            return self._song_filter == "all" or (self._song_filter == "complete" and complete) or (self._song_filter == "pending" and not complete)
+
+        visible = [item for item in covers if (not query or query in item.title.casefold()) and matches(item)]
+        for cover in visible:
+            stages = ("已完成" if cover.get_asset(role="final_mix") else "待处理")
+            item = QListWidgetItem(f"{cover.title}\n{stages}")
+            item.setData(Qt.UserRole, cover.id)
+            self.song_list.addItem(item)
+            if cover.id == current_id:
+                self.song_list.setCurrentItem(item)
+        self.song_list.blockSignals(False)
+        self.song_count.setText(f"{len(covers)} 首")
+
+    def _set_song_filter(self, value: str) -> None:
+        self._song_filter = value if value in self.song_filters else "all"
+        for key, button in self.song_filters.items():
+            button.setChecked(key == self._song_filter)
+        self._refresh_song_library()
+
+    def _activate_library_cover(self, item: QListWidgetItem) -> None:
+        cover_id = str(item.data(Qt.UserRole) or "")
+        if cover_id and (not self.cover_project or cover_id != self.cover_project.id):
+            self.restore_cover(cover_id)
 
     def _reset_tracks(self):
         self.sessions.clear()
@@ -328,7 +432,7 @@ class CoverPage(QWidget):
     def _load_track(self, index, path, lrc=None):
         path = Path(path)
         if not path.is_file(): return
-        self.stems[index].set_status(TrackStatus.PROCESSING); self.import_button.setEnabled(False); cache = self.cover_project.root / "waveform" if self.cover_project else self.paths.data_root / "cache" / "waveforms"
+        self.stems[index].set_status(TrackStatus.PROCESSING); self.import_button.setEnabled(False); cache = self.cover_project.root / "waveform" if self.cover_project else self.paths.cache_root / "waveforms"
         thread = _LoadThread(index, path, lrc, self.paths, cache, self); self._threads.add(thread); thread.loaded.connect(self._loaded); thread.failed.connect(self._load_failed); thread.finished.connect(lambda t=thread: self._load_finished(t)); thread.start()
 
     def _loaded(self, index, session):
@@ -529,10 +633,11 @@ class CoverPage(QWidget):
         if answer != QMessageBox.Yes: return False
         self._attest_rights(self.cover_project); self.rights_state.setText("歌曲权利：已确认"); return True
 
-    def restore_cover(self):
+    def restore_cover(self, selected_cover_id: str = ""):
         covers = self._list_cover_projects()
         if not covers: return
-        latest = max(covers, key=lambda item: item.updated_at)
+        latest = next((item for item in covers if item.id == selected_cover_id), None) if selected_cover_id else None
+        latest = latest or max(covers, key=lambda item: item.updated_at)
         stale = [field for field in CoverProject.STAGE_FIELDS if getattr(latest, field) == "running"]
         if stale:
             names = {"separation_status": "分离", "ai_vocal_status": "AI 人声", "mix_status": "最终混音", "export_status": "导出"}
@@ -549,6 +654,7 @@ class CoverPage(QWidget):
             final_path = self.cover_project.root / final_asset.relative_path
             if final_path.is_file(): self._load_track(4, final_path); self.export_button.setEnabled(True)
         self._update_cover_button()
+        self._refresh_song_library()
 
     def separate_song(self):
         if not self.cover_project or not self.worker: self.song_meta.setText("请先导入歌曲"); return

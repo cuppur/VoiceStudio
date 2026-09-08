@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QSignalBlocker
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QComboBox, QListView, QStyle, QStyledItemDelegate, QWidget
 
@@ -14,16 +14,16 @@ class _VoiceCardDelegate(QStyledItemDelegate):
             return super().paint(painter, option, index)
         painter.save()
         if option.state & QStyle.State_Selected:
-            painter.fillRect(option.rect, "#24283A")
+            painter.fillRect(option.rect, "#fff0e2")
         elif option.state & QStyle.State_MouseOver:
-            painter.fillRect(option.rect, "#191D26")
+            painter.fillRect(option.rect, "#faf7f2")
         name, *details = str(item.text()).split(" · ")
-        painter.setPen("#F5F7FA" if item.flags() & Qt.ItemIsEnabled else "#626A78")
+        painter.setPen("#29231f" if item.flags() & Qt.ItemIsEnabled else "#9a8e84")
         title_font = QFont(option.font); title_font.setBold(True)
         painter.setFont(title_font)
         painter.drawText(option.rect.adjusted(14, 7, -10, -24), Qt.AlignLeft | Qt.AlignVCenter, name)
         painter.setFont(option.font)
-        painter.setPen("#9299A8" if item.flags() & Qt.ItemIsEnabled else "#555C68")
+        painter.setPen("#85786e" if item.flags() & Qt.ItemIsEnabled else "#a99d93")
         painter.drawText(option.rect.adjusted(14, 27, -10, -5), Qt.AlignLeft | Qt.AlignVCenter, " · ".join(details))
         painter.restore()
 
@@ -55,17 +55,23 @@ class VoiceSelector(QComboBox):
         self.setAccessibleName("目标声音")
         self.currentIndexChanged.connect(self._emit_if_allowed)
         self.currentIndexChanged.connect(self._update_card_text)
+        # Qt can restore the model label after currentIndexChanged (including
+        # when callers block combo signals while refreshing their profiles).
+        self.lineEdit().textChanged.connect(lambda _text: self._update_card_text(self.currentIndex()))
 
     def _emit_if_allowed(self, index: int) -> None:
         if index >= 0 and self.model().item(index).flags() & Qt.ItemIsEnabled:
             self.voice_selected.emit(self.itemData(index))
 
     def _update_card_text(self, index: int) -> None:
+        blocker = QSignalBlocker(self.lineEdit())
         if index < 0:
             self.lineEdit().clear()
+            self.setToolTip("")
             return
         parts = self.itemText(index).split(" · ")
         self.lineEdit().setText(parts[0])
+        self.lineEdit().setCursorPosition(0)
         self.setToolTip(self.itemText(index))
 
     def set_profiles(self, profiles) -> None:
