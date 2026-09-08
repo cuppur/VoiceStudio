@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QSizePolicy
 
 
 class WorkflowSteps(QFrame):
@@ -21,25 +21,38 @@ class WorkflowSteps(QFrame):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("workflowSteps")
-        layout = QHBoxLayout(self)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(4, 4, 4, 4)
+        root.setSpacing(4)
+        self.current_label = QLabel()
+        self.current_label.setWordWrap(True)
+        self.current_label.setObjectName("cardTitle")
+        root.addWidget(self.current_label)
+        layout = QHBoxLayout()
+        root.addLayout(layout)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         self.chips: list[QLabel] = []
         for index, name in enumerate(self.STEPS):
-            chip = QLabel(f"{index + 1}. {name}")
+            chip = QLabel(str(index + 1))
+            chip.setToolTip(name)
+            chip.setAccessibleName(f"第 {index + 1} 步：{name}")
             chip.setObjectName("stepChip")
             chip.setAlignment(Qt.AlignCenter)
+            chip.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
             self.chips.append(chip)
             layout.addWidget(chip)
             if index < len(self.STEPS) - 1:
                 arrow = QLabel("›")
                 arrow.setObjectName("stepArrow")
+                arrow.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
                 layout.addWidget(arrow)
         self.set_step(0)
 
     def set_step(self, index: int) -> None:
         """Highlight the step at *index* (0-based); others stay dimmed."""
         index = max(0, min(len(self.chips) - 1, int(index)))
+        self.current_label.setText(f"第 {index + 1} / {len(self.STEPS)} 步 · {self.STEPS[index]}")
         for chip_index, chip in enumerate(self.chips):
             chip.setProperty("state", "current" if chip_index == index else "")
             chip.style().unpolish(chip)

@@ -43,12 +43,16 @@ class VoiceSelector(QComboBox):
         self.project_root = project_root
         self.setObjectName("voiceSelector")
         self.setMinimumHeight(58)
+        self.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.setMinimumContentsLength(10)
         self.setView(QListView())
         self.view().setItemDelegate(_VoiceCardDelegate(self.view()))
         self.view().setSpacing(2)
         self.setEditable(True)
         self.lineEdit().setReadOnly(True)
         self.lineEdit().setObjectName("voiceSelectorValue")
+        self.lineEdit().setPlaceholderText("暂无声音，请先到“训练声音”创建")
+        self.setAccessibleName("目标声音")
         self.currentIndexChanged.connect(self._emit_if_allowed)
         self.currentIndexChanged.connect(self._update_card_text)
 
@@ -61,7 +65,8 @@ class VoiceSelector(QComboBox):
             self.lineEdit().clear()
             return
         parts = self.itemText(index).split(" · ")
-        self.lineEdit().setText("\n".join((parts[0], " · ".join(parts[1:]))))
+        self.lineEdit().setText(parts[0])
+        self.setToolTip(self.itemText(index))
 
     def set_profiles(self, profiles) -> None:
         self.clear()
