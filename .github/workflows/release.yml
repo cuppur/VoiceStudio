@@ -4,8 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag, for example v0.3.0
+        description: Final release tag (must be v1.0.0)
         required: true
+        default: v1.0.0
 
 permissions:
   contents: write
@@ -15,10 +16,17 @@ permissions:
 jobs:
   signed-release:
     runs-on: windows-latest
+    environment: release
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.tag }}
+      - name: Require final release tag
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if ($env:RELEASE_TAG -ne 'v1.0.0') { throw 'Only the approved v1.0.0 final gate may publish a release' }
       - name: Require signing secrets
         shell: pwsh
         env:
@@ -50,14 +58,35 @@ jobs:
       - name: Verify signatures and create metadata
         shell: pwsh
         run: |
-          $artifacts = @('dist/LocalVoiceStudio/LocalVoiceStudio.exe') + (Get-ChildItem dist/installer/*.exe | ForEach-Object FullName)
-          foreach ($artifact in $artifacts) {
-            if ((Get-AuthenticodeSignature $artifact).Status -ne 'Valid') { throw "Invalid signature: $artifact" }
+          $binaries = @('dist/LocalVoiceStudio/LocalVoiceStudio.exe') + (Get-ChildItem dist/installer/*.exe | ForEach-Object FullName)
+          foreach ($binary in $binaries) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $binary
+            if ($signature.Status -ne 'Valid') { throw "Invalid Authenticode signature: $binary ($($signature.Status))" }
           }
-          ./scripts/create_release_metadata.ps1 -Artifact $artifacts
+          if (-not (Test-Path -LiteralPath 'THIRD_PARTY_NOTICES.md')) { throw 'THIRD_PARTY_NOTICES.md is missing' }
+          foreach ($document in @('README.md', 'CHANGELOG.md')) {
+            if (-not (Test-Path -LiteralPath $document)) { throw "Release document is missing: $document" }
+          }
       - name: Create portable archive
         shell: pwsh
         run: Compress-Archive -Path dist/LocalVoiceStudio/* -DestinationPath dist/LocalVoiceStudio-portable.zip -Force
+      - name: Create checksums and product SBOM
+        shell: pwsh
+        run: |
+          $artifacts = @('dist/LocalVoiceStudio/LocalVoiceStudio.exe', 'dist/LocalVoiceStudio-portable.zip') + (Get-ChildItem dist/installer/*.exe | ForEach-Object FullName)
+          ./scripts/create_release_metadata.ps1 -Artifact $artifacts
+          if (-not (Test-Path -LiteralPath 'release-metadata/sbom.cdx.json')) { throw 'CycloneDX SBOM is missing' }
+          if (-not (Test-Path -LiteralPath 'release-metadata/sbom.spdx')) { throw 'SPDX SBOM is missing' }
+          Get-FileHash -Algorithm SHA256 -LiteralPath $artifacts | Format-Table
+      - name: Verify audited release gates
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check jsonschema
+          $schema = Join-Path $env:RUNNER_TEMP 'cyclonedx-bom-1.5.schema.json'
+          Invoke-WebRequest -UseBasicParsing -Uri 'https://cyclonedx.org/schema/bom-1.5.schema.json' -OutFile $schema
+          python scripts/validate_product_sbom.py --cyclonedx release-metadata/sbom.cdx.json --cyclonedx-schema $schema --spdx release-metadata/sbom.spdx
+          $checkedOut = (git rev-parse HEAD).Trim()
+          python scripts/verify_release_gate.py --report release-metadata/final-gate-report.json --commit $checkedOut
       - uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
           subject-path: |
@@ -65,6 +94,7 @@ jobs:
             dist/installer/*.exe
             release-metadata/SHA256SUMS.txt
             release-metadata/sbom.cdx.json
+            release-metadata/sbom.spdx
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ inputs.tag }}
@@ -73,3 +103,7 @@ jobs:
             dist/installer/*.exe
             release-metadata/SHA256SUMS.txt
             release-metadata/sbom.cdx.json
+            release-metadata/sbom.spdx
+            THIRD_PARTY_NOTICES.md
+            README.md
+            CHANGELOG.md

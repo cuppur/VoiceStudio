@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import json
@@ -27,6 +27,7 @@ class RVCConfig:
     rmvpe_sha256: str = ""
     pretrained_sha256: tuple[str, ...] = ()
     torch_version: str = "2.7.1+cu128"
+    isolated: bool = True
 
 
 class RVCReadiness:
@@ -36,7 +37,7 @@ class RVCReadiness:
     def check(self) -> EngineReadiness:
         c = self.config
         errors: list[str] = []
-        details: dict[str, Any] = {"engine_root": str(c.engine_root), "commit": c.commit, "torch_version": c.torch_version, "isolated": c.env_root.resolve() != Path(os.environ.get("LOCAL_VOICE_STUDIO_ENV", "")).resolve() if os.environ.get("LOCAL_VOICE_STUDIO_ENV") else True}
+        details: dict[str, Any] = {"engine_root": str(c.engine_root), "commit": c.commit, "torch_version": c.torch_version, "isolated": c.isolated}
         if not c.engine_root.is_dir(): errors.append("RVC 源码目录不存在")
         required_scripts = ("train/preprocess.py", "train/dataset/extract_f0.py", "train/dataset/extract_hubert_feature.py", "train/train.py", "train/train_index.py")
         missing_scripts = [p for p in required_scripts if not (c.engine_root / p).is_file()]
@@ -218,7 +219,10 @@ class RVCEngine:
     def convert(self, payload: Mapping[str, Any], cancel: Any = None) -> Path:
         out = Path(str(payload["output_path"]))
         bridge = Path(__file__).with_name("rvc_bridge.py")
-        cmd = [str(self.config.python), str(bridge), "--input", str(payload["input_path"]), "--model", str(payload["model_path"]), "--index", str(payload.get("index_path", "")), "--pitch", str(payload.get("pitch_shift", payload.get("transpose", 0))), "--index-rate", str(payload.get("index_rate", 0.75)), "--protect", str(payload.get("protect", 0.33)), "--filter-radius", str(payload.get("filter_radius", 3)), "--f0-method", str(payload.get("f0_method", "rmvpe")), "--postprocess", str(payload.get("postprocess", "light")), "--output", str(out)]
+        cmd = [str(self.config.python), str(bridge), "--input", str(payload["input_path"]), "--model", str(payload["model_path"])]
+        if payload.get("index_path"):
+            cmd.extend(["--index", str(payload["index_path"])])
+        cmd.extend(["--pitch", str(payload.get("pitch_shift", payload.get("transpose", 0))), "--index-rate", str(payload.get("index_rate", 0.75)), "--protect", str(payload.get("protect", 0.33)), "--filter-radius", str(payload.get("filter_radius", 3)), "--f0-method", str(payload.get("f0_method", "rmvpe")), "--postprocess", str(payload.get("postprocess", "light")), "--output", str(out)])
         self._run(cmd, self.config.engine_root, cancel)
         if not out.is_file() or not out.stat().st_size: raise RuntimeError("RVC 转换未生成输出音频")
         return out

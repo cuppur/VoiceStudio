@@ -34,7 +34,7 @@ def _sha256(path: Path) -> str:
 
 
 def _validate_wav(path: Path, *, reference: Path, cancel: Any = None) -> None:
-    result = validate_wav_quality(path, reference=reference, cancel=cancel)
+    result = validate_wav_quality(path, reference=reference, cancel=cancel, match_reference_format=False)
     if not result.ok:
         if "音频质量校验已取消" in result.errors:
             raise RuntimeError("任务已取消")
@@ -249,7 +249,7 @@ class SingingPipeline:
             raise ValueError("输出资产已存在")
         self.progress(0.1, "准备 AI 人声转换")
         try:
-            produced = ensure_within(cover.root, Path(self.engine.convert({**dict(payload), **settings.to_payload(), "input_path": str(source_path), "model_path": str(ensure_within(project, project / model.checkpoint_relative_path)), "index_path": str(ensure_within(project, project / model.index_relative_path)), "output_path": str(staging)}, cancel=cancel)))
+            produced = ensure_within(cover.root, Path(self.engine.convert({**dict(payload), **settings.to_payload(), "input_path": str(source_path), "model_path": str(ensure_within(project, project / model.checkpoint_relative_path)), "index_path": str(ensure_within(project, project / model.index_relative_path)) if model.index_relative_path else "", "output_path": str(staging)}, cancel=cancel)))
             if cancel is not None and cancel.is_set():
                 raise RuntimeError("任务已取消")
             if produced != staging or not staging.is_file() or not staging.stat().st_size:

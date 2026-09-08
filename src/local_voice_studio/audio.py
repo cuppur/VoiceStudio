@@ -46,7 +46,7 @@ def sha256_file(path: Path, chunk_size: int = 1024 * 1024, cancel=None) -> str:
     with path.open("rb") as stream:
         while chunk := stream.read(chunk_size):
             if _cancelled(cancel):
-                raise RuntimeError("扫描已取消")
+                raise InterruptedError("任务已取消")
             digest.update(chunk)
     return digest.hexdigest()
 

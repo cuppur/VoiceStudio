@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import re
 import sys
+import json
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,19 +33,40 @@ class AppPaths:
     models_root: Path
     logs_root: Path
     database: Path
+    cache_directory: Path | None = None
 
     @classmethod
     def default(cls) -> "AppPaths":
         data_root = Path(os.environ.get("LOCAL_VOICE_STUDIO_HOME", _local_app_data() / APP_DIR_NAME))
+        overrides = {}
+        database = data_root / "studio.sqlite3"
+        if database.is_file():
+            try:
+                with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
+                    row = connection.execute("SELECT value FROM settings WHERE key = 'paths.overrides'").fetchone()
+                if row:
+                    value = json.loads(row[0])
+                    if isinstance(value, dict): overrides = value
+            except (sqlite3.Error, ValueError):
+                pass
+        def configured(key, environment, default):
+            value = Path(os.environ.get(environment) or overrides.get(key) or default).expanduser()
+            if not value.is_absolute(): raise ValueError(f"{key} 必须是绝对路径：{value}")
+            return value
         return cls(
             data_root=data_root,
-            projects_root=_documents(),
+            projects_root=configured("projects", "LOCAL_VOICE_STUDIO_PROJECTS", _documents()),
             runtime_root=data_root / "runtime",
             engine_root=data_root / "engines" / "GPT-SoVITS",
-            models_root=data_root / "models",
+            models_root=configured("models", "LOCAL_VOICE_STUDIO_MODELS", data_root / "models"),
             logs_root=data_root / "logs",
-            database=data_root / "studio.sqlite3",
+            database=database,
+            cache_directory=configured("cache", "LOCAL_VOICE_STUDIO_CACHE", data_root / "cache"),
         )
+
+    @property
+    def cache_root(self) -> Path:
+        return self.cache_directory or self.data_root / "cache"
 
     def ensure(self) -> None:
         for path in (
@@ -61,6 +84,18 @@ class AppPaths:
         windows = self.runtime_root / "env" / "python.exe"
         posix = self.runtime_root / "env" / "bin" / "python"
         return windows if sys.platform == "win32" else posix
+
+    @property
+    def lyrics_models_root(self) -> Path:
+        return self.models_root / "lyrics"
+
+    @property
+    def sensevoice_model_root(self) -> Path:
+        return self.lyrics_models_root / "SenseVoiceSmall"
+
+    @property
+    def fsmn_vad_model_root(self) -> Path:
+        return self.lyrics_models_root / "FSMN-VAD"
 
 
 def ensure_within(root: Path, candidate: Path) -> Path:

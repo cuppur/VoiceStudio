@@ -119,7 +119,8 @@ class StudioStore:
     def list_projects(self) -> list[dict[str, str]]:
         with self._connect() as db:
             rows = db.execute("SELECT id,name,path,updated_at FROM projects ORDER BY updated_at DESC").fetchall()
-        return [dict(row) for row in rows]
+        root = self.paths.projects_root.resolve()
+        return [dict(row) for row in rows if root in Path(row["path"]).resolve().parents]
 
     def load_project(self, project: Path) -> dict[str, Any]:
         project = ensure_within(self.paths.projects_root, project)
@@ -469,7 +470,7 @@ class StudioStore:
 
     def list_jobs(self, limit: int = 200) -> list[Job]:
         with self._connect() as db:
-            rows = db.execute("SELECT * FROM jobs ORDER BY updated_at DESC LIMIT ?", (limit,)).fetchall()
+            rows = db.execute("SELECT * FROM jobs WHERE kind NOT LIKE 'product:%' ORDER BY updated_at DESC LIMIT ?", (limit,)).fetchall()
         jobs: list[Job] = []
         for row in rows:
             jobs.append(Job(
@@ -479,6 +480,17 @@ class StudioStore:
                 created_at=row["created_at"], updated_at=row["updated_at"],
             ))
         return jobs
+
+    def delete_job_history(self, job_id: str) -> None:
+        """Remove a terminal history row only; keep all project files and outputs."""
+        with self._connect() as db:
+            row = db.execute("SELECT status, payload, kind FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if row is None:
+                raise KeyError("任务记录已不存在")
+            status = json.loads(row["payload"]).get("status") if row["kind"].startswith("product:") else row["status"]
+            if status not in {"completed", "succeeded", "published", "failed", "cancelled", "interrupted", "recoverable"}:
+                raise ValueError("任务仍在排队或执行，请等待任务结束后删除历史记录")
+            db.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
 
     @staticmethod
     def _atomic_json(path: Path, value: dict[str, Any]) -> None:

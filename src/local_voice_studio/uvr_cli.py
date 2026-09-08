@@ -25,6 +25,7 @@ def main() -> int:
     data_root = engine.parent.parent
     ffmpeg_candidates = [
         data_root / "tools" / "ffmpeg.exe",
+        data_root / "runtime" / "ffmpeg-fixed" / "bin" / "ffmpeg.exe",
         data_root / "runtime" / "env" / "Library" / "bin" / "ffmpeg.exe",
         engine / "ffmpeg.exe",
     ]

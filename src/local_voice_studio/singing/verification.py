@@ -67,6 +67,7 @@ def validate_wav_quality(
     *,
     reference: Path | None = None,
     cancel: Any = None,
+    match_reference_format: bool = True,
 ) -> VerificationResult:
     """Validate a PCM WAV using bounded memory before it becomes a product asset."""
     errors: list[str] = []
@@ -98,9 +99,9 @@ def validate_wav_quality(
             )
             if rate <= 0 or channels <= 0 or frames <= 0 or duration <= 0:
                 errors.append("音频时长或格式无效")
-            if expected_rate and rate != expected_rate:
+            if match_reference_format and expected_rate and rate != expected_rate:
                 errors.append(f"采样率与源人声不一致（期望 {expected_rate} Hz，实际 {rate} Hz）")
-            if expected_channels and channels != expected_channels:
+            if match_reference_format and expected_channels and channels != expected_channels:
                 errors.append(f"声道数与源人声不一致（期望 {expected_channels}，实际 {channels}）")
             if expected_rate and expected_frames:
                 expected_duration = expected_frames / expected_rate

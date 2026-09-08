@@ -64,6 +64,7 @@ class EngineRuntimeResolver:
         executable = name if name.lower().endswith(".exe") else f"{name}.exe"
         candidates = (
             self.paths.data_root / "tools" / executable,
+            self.paths.runtime_root / "ffmpeg-fixed" / "bin" / executable,
             self.paths.runtime_root / "env" / "Library" / "bin" / executable,
             self.paths.engine_root / executable,
             self.paths.engine_root / "tools" / executable,

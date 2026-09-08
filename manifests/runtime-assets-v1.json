@@ -120,7 +120,9 @@
       "destination": "engines/RVC/assets/hubert_base/config.json",
       "size": 1492,
       "sha256": "0346950779dfb7f9316fa74ed846e2b8a22a08eedfdc5387b73f327cb1a4a7cf",
-      "urls": ["https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/e6d0c1a17da07c33557852f9dfa2bd44cc75737d/hubert_base/config.json?download=true"]
+      "urls": [
+        "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/e6d0c1a17da07c33557852f9dfa2bd44cc75737d/hubert_base/config.json?download=true"
+      ]
     },
     {
       "id": "rvc-hubert-preprocessor-config",
@@ -128,7 +130,9 @@
       "destination": "engines/RVC/assets/hubert_base/preprocessor_config.json",
       "size": 225,
       "sha256": "7c1976a680fb7acc757cd36fb08eef878fa36c70b4c9d2d595df9c608bbbbf0e",
-      "urls": ["https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/e6d0c1a17da07c33557852f9dfa2bd44cc75737d/hubert_base/preprocessor_config.json?download=true"]
+      "urls": [
+        "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/e6d0c1a17da07c33557852f9dfa2bd44cc75737d/hubert_base/preprocessor_config.json?download=true"
+      ]
     },
     {
       "id": "rvc-hubert-model",
@@ -136,7 +140,9 @@
       "destination": "engines/RVC/assets/hubert_base/pytorch_model.bin",
       "size": 189206711,
       "sha256": "cc8c20f4b90a520757260197a3ff2505705a7adbd20ad9eeaa4e1a9b38442ef5",
-      "urls": ["https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/e6d0c1a17da07c33557852f9dfa2bd44cc75737d/hubert_base/pytorch_model.bin?download=true"]
+      "urls": [
+        "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/e6d0c1a17da07c33557852f9dfa2bd44cc75737d/hubert_base/pytorch_model.bin?download=true"
+      ]
     },
     {
       "id": "rvc-rmvpe",
@@ -144,7 +150,9 @@
       "destination": "engines/RVC/assets/rmvpe/rmvpe.pt",
       "size": 181184272,
       "sha256": "6d62215f4306e3ca278246188607209f09af3dc77ed4232efdd069798c4ec193",
-      "urls": ["https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/e6d0c1a17da07c33557852f9dfa2bd44cc75737d/rmvpe.pt?download=true"]
+      "urls": [
+        "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/e6d0c1a17da07c33557852f9dfa2bd44cc75737d/rmvpe.pt?download=true"
+      ]
     },
     {
       "id": "rvc-v2-generator",
@@ -152,7 +160,9 @@
       "destination": "engines/RVC/assets/pretrained_v2/f0G48k.pth",
       "size": 75465569,
       "sha256": "b5d51f589cc3632d4eae36a315b4179397695042edc01d15312e1bddc2b764a4",
-      "urls": ["https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/e6d0c1a17da07c33557852f9dfa2bd44cc75737d/pretrained_v2/f0G48k.pth?download=true"]
+      "urls": [
+        "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/e6d0c1a17da07c33557852f9dfa2bd44cc75737d/pretrained_v2/f0G48k.pth?download=true"
+      ]
     },
     {
       "id": "rvc-v2-discriminator",
@@ -160,7 +170,139 @@
       "destination": "engines/RVC/assets/pretrained_v2/f0D48k.pth",
       "size": 142875703,
       "sha256": "2269b73c7a4cf34da09aea99274dabf99b2ddb8a42cbfb065fb3c0aa9a2fc748",
-      "urls": ["https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/e6d0c1a17da07c33557852f9dfa2bd44cc75737d/pretrained_v2/f0D48k.pth?download=true"]
+      "urls": [
+        "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/e6d0c1a17da07c33557852f9dfa2bd44cc75737d/pretrained_v2/f0D48k.pth?download=true"
+      ]
+    },
+    {
+      "id": "lyrics-sensevoice-model",
+      "version": "70514a3da51f1160f51d18449dab6128bbd4928b",
+      "destination": "models/lyrics/SenseVoiceSmall/model.pt",
+      "size": 936291369,
+      "sha256": "833ca2dcfdf8ec91bd4f31cfac36d6124e0c459074d5e909aec9cabe6204a3ea",
+      "license": "Apache-2.0",
+      "source_revision": "70514a3da51f1160f51d18449dab6128bbd4928b",
+      "source": "https://modelscope.cn/models/iic/SenseVoiceSmall",
+      "urls": [
+        "https://modelscope.cn/api/v1/models/iic/SenseVoiceSmall/repo?Revision=70514a3da51f1160f51d18449dab6128bbd4928b&FilePath=model.pt"
+      ]
+    },
+    {
+      "id": "lyrics-sensevoice-config",
+      "version": "70514a3da51f1160f51d18449dab6128bbd4928b",
+      "destination": "models/lyrics/SenseVoiceSmall/config.yaml",
+      "size": 1855,
+      "sha256": "f71e239ba36705564b5bf2d2ffd07eece07b8e3f2bbf6d2c99d8df856339ac19",
+      "license": "Apache-2.0",
+      "source_revision": "70514a3da51f1160f51d18449dab6128bbd4928b",
+      "source": "https://modelscope.cn/models/iic/SenseVoiceSmall",
+      "urls": [
+        "https://modelscope.cn/api/v1/models/iic/SenseVoiceSmall/repo?Revision=70514a3da51f1160f51d18449dab6128bbd4928b&FilePath=config.yaml"
+      ]
+    },
+    {
+      "id": "lyrics-sensevoice-configuration",
+      "version": "70514a3da51f1160f51d18449dab6128bbd4928b",
+      "destination": "models/lyrics/SenseVoiceSmall/configuration.json",
+      "size": 396,
+      "sha256": "02810a7f8e9e8aee10370a265f7e799728ce25b4c00cdbf4602b303ee395a38e",
+      "license": "Apache-2.0",
+      "source_revision": "70514a3da51f1160f51d18449dab6128bbd4928b",
+      "source": "https://modelscope.cn/models/iic/SenseVoiceSmall",
+      "urls": [
+        "https://modelscope.cn/api/v1/models/iic/SenseVoiceSmall/repo?Revision=70514a3da51f1160f51d18449dab6128bbd4928b&FilePath=configuration.json"
+      ]
+    },
+    {
+      "id": "lyrics-sensevoice-tokens",
+      "version": "43d0ed61231c41f8393fa347b838a1f6e2d264f6",
+      "destination": "models/lyrics/SenseVoiceSmall/tokens.json",
+      "size": 352064,
+      "sha256": "a2594fc1474e78973149cba8cd1f603ebed8c39c7decb470631f66e70ce58e97",
+      "license": "Apache-2.0",
+      "source_revision": "43d0ed61231c41f8393fa347b838a1f6e2d264f6",
+      "source": "https://modelscope.cn/models/iic/SenseVoiceSmall",
+      "urls": [
+        "https://modelscope.cn/api/v1/models/iic/SenseVoiceSmall/repo?Revision=43d0ed61231c41f8393fa347b838a1f6e2d264f6&FilePath=tokens.json"
+      ]
+    },
+    {
+      "id": "lyrics-sensevoice-tokenizer",
+      "version": "70514a3da51f1160f51d18449dab6128bbd4928b",
+      "destination": "models/lyrics/SenseVoiceSmall/chn_jpn_yue_eng_ko_spectok.bpe.model",
+      "size": 377341,
+      "sha256": "aa87f86064c3730d799ddf7af3c04659151102cba548bce325cf06ba4da4e6a8",
+      "license": "Apache-2.0",
+      "source_revision": "70514a3da51f1160f51d18449dab6128bbd4928b",
+      "source": "https://modelscope.cn/models/iic/SenseVoiceSmall",
+      "urls": [
+        "https://modelscope.cn/api/v1/models/iic/SenseVoiceSmall/repo?Revision=70514a3da51f1160f51d18449dab6128bbd4928b&FilePath=chn_jpn_yue_eng_ko_spectok.bpe.model"
+      ]
+    },
+    {
+      "id": "lyrics-sensevoice-am-mvn",
+      "version": "70514a3da51f1160f51d18449dab6128bbd4928b",
+      "destination": "models/lyrics/SenseVoiceSmall/am.mvn",
+      "size": 11203,
+      "sha256": "29b3c740a2c0cfc6b308126d31d7f265fa2be74f3bb095cd2f143ea970896ae5",
+      "license": "Apache-2.0",
+      "source_revision": "70514a3da51f1160f51d18449dab6128bbd4928b",
+      "source": "https://modelscope.cn/models/iic/SenseVoiceSmall",
+      "urls": [
+        "https://modelscope.cn/api/v1/models/iic/SenseVoiceSmall/repo?Revision=70514a3da51f1160f51d18449dab6128bbd4928b&FilePath=am.mvn"
+      ]
+    },
+    {
+      "id": "lyrics-fsmn-vad-model",
+      "version": "662fc7a38813d81305085696d59eb5b1141a204a",
+      "destination": "models/lyrics/FSMN-VAD/model.pt",
+      "size": 1721366,
+      "sha256": "b3be75be477f0780277f3bae0fe489f48718f585f3a6e45d7dd1fbb1a4255fc5",
+      "license": "Apache-2.0",
+      "source_revision": "662fc7a38813d81305085696d59eb5b1141a204a",
+      "source": "https://modelscope.cn/models/iic/speech_fsmn_vad_zh-cn-16k-common-pytorch",
+      "urls": [
+        "https://modelscope.cn/api/v1/models/iic/speech_fsmn_vad_zh-cn-16k-common-pytorch/repo?Revision=662fc7a38813d81305085696d59eb5b1141a204a&FilePath=model.pt"
+      ]
+    },
+    {
+      "id": "lyrics-fsmn-vad-config",
+      "version": "25f6f166b917e3062ab09c9f7c9fce5e3f708360",
+      "destination": "models/lyrics/FSMN-VAD/config.yaml",
+      "size": 1215,
+      "sha256": "486861ca26ddb79081663b6179cb204c6bfae71c52f04aafc48a9e9d8dde1e93",
+      "license": "Apache-2.0",
+      "source_revision": "25f6f166b917e3062ab09c9f7c9fce5e3f708360",
+      "source": "https://modelscope.cn/models/iic/speech_fsmn_vad_zh-cn-16k-common-pytorch",
+      "urls": [
+        "https://modelscope.cn/api/v1/models/iic/speech_fsmn_vad_zh-cn-16k-common-pytorch/repo?Revision=25f6f166b917e3062ab09c9f7c9fce5e3f708360&FilePath=config.yaml"
+      ]
+    },
+    {
+      "id": "lyrics-fsmn-vad-configuration",
+      "version": "662fc7a38813d81305085696d59eb5b1141a204a",
+      "destination": "models/lyrics/FSMN-VAD/configuration.json",
+      "size": 365,
+      "sha256": "7bce8867e37d55c3dd8f672695ced18077a2be199ea529a5d432d5350fc0acba",
+      "license": "Apache-2.0",
+      "source_revision": "662fc7a38813d81305085696d59eb5b1141a204a",
+      "source": "https://modelscope.cn/models/iic/speech_fsmn_vad_zh-cn-16k-common-pytorch",
+      "urls": [
+        "https://modelscope.cn/api/v1/models/iic/speech_fsmn_vad_zh-cn-16k-common-pytorch/repo?Revision=662fc7a38813d81305085696d59eb5b1141a204a&FilePath=configuration.json"
+      ]
+    },
+    {
+      "id": "lyrics-fsmn-vad-am-mvn",
+      "version": "f2001ab650c1a6a6f14beb4b26288d0f57529278",
+      "destination": "models/lyrics/FSMN-VAD/am.mvn",
+      "size": 8040,
+      "sha256": "6820fef9687708c4fc3fab2530179c8fcea6262daa25514380056cd8f6eb1754",
+      "license": "Apache-2.0",
+      "source_revision": "f2001ab650c1a6a6f14beb4b26288d0f57529278",
+      "source": "https://modelscope.cn/models/iic/speech_fsmn_vad_zh-cn-16k-common-pytorch",
+      "urls": [
+        "https://modelscope.cn/api/v1/models/iic/speech_fsmn_vad_zh-cn-16k-common-pytorch/repo?Revision=f2001ab650c1a6a6f14beb4b26288d0f57529278&FilePath=am.mvn"
+      ]
     }
   ],
   "installed_file_pins": [
@@ -224,13 +366,13 @@
     },
     {
       "path": "tools/ffmpeg.exe",
-      "size": 242496512,
-      "sha256": "ad8f211bc894755e0061c55ab280ae00e8d3d4f15a8cc4372b24cfa247b5942e"
+      "size": 347648,
+      "sha256": "c44e5e7f9ee6fc9d4a030acee55dd4095bb3a275366183f8c32438093c538588"
     },
     {
       "path": "tools/ffprobe.exe",
-      "size": 242291712,
-      "sha256": "9df3b0b5275e830961df6d94e1f7a71121a7abd5ff708e9fec8a0b6084a55015"
+      "size": 165888,
+      "sha256": "453bad49472b7048b200298a9226bab6bfaaa00e88576f824dee2a4de12c5586"
     }
   ]
 }

@@ -28,7 +28,7 @@ class RVCInferenceSettings:
     f0_method: str = "rmvpe"
     pitch_backend_version: str = "rvc-rmvpe-v1"
     postprocess: str = "light"
-    autotune: str = "off"
+    autotune: str = "off"  # legacy/internal field: Pitch Smoothing, not note snapping.
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "RVCInferenceSettings":
@@ -41,7 +41,7 @@ class RVCInferenceSettings:
         f0_method = str(values.get("f0_method", payload.get("f0_method", cls.f0_method))).strip().lower()
         postprocess = str(values.get("postprocess", payload.get("postprocess", cls.postprocess))).strip().lower()
         autotune = str(values.get("autotune", payload.get("autotune", cls.autotune))).strip().lower()
-        if autotune not in {"off", "light", "medium"}: raise ValueError("自动音高仅支持关闭、轻度或中度")
+        if autotune not in {"off", "light", "medium"}: raise ValueError("音高平滑仅支持关闭、轻度或中度")
         filter_radius = int(raw_radius if raw_radius is not None else {"off": 0, "light": 3, "medium": 7}[autotune])
         if not -12 <= transpose <= 12: raise ValueError("变调必须在 -12 到 +12 半音之间")
         if not 0.0 <= index_rate <= 1.0: raise ValueError("音色相似度必须在 0 到 1 之间")
@@ -61,6 +61,11 @@ class RVCInferenceSettings:
                 "protect": self.protect, "filter_radius": self.filter_radius, "f0_method": self.f0_method,
                 "postprocess": self.postprocess, "autotune": self.autotune,
                 "inference_settings": self.canonical()}
+
+    def provenance(self) -> dict[str, Any]:
+        values = self.canonical()
+        values["pitch_smoothing"] = values.pop("autotune")
+        return values
 
 
 def _utc_now() -> str:
@@ -136,13 +141,15 @@ class SingingModelVersion:
         checkpoint = self._safe_path(project_root, self.checkpoint_relative_path)
         if checkpoint is None or not checkpoint.is_file():
             return False
+        if not self.index_relative_path:
+            return True
         index = self._safe_path(project_root, self.index_relative_path)
         return index is not None and index.is_file()
 
     def hashes_match(self, project_root: Path | None = None) -> bool:
         """Verify declared file digests (empty digests mean legacy/unpinned)."""
-        if len(self.checkpoint_sha256) != 64 or len(self.index_sha256) != 64:
+        if len(self.checkpoint_sha256) != 64 or not self._matches(project_root, self.checkpoint_relative_path, self.checkpoint_sha256):
             return False
-        return self._matches(project_root, self.checkpoint_relative_path, self.checkpoint_sha256) and self._matches(
-            project_root, self.index_relative_path, self.index_sha256
-        )
+        if not self.index_relative_path:
+            return True
+        return len(self.index_sha256) == 64 and self._matches(project_root, self.index_relative_path, self.index_sha256)

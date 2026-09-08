@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import hashlib
@@ -48,6 +48,7 @@ class WorkerService:
         self.write_lock = threading.Lock()
         self.job_coordinator = JobCoordinator(StudioStore(self.paths))
         self.shutdown_event = threading.Event()
+        self._queued_messages: list[Message] = []
         self.separation: SongSeparationPipeline | None = None
         self.cleanup: VocalCleanupService | None = None
         self.lyrics: CoverLyricsService | None = None
@@ -56,8 +57,9 @@ class WorkerService:
         if singing_engine is None:
             rvc_root = self.paths.data_root / "engines" / "RVC"
             rvc_python = self.paths.runtime_root / "rvc-env" / "Scripts" / "python.exe"
-            if not rvc_python.is_file():
-                rvc_python = self.paths.runtime_root / "rvc-env" / "python.exe"
+            isolated_rvc = rvc_python.is_file()
+            if not isolated_rvc:
+                rvc_python = self.paths.runtime_root / "env" / "python.exe"
             marker = rvc_root / ".pinned-commit"
             commit = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
             singing_engine = RVCEngine(RVCConfig(
@@ -65,7 +67,7 @@ class WorkerService:
                 hubert_sha256="cc8c20f4b90a520757260197a3ff2505705a7adbd20ad9eeaa4e1a9b38442ef5",
                 rmvpe_sha256="6d62215f4306e3ca278246188607209f09af3dc77ed4232efdd069798c4ec193",
                 pretrained_sha256=("b5d51f589cc3632d4eae36a315b4179397695042edc01d15312e1bddc2b764a4", "2269b73c7a4cf34da09aea99274dabf99b2ddb8a42cbfb065fb3c0aa9a2fc748"),
-                torch_version="2.7.1+cu128",
+                torch_version="2.7.1+cu128", isolated=isolated_rvc,
             ))
         self.singing_engine = singing_engine
 
@@ -80,12 +82,19 @@ class WorkerService:
                 pass
         message = json.dumps({"id": request_id, "type": event, "payload": payload}, ensure_ascii=False)
         terminal = request_id == self.current_request_id and event in {"result", "error"}
+        next_message = None
         if terminal:
             self.current_request_id = ""
             self._request_context = {}
+            if self._queued_messages and not self.shutdown_event.is_set():
+                next_message = self._queued_messages.pop(0)
         with self.write_lock:
             sys.stdout.write(message + "\n")
             sys.stdout.flush()
+        if next_message is not None:
+            # Start the next real command only after the terminal event has
+            # been written, preserving one-GPU-at-a-time semantics.
+            self.handle(next_message)
         # Once a terminal event is visible to the UI, the GPU operation has
         # already returned.  Release the logical slot before the UI queues the
         # next stage (for example train -> load candidate -> verify).
@@ -101,6 +110,10 @@ class WorkerService:
             message.payload = validate_payload(message.type, message.payload)
         except ValueError as exc:
             self.emit(message.id, "error", {"message": str(exc), "exception": type(exc).__name__})
+            return
+        if message.type not in {"health", "load_profile", "cancel", "shutdown"} and self.current_request_id and self.current_thread and self.current_thread.is_alive():
+            self._queued_messages.append(message)
+            self.emit(message.id, "queued", {"status": "queued", "queue_position": len(self._queued_messages), "command": message.type})
             return
         if message.type not in {"health", "load_profile", "cancel", "shutdown"}:
             product_job = self.job_coordinator.start(message.type, message.payload, [message.type])
@@ -136,6 +149,12 @@ class WorkerService:
                 self.emit(message.id, "error", {"message": str(exc), "exception": type(exc).__name__})
         elif message.type == "cancel":
             target = str(message.payload.get("target_request_id", ""))
+            queued = next((item for item in self._queued_messages if item.id == target), None)
+            if queued is not None:
+                self._queued_messages = [item for item in self._queued_messages if item.id != target]
+                self.emit(message.id, "result", {"cancel_requested": True, "queued_request_id": target, "removed_from_queue": True})
+                self.emit(target, "error", {"message": "任务在 GPU 队列中被取消", "status": "cancelled"})
+                return
             if target and target != self.current_request_id:
                 self.emit(message.id, "result", {"cancel_requested": False, "reason": "目标任务已结束或不是当前任务", "target_request_id": target})
                 return
@@ -320,7 +339,7 @@ class WorkerService:
         if not segments:
             raise ValueError("请输入要生成的文字")
         preview = bool(payload.get("preview", False))
-        output_root = (self.paths.data_root / "cache" / "preview") if preview else Path(payload["output_dir"]).resolve()
+        output_root = (self.paths.cache_root / "preview") if preview else Path(payload["output_dir"]).resolve()
         output_root.mkdir(parents=True, exist_ok=True)
         resume_dir = payload.get("resume_dir")
         job_dir = ensure_within(output_root, Path(resume_dir)) if resume_dir else output_root / ("preview-" + request_id[:12] if preview else datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + request_id[:8])
