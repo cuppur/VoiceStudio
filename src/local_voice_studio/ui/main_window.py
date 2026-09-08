@@ -5,22 +5,79 @@ import re
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QUrl
+from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QUrl, QTimer, QSize
 from PySide6.QtGui import QCloseEvent, QDesktopServices, QIcon, QPainter, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
-    QGroupBox, QPlainTextEdit, QProgressBar, QPushButton, QStackedWidget, QStyledItemDelegate, QStyleOptionViewItem, QToolButton, QVBoxLayout, QWidget,
+    QGroupBox, QPlainTextEdit, QProgressBar, QPushButton, QSlider, QSizePolicy, QStackedWidget, QStyledItemDelegate, QStyleOptionViewItem, QToolButton, QVBoxLayout, QWidget,
 )
 
 from ..paths import AppPaths
 from ..storage import StudioStore
 from .project_session import ProjectSession
-from .simple_pages import MyVoicesPage, OneClickGeneratePage, OneClickTrainingPage, SimpleSettingsPage, TaskCenterDialog
+from .simple_pages import MyVoicesPage, OneClickGeneratePage, OneClickTrainingPage, SimpleSettingsPage, TaskCenterDialog, TaskDrawer
 from .cover_page import CoverPage
 from .theme import load_theme
 from .worker_client import WorkerClient
 from .audio import PreviewAudioController
 from .audio.global_player import GlobalPlayerSession
+from .html_pages import HtmlPage, RuntimePanel, SeparationStudioPage, ExportsStudioPage, RecentProjectsPage
+from .prototype_icons import prototype_icon
+
+
+class GlobalPlayerBar(QFrame):
+    """Persistent real-audio transport for the shared desktop player."""
+    def __init__(self, session: GlobalPlayerSession, parent=None):
+        super().__init__(parent); self.session = session; self._visual_preview = False; self.setObjectName("globalPlayerBar")
+        row = QHBoxLayout(self); row.setContentsMargins(16, 8, 16, 8); row.setSpacing(10)
+        self.title = QLabel("未加载试听"); self.title.setObjectName("playerTitle"); row.addWidget(self.title, 1)
+        self.side = QLabel("—"); self.side.setObjectName("playerSide"); row.addWidget(self.side)
+        self.play_button = QPushButton("播放"); self.play_button.setObjectName("playerPlay"); self.play_button.clicked.connect(self._toggle); row.addWidget(self.play_button)
+        self.slider = QSlider(Qt.Horizontal); self.slider.setRange(0, 0); self.slider.setObjectName("playerSeek"); self.slider.sliderMoved.connect(self._seek); row.addWidget(self.slider, 3)
+        self.time = QLabel("00:00 / 00:00"); row.addWidget(self.time)
+        self.timer = QTimer(self); self.timer.setInterval(200); self.timer.timeout.connect(self._tick); self.timer.start()
+    def _channel(self):
+        return self.session.controller.channels.get(self.session.controller.master_role)
+    def _toggle(self):
+        if self._visual_preview:
+            self.play_button.setText("Ⅱ" if self.play_button.text() == "▶" else "▶")
+            self.side.setText("视觉预览 · 无真实音频")
+            return
+        if self.session.controller.playing: self.session.pause(); self.play_button.setText("播放")
+        else:
+            self.session.play()
+            self.play_button.setText("暂停" if self.session.controller.playing else "播放")
+            if not self.session.controller.playing: self.title.setText("请先在创作页面载入试听音频")
+    def _seek(self, value):
+        if self._visual_preview:
+            self.time.setText(f"{self._fmt(value)} / {self._fmt(self.slider.maximum())}"); return
+        self.session.seek(int(value))
+    def _tick(self):
+        if self._visual_preview:
+            return
+        ch = self._channel()
+        if ch is None:
+            self.slider.setRange(0, 0); self.time.setText("00:00 / 00:00"); self.play_button.setText("播放"); return
+        player = ch.player; pos = ch.position()
+        duration = int(player.duration()) if callable(getattr(player, "duration", None)) else 0
+        self.slider.setRange(0, max(0, duration))
+        if not self.slider.isSliderDown():
+            self.slider.blockSignals(True); self.slider.setValue(min(pos, max(0, self.slider.maximum()))); self.slider.blockSignals(False)
+        source = player.source().toLocalFile() if callable(getattr(player, "source", None)) else ""
+        self.title.setText(Path(source).name if source else "未加载试听")
+        self.time.setText(f"{self._fmt(pos)} / {self._fmt(duration)}")
+        self.play_button.setText("暂停" if self.session.controller.playing else "播放")
+    @staticmethod
+    def _fmt(ms):
+        sec=max(0,int(ms)//1000); return f"{sec//60:02d}:{sec%60:02d}"
+    def sync(self, title="", side=""):
+        self.title.setText(title or "未加载试听"); self.side.setText(side or "—")
+
+    def set_visual_sample(self, title="落日信号 · AI Preview", side="Studio Voice 01", current=85000, total=269000):
+        """Show the HTML reference transport without claiming an audio file exists."""
+        self._visual_preview = True
+        self.title.setText(title); self.side.setText(side); self.play_button.setText("▶")
+        self.slider.setRange(0, int(total)); self.slider.setValue(int(current)); self.time.setText(f"{self._fmt(current)} / {self._fmt(total)}")
 
 
 class SetupDialog(QDialog):
@@ -93,28 +150,56 @@ class SetupDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, paths: AppPaths, store: StudioStore):
+    def __init__(self, paths: AppPaths, store: StudioStore, client=None):
         super().__init__(); self.paths, self.store = paths, store; self.setWindowTitle("VoiceStudio · 本地 AI 声音创作工作室"); self.resize(1440, 900); self.setMinimumSize(1280, 720)
         self.session = ProjectSession(store, self); self.project = self.session.current
-        self.client = WorkerClient(paths, self); self.global_player = GlobalPlayerSession(PreviewAudioController.create_qt(self)); self._build(); self.session.project_changed.connect(self._switch_project); self.client.start(); self.statusBar().showMessage("本地工作进程正在启动……")
+        self.client = client or WorkerClient(paths, self); self.global_player = GlobalPlayerSession(PreviewAudioController.create_qt(self)); self._build(); self.session.project_changed.connect(self._switch_project); self.client.start(); self.statusBar().showMessage("本地工作进程正在启动……"); self.statusBar().hide()
         self.client.state_changed.connect(self._state); self.client.event.connect(self._worker_event)
 
     def _build(self) -> None:
-        central = QWidget(); root = QHBoxLayout(central); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0); self.setCentralWidget(central)
-        sidebar = QWidget(); sidebar.setObjectName("sidebar"); sidebar.setFixedWidth(220); side_layout = QVBoxLayout(sidebar); side_layout.setContentsMargins(0, 0, 0, 0); brand = QLabel("VoiceStudio"); brand.setObjectName("brand"); side_layout.addWidget(brand); brand_sub = QLabel("LOCAL AI AUDIO STUDIO"); brand_sub.setObjectName("brandSub"); side_layout.addWidget(brand_sub); self.project_button = QToolButton(); self.project_button.setObjectName("projectPicker"); self.project_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon); self.project_button.setPopupMode(QToolButton.InstantPopup); self.project_menu = QMenu(self.project_button); self.project_menu.aboutToShow.connect(self._refresh_project_menu); self.project_button.setMenu(self.project_menu); side_layout.addWidget(self.project_button)
-        self.navigation = QListWidget(); self.navigation.setObjectName("navigation"); self.navigation.setAccessibleName("主导航"); self.navigation.setFrameShape(QListWidget.NoFrame); self.navigation.setItemDelegate(_NavigationDelegate(self.navigation)); side_layout.addWidget(self.navigation); task_center = QPushButton("任务中心"); task_center.setObjectName("sidebarButton"); task_center.setAccessibleName("任务中心"); task_center.clicked.connect(self._open_task_center); side_layout.addWidget(task_center); version = QLabel("GPT-SoVITS V2ProPlus\n完全本地 · 无遥测"); version.setObjectName("sidebarFoot"); side_layout.addWidget(version); root.addWidget(sidebar)
-        workspace = QWidget(); workspace.setObjectName("workspace"); workspace_layout = QVBoxLayout(workspace); workspace_layout.setContentsMargins(0, 0, 0, 0); workspace_layout.setSpacing(0)
-        topbar = QFrame(); topbar.setObjectName("topbar"); topbar_layout = QHBoxLayout(topbar); topbar_layout.setContentsMargins(26, 0, 26, 0); topbar_layout.setSpacing(8)
-        topbar_layout.addWidget(QLabel("创作")); topbar_layout.addWidget(QLabel("›")); self.current_title = current_title = QLabel("AI 翻唱工作台"); current_title.setObjectName("topbarTitle"); topbar_layout.addWidget(current_title); topbar_layout.addStretch()
-        self.topbar_status = QLabel("本地工作进程 · 启动中"); self.topbar_status.setObjectName("topbarStatus"); topbar_layout.addWidget(self.topbar_status, 0, Qt.AlignVCenter)
-        settings_button = QPushButton("设置"); settings_button.setObjectName("topbarButton"); settings_button.setAccessibleName("打开设置"); settings_button.clicked.connect(lambda: self.navigation.setCurrentRow(4)); topbar_layout.addWidget(settings_button)
-        workspace_layout.addWidget(topbar)
-        self.stack = QStackedWidget(); workspace_layout.addWidget(self.stack, 1); root.addWidget(workspace, 1)
-        for icon, name in (("cover.svg", "AI 翻唱"), ("generate.svg", "文字生成"), ("voices.svg", "我的声音"), ("training.svg", "训练声音"), ("settings.svg", "设置")):
-            item = QListWidgetItem(self._navigation_icon(icon), name)
-            self.navigation.addItem(item)
-        self.navigation.currentRowChanged.connect(self.stack.setCurrentIndex); self.navigation.currentTextChanged.connect(self.current_title.setText); self.navigation.setCurrentRow(0)
+        central = QWidget(); central.setObjectName("appShell"); root = QVBoxLayout(central); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0); self.setCentralWidget(central)
+        header = QFrame(); header.setObjectName("appHeader"); header.setFixedHeight(78); h = QHBoxLayout(header); h.setContentsMargins(20, 0, 20, 0); h.setSpacing(16); self._header_layout = h
+        brand_box = QWidget(); self.brand_box = brand_box; brand_box.setFixedWidth(205); brand_row = QHBoxLayout(brand_box); brand_row.setContentsMargins(0, 0, 0, 0); brand_row.setSpacing(10)
+        mark = QLabel(); mark.setObjectName("brandMark"); mark.setFixedSize(39, 39); mark.setAlignment(Qt.AlignCenter); mark.setPixmap(prototype_icon("brand", 22).pixmap(22, 22)); brand_row.addWidget(mark)
+        brand_text = QVBoxLayout(); brand_text.setSpacing(2); brand = QLabel("VoiceStudio"); self.brand_label = brand; brand.setObjectName("brand"); brand.setContentsMargins(0, 0, 0, 0); brand.setFixedWidth(130); brand_text.addWidget(brand)
+        sub = QLabel("LOCAL AI AUDIO"); sub.setObjectName("brandSub"); sub.setContentsMargins(0, 0, 0, 0); sub.setFixedWidth(130); brand_text.addWidget(sub); brand_row.addLayout(brand_text); h.addWidget(brand_box)
+        self.navigation = QListWidget(); self.navigation.setObjectName("topNavigation"); self.navigation.setAccessibleName("主导航"); self.navigation.setFlow(QListWidget.LeftToRight); self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.navigation.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.navigation.setFrameShape(QListWidget.NoFrame); self.navigation.setFixedHeight(42); h.addWidget(self.navigation, 1)
+        self.navigation.setFixedHeight(48); self.navigation.setWrapping(False); self.navigation.setIconSize(QSize(16, 16))
+        self.topbar_status = QLabel("本地工作进程 · 启动中"); self.topbar_status.hide()
+        gpu_button = QPushButton("GPU\n点击查看任务"); gpu_button.setObjectName("gpuPill"); gpu_button.clicked.connect(self._open_task_center); h.addWidget(gpu_button)
+        self.project_button = QToolButton(); self.project_button.setObjectName("projectPicker"); self.project_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon); self.project_button.setPopupMode(QToolButton.InstantPopup); self.project_menu = QMenu(self.project_button); self.project_menu.aboutToShow.connect(self._refresh_project_menu); self.project_button.setMenu(self.project_menu); h.addWidget(self.project_button)
+        h.removeWidget(self.project_button); self.project_button.hide()
+        recent = QPushButton("最近工程"); recent.setObjectName("topbarButton"); recent.clicked.connect(lambda: self.navigation.setCurrentRow(6)); h.addWidget(recent)
+        quick_import = QPushButton("＋ 导入"); quick_import.setObjectName("primaryButton"); quick_import.clicked.connect(self._quick_import); h.addWidget(quick_import)
+        settings_button = QPushButton(); settings_button.setObjectName("topbarButton"); settings_button.setIcon(self._navigation_icon("settings.svg")); settings_button.setToolTip("设置"); settings_button.setAccessibleName("设置"); settings_button.setFixedWidth(44); settings_button.clicked.connect(lambda: self.navigation.setCurrentRow(7)); h.addWidget(settings_button)
+        root.addWidget(header)
+        content = QHBoxLayout(); content.setContentsMargins(0, 0, 0, 0); content.setSpacing(0)
+        self.stack = QStackedWidget(); self.stack.setObjectName("pageStack"); self.stack.setMinimumHeight(0); self.stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored); content.addWidget(self.stack, 1)
+        root.addLayout(content, 1)
+        self.global_player_bar = GlobalPlayerBar(self.global_player); root.addWidget(self.global_player_bar)
+        labels = ["AI 翻唱", "文字生成", "我的声音", "训练声音", "音频分离", "导出中心", "最近工程", "设置"]
+        for name in labels:
+            item = QListWidgetItem(name); item.setSizeHint(QSize(104, 38)); self.navigation.addItem(item)
+        self.navigation.item(6).setHidden(True); self.navigation.item(7).setHidden(True)
+        for index, name in enumerate(("cover", "tts", "voices", "train", "separator", "exports")): self.navigation.item(index).setIcon(prototype_icon(name))
+        self.navigation.currentRowChanged.connect(self.stack.setCurrentIndex); self.navigation.setCurrentRow(0)
         self._build_project_pages(); self._update_project_button()
+        self._apply_header_density()
+
+    def _apply_header_density(self) -> None:
+        """Mirror the prototype's compact header breakpoint without hiding pages."""
+        if not hasattr(self, "navigation"):
+            return
+        compact = self.width() <= 1300
+        self.brand_box.setFixedWidth(175 if compact else 205)
+        self.brand_label.setStyleSheet("font-size:17px;" if compact else "")
+        self._header_layout.setContentsMargins(16 if compact else 20, 0, 16 if compact else 20, 0)
+        self._header_layout.setSpacing(8 if compact else 16)
+        self.navigation.setIconSize(QSize(14 if compact else 16, 14 if compact else 16))
+        item_width = 92 if compact else 104
+        for index in range(self.navigation.count()):
+            self.navigation.item(index).setSizeHint(QSize(item_width, 38))
+        self.navigation.setStyleSheet("QListWidget::item { font-size: 9px; padding: 0 2px; }" if compact else "")
 
     @staticmethod
     def _navigation_icon(name: str) -> QIcon:
@@ -126,17 +211,57 @@ class MainWindow(QMainWindow):
 
     def _build_project_pages(self) -> None:
         row = max(0, self.navigation.currentRow())
+        if not hasattr(self, "_page_groups"): self._page_groups = {}
+        key = str(self.project.resolve())
         while self.stack.count():
             page = self.stack.widget(0)
-            if hasattr(page, "release_resources"): page.release_resources()
-            self.stack.removeWidget(page); page.deleteLater()
-        self.cover_page = CoverPage(self.paths, self.store, self.project, self.client, global_player=self.global_player); self.generate_page = OneClickGeneratePage(self.store, self.project, self.client); self.voice_page = MyVoicesPage(self.store, self.project); self.training_page = OneClickTrainingPage(self.store, self.project, self.client); self.settings_page = SimpleSettingsPage(self.paths, self.store, self.project, self.client)
-        for page in (self.cover_page, self.generate_page, self.voice_page, self.training_page, self.settings_page): self.stack.addWidget(page)
-        self.stack.setCurrentIndex(row)
+            page._background_project = True
+            self.stack.removeWidget(page); page.hide()
+        if key in self._page_groups:
+            pages, self.global_player = self._page_groups[key]
+            self._install_project_pages(pages, row)
+            return
+        if self._page_groups:
+            self.global_player = GlobalPlayerSession(PreviewAudioController.create_qt(self))
+        self.cover_page = CoverPage(self.paths, self.store, self.project, self.client, global_player=self.global_player)
+        self.generate_page = OneClickGeneratePage(self.store, self.project, self.client)
+        self.voice_page = MyVoicesPage(self.store, self.project)
+        self.training_page = OneClickTrainingPage(self.store, self.project, self.client)
+        self.settings_page = SimpleSettingsPage(self.paths, self.store, self.project, self.client)
+        self.separator_page = SeparationStudioPage(self.store, self.project)
+        self.exports_page = ExportsStudioPage(self.store, self.project)
+        self.recent_page = RecentProjectsPage(self.store, self.project)
+        self.separator_page.audio_selected.connect(self._import_for_separation)
+        self.recent_page.project_selected.connect(lambda path: self.session.activate(Path(path)))
+        self.recent_page.project_create_requested.connect(self._new_project)
+        pages = (self.cover_page, self.generate_page, self.voice_page, self.training_page, self.separator_page, self.exports_page, self.recent_page, self.settings_page)
+        self._page_groups[key] = (pages, self.global_player)
+        self._install_project_pages(pages, row)
         self.voice_page.profiles_changed.connect(self.generate_page.refresh_profiles); self.voice_page.profiles_changed.connect(self.cover_page.refresh_profiles); self.training_page.profiles_changed.connect(self.generate_page.refresh_profiles); self.training_page.profiles_changed.connect(self.cover_page.refresh_profiles); self.training_page.profiles_changed.connect(self.voice_page.refresh); self.voice_page.generate_requested.connect(self._use_profile); self.voice_page.retrain_requested.connect(self._retrain_profile); self.generate_page.train_requested.connect(lambda: self.navigation.setCurrentRow(3)); self.settings_page.install_requested.connect(self._open_setup)
+
+    def _install_project_pages(self, pages, row):
+        names = ("cover_page", "generate_page", "voice_page", "training_page", "separator_page", "exports_page", "recent_page", "settings_page")
+        for name, page in zip(names, pages):
+            setattr(self, name, page); page._background_project = False; self.stack.addWidget(page)
+        self.global_player_bar.session = self.global_player
+        self.stack.setCurrentIndex(row)
 
     def _update_project_button(self) -> None:
         self.project_button.setText(self.session.display_name(self.project) + "  ▾")
+
+    def _quick_import(self):
+        self.navigation.setCurrentRow(0)
+        self.cover_page.import_song()
+
+    def _activate_dashboard_project(self, path):
+        try:
+            self.session.activate(Path(path)); self.navigation.setCurrentRow(0)
+        except (OSError, ValueError) as exc: QMessageBox.warning(self, "无法打开工程", str(exc))
+
+    def _import_for_separation(self, path: str) -> None:
+        self.navigation.setCurrentRow(0)
+        self.cover_page.set_song(path)
+        self.cover_page.separate_song()
 
     def _refresh_project_menu(self) -> None:
         self.project_menu.clear()
@@ -161,12 +286,45 @@ class MainWindow(QMainWindow):
         except Exception as exc: QMessageBox.critical(self, "VoiceStudio", str(exc))
 
     def _switch_project(self, project: Path) -> None:
+        self.global_player.pause()
+        self.generate_page.player.pause()
         self.project = Path(project); self._build_project_pages(); self._update_project_button(); self.statusBar().showMessage(f"已切换到项目：{self.session.display_name(self.project)}", 4000)
 
     def _open_task_center(self) -> None:
-        TaskCenterDialog(self.store, self.client, self).exec()
+        if hasattr(self, "task_drawer") and self.task_drawer.isVisible():
+            self.task_drawer.hide(); return
+        if not hasattr(self, "task_drawer"):
+            self.task_drawer = TaskDrawer(self.store, self.client, self)
+            self.task_drawer.full_center_requested.connect(self._open_full_task_center)
+        self.task_drawer.show_for_parent()
+
+    def _open_full_task_center(self) -> None:
+        dialog = TaskCenterDialog(self.store, self.client, self)
+        dialog.retry_generation_requested.connect(self._retry_generation)
+        dialog.exec()
+
+    def resizeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._apply_header_density()
+        if hasattr(self, "task_drawer") and self.task_drawer.isVisible():
+            self.task_drawer.show_for_parent()
+
+    def _retry_generation(self, job) -> None:
+        profile_id = str(job.payload.get("profile_id", ""))
+        for entry in self.session.projects():
+            project = Path(entry["path"])
+            if any(profile.id == profile_id for profile in self.store.list_profiles(project)):
+                self.session.activate(project)
+                self.navigation.setCurrentRow(1)
+                self.generate_page._retry(job)
+                return
+        QMessageBox.warning(self, "无法重试", "找不到原任务使用的声音；声音可能已删除，请选择已授权且训练完成的声音重新生成。")
 
     def _use_profile(self, profile_id: str) -> None:
+        self.generate_page.refresh_profiles()
+        if self.generate_page.profile.findData(profile_id) < 0:
+            QMessageBox.warning(self, "声音尚不可用于生成", "此声音缺少完整授权、已训练模型或可用参考素材。请使用“追加训练”补齐声音后重试。")
+            return
         self.generate_page.select_profile(profile_id); self.navigation.setCurrentRow(1)
 
     def _retrain_profile(self, profile_id: str) -> None:
@@ -187,14 +345,15 @@ class MainWindow(QMainWindow):
 
     def _worker_event(self, request_id: str, event: str, payload: dict) -> None:
         if request_id == "worker" and event == "ready": self.statusBar().showMessage("本地工作进程就绪", 5000); self.topbar_status.setText("本地工作进程 · 就绪")
-        if hasattr(self, "cover_page"):
-            self.cover_page.handle_worker_event(request_id, event, payload)
+        for pages, _player in getattr(self, "_page_groups", {}).values():
+            pages[0].handle_worker_event(request_id, event, payload)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        for index in range(self.stack.count()):
-            page = self.stack.widget(index)
-            if hasattr(page, "release_resources"): page.release_resources()
-        self.client.shutdown(); super().closeEvent(event)
+        self.client.shutdown()
+        for pages, _player in getattr(self, "_page_groups", {}).values():
+            for page in pages:
+                if hasattr(page, "release_resources"): page.release_resources()
+        super().closeEvent(event)
 
 
 STYLE = load_theme()

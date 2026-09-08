@@ -239,6 +239,11 @@ def apply_preview_presentation(window) -> None:
     training = window.training_page
     training.name.setText("我的新声音")
     training.consent.setChecked(False)
+    try:
+        training.drop.clicked.disconnect()
+    except RuntimeError:
+        pass
+    training.drop.clicked.connect(lambda: training.quality_summary.setText("视觉预览不打开文件选择器；正常模式会选择真实声音素材。"))
     training._render_material_rows([
         ("voice_sample_01.wav", 94, "优秀", "preview:voice_sample_01"),
         ("voice_sample_02.wav", 87, "良好", "preview:voice_sample_02"),
@@ -349,6 +354,7 @@ def create_preview_window():
     badge.setAccessibleName("视觉预览，数据与 Worker 已隔离")
     window._header_layout.insertWidget(2, badge)
     apply_preview_presentation(window)
+    window.global_player_bar.set_visual_sample()
     window.voice_page.refresh()
     window.voice_page.detail_wave.set_visual_sample(True)
     window.voice_page.detail_wave.show()
