@@ -3,6 +3,7 @@ from __future__ import annotations
 from enum import Enum
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QSlider, QWidget
 
 from .waveform import WaveformWidget
@@ -52,6 +53,7 @@ class StemTrackWidget(QWidget):
         self.status_label.setMinimumWidth(58)
         self.status_label.setMaximumWidth(76)
         self.waveform = WaveformWidget(self)
+        self.waveform.wave_color = QColor({"原曲": "#9a8e84", "原唱人声": "#ff8c35", "伴奏": "#e2a15d", "AI 人声": "#f06f1a", "最终混音": "#2cab74"}.get(name, "#ff8c35"))
         self.waveform.setMinimumHeight(44)
         self.waveform.seek_requested.connect(self.seek_requested)
         layout.addWidget(self.name_label); layout.addWidget(self.waveform, 1); layout.addWidget(self.mute); layout.addWidget(self.solo); layout.addWidget(self.volume); layout.addWidget(self.status_label)

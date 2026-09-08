@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtCore import Qt, Signal, QRectF
+from PySide6.QtGui import QColor, QPainter, QPen, QPainterPath
 from PySide6.QtWidgets import QWidget
 
 
@@ -15,6 +15,7 @@ class WaveformWidget(QWidget):
         self.peaks: list[tuple[float, float]] = []
         self.duration_ms = 0
         self.position_ms = 0
+        self.wave_color = QColor("#ff8c35")
         self.setMinimumHeight(48)
         self.setCursor(Qt.PointingHandCursor)
 
@@ -59,8 +60,12 @@ class WaveformWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         mid = self.height() / 2
-        painter.fillRect(self.rect(), QColor("#151821"))
-        painter.setPen(QPen(QColor("#2A303C"), 1))
+        bounds = QRectF(self.rect()).adjusted(.5, .5, -.5, -.5)
+        outline = QPainterPath(); outline.addRoundedRect(bounds, 8, 8)
+        painter.fillPath(outline, QColor("#fcfaf7"))
+        painter.setPen(QPen(QColor("#eee8e1"), 1)); painter.drawPath(outline)
+        painter.setClipPath(outline)
+        painter.setPen(QPen(QColor("#eee8e1"), 1))
         painter.drawLine(0, round(mid), self.width(), round(mid))
         if not self.peaks:
             return
@@ -71,7 +76,12 @@ class WaveformWidget(QWidget):
             right = max(left + 1, (x + 1) * len(self.peaks) // columns)
             low = min(value[0] for value in self.peaks[left:right])
             high = max(value[1] for value in self.peaks[left:right])
-            color = QColor("#7C89FF") if x / columns <= played else QColor("#596171")
-            painter.setPen(QPen(color, 2))
+            color = QColor(self.wave_color)
+            color.setAlphaF(.9 if x / columns <= played else .55)
+            painter.setPen(QPen(color, 1))
             radius = (self.height() - 8) / 2
             painter.drawLine(x, round(mid - high * radius), x, round(mid - low * radius))
+        if self.duration_ms:
+            x = min(self.width() - 1, round(played * self.width()))
+            painter.setPen(QPen(QColor("#4c4037"), 1))
+            painter.drawLine(x, 0, x, self.height())
