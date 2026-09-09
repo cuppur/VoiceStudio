@@ -1,0 +1,37 @@
+{
+  "executable": "dist/LocalVoiceStudio/LocalVoiceStudio.exe",
+  "page_url": "file:///C:/Users/cruelworld/Desktop/codex/%E5%A3%B0%E9%9F%B3%E5%BA%93/dist/LocalVoiceStudio/_internal/local_voice_studio/ui/web/assets/index.html",
+  "before_import": {
+    "bridgeConnected": true,
+    "bridgeError": "",
+    "songs": 0
+  },
+  "import_reply": {
+    "ok": true,
+    "message": "已导入：audit.wav"
+  },
+  "after_import": {
+    "songs": 1,
+    "selectedId": "0962ea4419b5430e84907e5ccf5ea29e",
+    "operationId": "0962ea4419b5430e84907e5ccf5ea29e"
+  },
+  "waveform": {
+    "duration": 1000,
+    "rate": 8000,
+    "silent": true
+  },
+  "render_toast": "已导入：audit.wav",
+  "next_step": "歌曲权利确认",
+  "formats": [
+    {
+      "format": ".mp3",
+      "ok": true,
+      "duration": 1000
+    },
+    {
+      "format": ".flac",
+      "ok": true,
+      "duration": 1000
+    }
+  ]
+}
