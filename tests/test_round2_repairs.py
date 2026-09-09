@@ -111,6 +111,41 @@ def test_audio_helper_processes_are_hidden():
     assert options == ({'creationflags':subprocess.CREATE_NO_WINDOW} if os.name=='nt' else {})
 
 
+def test_old_review_task_uses_current_training_options(tmp_path, monkeypatch):
+    from local_voice_studio.models import TrainingWorkflow, WorkflowStage
+    app = _app()
+    paths, store, project, worker, _ = _fixture(tmp_path)
+    service = TrainingService(paths, store, project, worker)
+    profile = VoiceProfile('旧草稿', True); store.save_profile(project, profile)
+    workflow = TrainingWorkflow(profile.id, profile.name, stage=WorkflowStage.REVIEW_REQUIRED)
+    draft = DatasetDraft(workflow.id, profile.id, 'old', [])
+    workflow.draft_id = draft.id
+    store.save_draft(project, draft); store.save_workflow(project, workflow)
+    calls = []
+    monkeypatch.setattr(service.controller, 'confirm_and_train', lambda w,d,**kw:calls.append((w,kw)))
+    service.resume(workflow.id, options={'quality':'quick','train_singing':True})
+    assert calls[0][1]['automatic']
+    assert calls[0][0].processing_options['quality'] == 'quick'
+    assert calls[0][0].processing_options['train_singing'] is True
+    service.close()
+
+
+def test_singing_is_chained_once_after_text_voice_finishes(tmp_path, monkeypatch):
+    from local_voice_studio.models import TrainingWorkflow, WorkflowStage
+    app = _app()
+    paths, store, project, worker, _ = _fixture(tmp_path)
+    service = TrainingService(paths, store, project, worker)
+    profile = VoiceProfile('双能力', True); store.save_profile(project, profile)
+    workflow = TrainingWorkflow(profile.id, profile.name, stage=WorkflowStage.SAVED,
+                                processing_options={'train_singing':True})
+    calls=[]
+    monkeypatch.setattr(service,'train_singing',lambda profile_id:calls.append(profile_id))
+    service._on_workflow(workflow)
+    service._on_workflow(workflow)
+    assert calls == [profile.id]
+    service.close()
+
+
 @pytest.mark.parametrize('fmt,codec', [('flac','flac'),('m4a','aac')])
 def test_new_export_formats_encode_and_validate_real_audio(tmp_path, fmt, codec):
     from local_voice_studio.cover.exporting import FFmpegExportBackend, ExportOutputValidator

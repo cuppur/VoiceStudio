@@ -819,7 +819,7 @@ window.VS_PAGES = (function () {
       const workflow = state.workflow || {};
       if (state.singing_request) { S.invoke('task.cancel',{request_id:state.singing_request}); return; }
       if (workflow.running) { S.invoke('training.cancel', { workflow_id: workflow.id }); return; }
-      if (workflow.stage === 'review_required' && state.draft) { S.invoke('training.resume', {workflow_id:workflow.id}); return; }
+      if (workflow.stage === 'review_required' && state.draft) { S.invoke('training.resume', {workflow_id:workflow.id,quality:q('#trainingQuality').value,train_singing:qq('[data-page-view="train"] .train-settings .toggle-row .switch')[1].classList.contains('on')}); return; }
       if (workflow.can_resume) { S.invoke('training.resume', { workflow_id: workflow.id }); return; }
       if (!(state.assets || []).length) { this.importAssets(); return; }
       const consent = state.profile && state.profile.consent;
@@ -858,7 +858,7 @@ window.VS_PAGES = (function () {
         ],
       });
       if (!ok) { return; }
-      S.invoke('training.confirm', { draft_id: draft.id });
+      S.invoke('training.confirm', { draft_id: draft.id, quality:q('#trainingQuality').value, train_singing:qq('[data-page-view="train"] .train-settings .toggle-row .switch')[1].classList.contains('on') });
     },
 
     resume() {

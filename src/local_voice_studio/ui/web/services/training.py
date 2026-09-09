@@ -269,7 +269,17 @@ class TrainingService(WebService):
         self.store.save_draft(self.project, draft)
         return self._draft_dict(draft)
 
-    def confirm(self, draft_id: str, *, include: list[str] | None = None, exclude: list[str] | None = None) -> dict[str, Any]:
+    def _review_options(self, workflow, options):
+        if workflow.stage != WorkflowStage.REVIEW_REQUIRED or not options:
+            return
+        quality = str(options.get('quality', workflow.processing_options.get('quality', 'standard')))
+        if quality not in {'quick', 'standard', 'extended'}:
+            raise ValueError('不支持的训练时长档位')
+        workflow.processing_options['quality'] = quality
+        workflow.processing_options['train_singing'] = bool(options.get('train_singing', workflow.processing_options.get('train_singing', False)))
+        self.store.save_workflow(self.project, workflow)
+
+    def confirm(self, draft_id: str, *, include: list[str] | None = None, exclude: list[str] | None = None, options=None) -> dict[str, Any]:
         if self.controller is None:
             raise RuntimeError("本地工作进程未连接")
         draft = self.store.load_draft(self.project, str(draft_id))
@@ -282,14 +292,16 @@ class TrainingService(WebService):
                 segment.included = False
         self.store.save_draft(self.project, draft)
         workflow = self.store.load_workflow(self.project, draft.workflow_id)
+        self._review_options(workflow, options)
         self.controller.confirm_and_train(workflow, draft)
         self._draft_id = ""
         return {"workflow_id": workflow.id, "state": self.state(workflow.voice_profile_id)}
 
-    def resume(self, workflow_id: str) -> dict[str, Any]:
+    def resume(self, workflow_id: str, *, options=None) -> dict[str, Any]:
         if self.controller is None:
             raise RuntimeError("本地工作进程未连接")
         workflow = self.store.load_workflow(self.project, str(workflow_id))
+        self._review_options(workflow, options)
         self._workflow_id = workflow.id
         if workflow.stage == WorkflowStage.REVIEW_REQUIRED and workflow.draft_id:
             self.controller.confirm_and_train(workflow, self.store.load_draft(self.project, workflow.draft_id), automatic=True)

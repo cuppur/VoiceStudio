@@ -586,11 +586,12 @@ class StudioBridge(QObject):
             str(data.get("draft_id", "")),
             include=[str(item) for item in include] if include else None,
             exclude=[str(item) for item in exclude] if exclude else None,
+            options=data,
         )
         return {"ok": True, "message": "已确认并开始训练", **result}
 
     def _training_resume(self, data: dict[str, Any]) -> dict[str, Any]:
-        result = self.training.resume(str(data.get("workflow_id", "")))
+        result = self.training.resume(str(data.get("workflow_id", "")), options=data)
         return {"ok": True, "message": "已继续上次任务", **result}
 
     def _training_cancel(self, data: dict[str, Any]) -> dict[str, Any]:
