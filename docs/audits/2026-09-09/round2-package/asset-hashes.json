@@ -1,0 +1,59 @@
+[
+  {
+    "asset": "index.html",
+    "source_sha256": "ECB29C7AB1F6FA2203A64A45FDCD459DEC62DF4CD9AC401C7A622EFEC9FFB3DC",
+    "packaged_sha256": "ECB29C7AB1F6FA2203A64A45FDCD459DEC62DF4CD9AC401C7A622EFEC9FFB3DC",
+    "match": true
+  },
+  {
+    "asset": "studio-bridge.js",
+    "source_sha256": "11A8A01F953FF6AFDA35DC793CA0737DCAD5FA128188563558E2BEA0A386BF69",
+    "packaged_sha256": "11A8A01F953FF6AFDA35DC793CA0737DCAD5FA128188563558E2BEA0A386BF69",
+    "match": true
+  },
+  {
+    "asset": "studio-pages.js",
+    "source_sha256": "68A1C8FDF6851A31C3D95F8D6008932D27AC6FAD04FB9659641B9194CA633133",
+    "packaged_sha256": "68A1C8FDF6851A31C3D95F8D6008932D27AC6FAD04FB9659641B9194CA633133",
+    "match": true
+  },
+  {
+    "asset": "studio-media.js",
+    "source_sha256": "B0374C9C14E72FEF45BAAB93E750982F95DDD406D52457BCBEA0B6FBDE3CE82C",
+    "packaged_sha256": "B0374C9C14E72FEF45BAAB93E750982F95DDD406D52457BCBEA0B6FBDE3CE82C",
+    "match": true
+  },
+  {
+    "worker_source": "workflow.py",
+    "sha256": "8711B7BE8B20362531CF785350BC9590525A1F80C717E82819350D9EDFA02EEB",
+    "match": true
+  },
+  {
+    "worker_source": "models.py",
+    "sha256": "B036B274490032B60C64C9A9AE64E1BDA10D29322EE6846CA293B4EA2D3D4E40",
+    "match": true
+  },
+  {
+    "worker_source": "training.py",
+    "sha256": "D7AD1F80A05357B891C7F296EDD40414627BF385FC059AB552E8F25ECCFB9A39",
+    "match": true
+  },
+  {
+    "worker_source": "audio.py",
+    "sha256": "768670985C79FE9E33AD7099CEECC55C6822595CA9DB431DC27B7148797F23C2",
+    "match": true
+  },
+  {
+    "worker_source": "infrastructure/process_options.py",
+    "sha256": "478EFAC44B9373ECAB261D9994EF341965630487EDF17679522E84D3588A11A4",
+    "match": true
+  },
+  {
+    "executable": "VoiceStudio-一键启动.exe",
+    "sha256": "B26C254C6822E07C2E492B2BD35D0A84829BE0387786965ED2FC911ECC83BE15"
+  },
+  {
+    "executable": "dist/LocalVoiceStudio/LocalVoiceStudio.exe",
+    "sha256": "4CEF69E2FE3FAEFCE3A46B2ABDF39E4BB1013172C5A5A363CF4B44701AE094C5"
+  }
+]
