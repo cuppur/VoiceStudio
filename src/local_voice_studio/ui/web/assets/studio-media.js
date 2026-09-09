@@ -88,7 +88,8 @@ window.VS_MEDIA = (() => {
     S = state;
     const mode = document.createElement('select'); mode.id = 'previewMode'; mode.setAttribute('aria-label', '试听模式');
     mode.innerHTML = '<option value="solo_track">选中音轨</option><option value="mix_preview">快速混音</option><option value="final_mix">最终混音</option>';
-    q('.preview-toolbar').replaceChildren(mode);
+    const previewButton = document.createElement('button'); previewButton.id='previewRangeBtn'; previewButton.className='mini';
+    q('.preview-toolbar').replaceChildren(mode, previewButton);
     mode.onchange = () => { M.mode = mode.value; S.playbackKind = 'cover'; configure(); };
     all('#tracks .track').forEach((row, index) => {
       row.dataset.role = roles[index];
@@ -106,6 +107,18 @@ window.VS_MEDIA = (() => {
         const rect = wrap.getBoundingClientRect(); seek((event.clientX - rect.left) / rect.width * M.duration);
       };
     });
+    const compare = role => {
+      if (!M.tracks.some(t => t.role === role)) { S.toast('请先生成最终混音后对比'); return; }
+      M.role = role; M.mode = role === 'final_mix' ? 'final_mix' : 'solo_track'; mode.value = M.mode;
+      S.playbackKind = 'cover'; if(S.audio) S.audio.pause();
+      all('.track-btn').forEach(b=>b.classList.remove('active'));
+      configure();
+      all('#abSeg button').forEach(b=>b.classList.toggle('active',b.dataset.role===role));
+    };
+    all('#abSeg button').forEach((b,i)=>{b.textContent=i?'B 成品':'A 原曲';b.dataset.role=i?'final_mix':'original';b.onclick=()=>compare(b.dataset.role);});
+    q('#abCompare').textContent='切换 A/B';q('#abCompare').onclick=()=>compare(M.role==='final_mix'?'original':'final_mix');
+    q('#previewRangeBtn').textContent='从当前位置试听 20 秒';
+    q('#previewRangeBtn').onclick=()=>{ S.playbackKind='cover';if(S.audio)S.audio.pause();configure(r=>{if(r.ok)control('play',20);}); };
     q('#playBtn').onclick = () => {
       if (S.playbackKind === 'file' && S.audio) {
         if (S.audio.paused) S.audio.play().catch(() => S.toast('无法播放该文件')); else S.audio.pause();

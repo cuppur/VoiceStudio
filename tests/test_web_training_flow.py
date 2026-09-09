@@ -28,8 +28,8 @@ def test_training_page_lists_real_material_and_starts_the_workflow():
     page = flow["page"]
     assert page["rows"] == 1
     assert page["firstRow"] == "material.wav"
-    assert page["button"] == "开始自动处理"
-    assert page["hiddenQuality"] == 1
+    assert page["button"] == "一键训练"
+    assert page["hiddenQuality"] == 0
     assert page["steps"] == 5
     after = flow["afterClick"]
     assert after["toast"] == "已开始自动处理素材"

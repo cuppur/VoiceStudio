@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from local_voice_studio.infrastructure.process_options import hidden_process_options
+
 import argparse
 import os
 import subprocess
@@ -46,7 +48,7 @@ def main() -> int:
             prepared = source
             with tempfile.TemporaryDirectory(prefix="voice-studio-uvr-") as tmp:
                 converted = Path(tmp) / (source.stem + ".wav")
-                subprocess.run([str(ffmpeg), "-y", "-i", str(source), "-vn", "-acodec", "pcm_s16le", "-ac", "2", "-ar", "44100", str(converted)], capture_output=True, check=True, timeout=180)
+                subprocess.run([str(ffmpeg), "-y", "-i", str(source), "-vn", "-acodec", "pcm_s16le", "-ac", "2", "-ar", "44100", str(converted)], capture_output=True, check=True, timeout=180, **hidden_process_options())
                 prepared = converted
                 pre._path_audio_(str(prepared), str(instrumental), str(vocal), "wav", False)
             print(f"{source.name}: 完成", flush=True)

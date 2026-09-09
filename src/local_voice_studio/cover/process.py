@@ -6,6 +6,8 @@ Only a bounded tail is retained for error messages.
 """
 from __future__ import annotations
 
+from local_voice_studio.infrastructure.process_options import hidden_process_options
+
 import os
 import signal
 import subprocess
@@ -63,7 +65,7 @@ class ManagedProcess:
     @staticmethod
     def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
         if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True)
+            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, **hidden_process_options())
             return
 
         try:
@@ -147,6 +149,7 @@ class ManagedProcess:
             "stdout": subprocess.PIPE if self.capture_stdout else subprocess.DEVNULL,
             "stderr": subprocess.PIPE,
         }
+        popen_kwargs.update(hidden_process_options())
         if os.name != "nt":
             popen_kwargs["start_new_session"] = True
 

@@ -5,6 +5,8 @@ layout.  This module deliberately keeps all audio work local and deterministic.
 """
 from __future__ import annotations
 
+from local_voice_studio.infrastructure.process_options import hidden_process_options
+
 import hashlib
 import json
 import re
@@ -237,7 +239,7 @@ def _tool(name: str, paths: AppPaths | None = None) -> Path:
 
 
 def _run_cancellable(command: list[str], *, timeout: float, cancel: Callable[[], bool] | None = None, text: bool = False):
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=text, encoding="utf-8" if text else None, errors="replace" if text else None)
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=text, encoding="utf-8" if text else None, errors="replace" if text else None, **hidden_process_options())
     deadline = time.monotonic() + timeout
     while True:
         if cancel and cancel():
@@ -317,7 +319,7 @@ def decode_pcm_peaks(audio_path: Path, metadata: AudioMetadata | None = None, *,
     command = [str(ffmpeg), "-v", "error", "-ss", f"{start:.6f}", "-i", str(audio_path)]
     command += ["-t", f"{end - start:.6f}", "-f", "s16le", "-ac", "1", "-ar", str(metadata.sample_rate), "pipe:1"]
     expected_samples = max(1, round((end - start) * metadata.sample_rate))
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **hidden_process_options())
     assert process.stdout is not None
     try:
         result = peaks_from_pcm_chunks(

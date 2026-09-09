@@ -131,7 +131,7 @@ class CoverApplicationService:
         asset = cover.get_asset(final_asset_id)
         if not asset or asset.role != CoverAssetRole.FINAL_MIX or asset.content_origin != ContentOrigin.AI_GENERATED:
             raise AssetValidationError("只能导出已生成的最终混音")
-        if format not in {"wav", "mp3", "both"}: raise AssetValidationError("不支持的导出格式")
+        if format not in {"wav", "mp3", "flac", "m4a", "both"}: raise AssetValidationError("不支持的导出格式")
         if existing_policy not in {"reject", "replace"}: raise AssetValidationError("不支持的覆盖策略")
         if not publication_rights_acknowledged: raise RightsRequiredError("导出前必须确认发布权利提醒")
         return ExportCoverCommand(str(self.project), cover.id, asset.id, format, file_name,

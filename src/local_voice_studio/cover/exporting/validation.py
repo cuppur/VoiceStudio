@@ -49,7 +49,7 @@ class ExportOutputValidator:
         if token.is_cancelled():
             raise InterruptedError("导出验证已取消")
         fmt = expected_format.value if isinstance(expected_format, ExportFormat) else str(expected_format)
-        if fmt not in {"wav", "mp3"}:
+        if fmt not in {"wav", "mp3", "flac", "m4a"}:
             raise AssetValidationError(f"不支持验证的导出格式: {fmt}")
         path = Path(path)
         minimum = 44 if fmt == "wav" else 128
@@ -78,6 +78,10 @@ class ExportOutputValidator:
             raise AssetValidationError(f"{fmt.upper()} 音频参数不符合导出契约")
         if fmt == "wav" and not codec.startswith("pcm"):
             raise AssetValidationError("WAV 编码必须为 PCM")
+        if fmt == 'flac' and codec != 'flac':
+            raise AssetValidationError('FLAC 编码无效')
+        if fmt == 'm4a' and codec != 'aac':
+            raise AssetValidationError('M4A 编码必须为 AAC')
         if fmt == "mp3":
             if codec != "mp3":
                 raise AssetValidationError("MP3 编码必须为 mp3")

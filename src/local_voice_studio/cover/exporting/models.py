@@ -6,6 +6,8 @@ from pathlib import Path
 class ExportFormat(str, Enum):
     WAV = "wav"
     MP3 = "mp3"
+    FLAC = "flac"
+    M4A = "m4a"
     BOTH = "both"
 
 class OverwritePolicy(str, Enum):

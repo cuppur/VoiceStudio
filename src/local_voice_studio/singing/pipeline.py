@@ -5,6 +5,8 @@ manifests, consent, hashes and atomic publication; it never imports torch.
 """
 from __future__ import annotations
 
+from local_voice_studio.infrastructure.process_options import hidden_process_options
+
 import hashlib
 import json
 import shutil
@@ -75,7 +77,7 @@ class SingingPipeline:
         ffmpeg = EngineRuntimeResolver(self.paths).resolve_private_tool("ffmpeg") if self.paths else None
         if ffmpeg is None:
             raise RuntimeError("非 WAV 验证输入需要受信任的 FFmpeg")
-        process = subprocess.Popen([str(ffmpeg), "-v", "error", "-i", str(source), "-t", "5", "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le", "-y", str(output)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        process = subprocess.Popen([str(ffmpeg), "-v", "error", "-i", str(source), "-t", "5", "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le", "-y", str(output)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, **hidden_process_options())
         while process.poll() is None:
             if cancel is not None and cancel.is_set():
                 process.terminate()

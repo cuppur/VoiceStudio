@@ -292,6 +292,11 @@ class DatasetDraftSegment:
     human_confirmed: bool = False
     override_reason: str = ""
     id: str = field(default_factory=lambda: uuid4().hex)
+    auto_accepted: bool = False
+
+    @property
+    def accepted(self) -> bool:
+        return self.human_confirmed or self.auto_accepted
 
     @property
     def duration_seconds(self) -> float:
@@ -320,7 +325,7 @@ class DatasetDraft:
 
     @property
     def confirmed_seconds(self) -> float:
-        return sum(item.duration_seconds for item in self.segments if item.human_confirmed and item.eligible)
+        return sum(item.duration_seconds for item in self.segments if item.accepted and item.eligible)
 
     @property
     def eligible_seconds(self) -> float:

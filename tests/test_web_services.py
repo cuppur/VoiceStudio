@@ -386,7 +386,8 @@ def test_training_import_registers_source_assets(tmp_path: Path):
     training.import_assets("", [str(source)], name="训练测试声音", consent=True)
     deadline = time.time() + 60
     while time.time() < deadline and "training.scanned" not in received and "training.error" not in received:
-        QTest.qWait(250)
+        QApplication.processEvents()
+        time.sleep(0.01)
     assert "training.scanned" in received, received
     payload = received["training.scanned"]
     assert payload["added"] == 1

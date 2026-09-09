@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from local_voice_studio.infrastructure.process_options import hidden_process_options
+
 import hashlib
 import json
 import os
@@ -117,7 +119,7 @@ def _find_tool(name: str) -> Path | None:
 
 
 def _quality_with_ffmpeg(path: Path, ffmpeg: Path) -> list[str]:
-    completed = subprocess.run([str(ffmpeg), "-hide_banner", "-i", str(path), "-af", "volumedetect,silencedetect=noise=-40dB:d=2", "-f", "null", os.devnull], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=QUALITY_TIMEOUT_SECONDS)
+    completed = subprocess.run([str(ffmpeg), "-hide_banner", "-i", str(path), "-af", "volumedetect,silencedetect=noise=-40dB:d=2", "-f", "null", os.devnull], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=QUALITY_TIMEOUT_SECONDS, **hidden_process_options())
     report = completed.stderr; flags: list[str] = []
     maximum = re.search(r"max_volume:\s*(-?[\d.]+) dB", report); mean = re.search(r"mean_volume:\s*(-?[\d.]+) dB", report)
     if maximum and float(maximum.group(1)) >= -0.1: flags.append("clipping_risk")
@@ -132,7 +134,7 @@ def _probe_with_ffprobe(path: Path, ffprobe: Path, digest: str) -> AudioProbe:
         "format=duration,bit_rate:stream=codec_name,sample_rate,channels",
         "-select_streams", "a:0", "-of", "json", str(path),
     ]
-    completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, timeout=FFPROBE_TIMEOUT_SECONDS)
+    completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, timeout=FFPROBE_TIMEOUT_SECONDS, **hidden_process_options())
     value = json.loads(completed.stdout)
     stream = (value.get("streams") or [{}])[0]
     fmt = value.get("format") or {}

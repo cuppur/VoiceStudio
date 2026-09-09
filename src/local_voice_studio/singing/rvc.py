@@ -1,4 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
+
+from local_voice_studio.infrastructure.process_options import hidden_process_options
 
 import hashlib
 import json
@@ -50,7 +52,7 @@ class RVCReadiness:
         if not c.env_root.is_dir(): errors.append("RVC 隔离环境不存在")
         if c.python.is_file():
             try:
-                probe = subprocess.run([str(c.python), "-c", "import torch; print(torch.__version__); print(torch.cuda.is_available())"], capture_output=True, text=True, timeout=15)
+                probe = subprocess.run([str(c.python), "-c", "import torch; print(torch.__version__); print(torch.cuda.is_available())"], capture_output=True, text=True, timeout=15, **hidden_process_options())
                 lines = probe.stdout.strip().splitlines()
                 if probe.returncode != 0 or not lines or lines[0].strip() != c.torch_version:
                     errors.append(f"RVC PyTorch 版本不匹配（需要 {c.torch_version}）")
@@ -99,7 +101,7 @@ class RVCEngine:
         if cwd is not None and cwd.resolve() != self.config.engine_root.resolve():
             search_roots.append(str(cwd))
         env["PYTHONPATH"] = os.pathsep.join(extra_paths + search_roots + [str(product_src)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
-        self.process = subprocess.Popen(args, cwd=str(cwd or self.config.engine_root), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+        self.process = subprocess.Popen(args, cwd=str(cwd or self.config.engine_root), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | hidden_process_options().get("creationflags", 0))
         output_tail: list[str] = []
         lines: queue.Queue[str | None] = queue.Queue()
         def _drain() -> None:
@@ -136,7 +138,7 @@ class RVCEngine:
     def cancel(self) -> None:
         p = self.process
         if p and p.poll() is None:
-            if os.name == "nt": subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"], capture_output=True)
+            if os.name == "nt": subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"], capture_output=True, **hidden_process_options())
             else: os.killpg(os.getpgid(p.pid), signal.SIGTERM)
 
     def _prepare_training_files(self, experiment: Path, sample_rate: str, version: str) -> None:

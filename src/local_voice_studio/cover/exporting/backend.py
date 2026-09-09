@@ -33,19 +33,19 @@ class FFmpegExportBackend:
             process.stop()
 
     def encode(self, source: Path, target: Path, *, format: str, cancel: Any = None) -> Path:
-        if format not in {"wav", "mp3"}:
+        if format not in {"wav", "mp3", "flac", "m4a"}:
             raise ValueError(f"不支持的导出格式: {format}")
         token = as_cancellation_token(cancel)
         if token.is_cancelled():
             raise InterruptedError("导出已取消")
-        codec = "pcm_s16le" if format == "wav" else "libmp3lame"
+        codec = {"wav": "pcm_s16le", "mp3": "libmp3lame", "flac": "flac", "m4a": "aac"}[format]
         # Keep diagnostic flags centralized in cover.process; encoding options
         # belong exclusively to this backend, never to the transaction service.
         args = [str(self.ffmpeg), "-y", *FFMPEG_QUIET_ARGS, "-i", str(source), "-ar", "48000", "-ac", "2",
                 "-c:a", codec]
-        if format == "mp3":
+        if format in {"mp3", "m4a"}:
             args += ["-b:a", "320k"]
-        args += ["-f", format, str(target)]
+        args += ["-f", "ipod" if format == "m4a" else format, str(target)]
         process = process_module.ManagedProcess(args, cancel=token)
         self.process = process
         try:

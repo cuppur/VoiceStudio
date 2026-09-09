@@ -8,6 +8,8 @@ official lyrics, and the UI must keep showing that distinction.
 """
 from __future__ import annotations
 
+from local_voice_studio.infrastructure.process_options import hidden_process_options
+
 import json
 import os
 import subprocess
@@ -108,7 +110,7 @@ class CoverLyricsService:
         process = subprocess.Popen(command, cwd=str(self.paths.engine_root), env=env,
                                    stdin=subprocess.DEVNULL,
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                   text=True, encoding="utf-8", errors="replace")
+                                   text=True, encoding="utf-8", errors="replace", **hidden_process_options())
         self._process = process
         try:
             assert process.stdout is not None
@@ -176,7 +178,7 @@ class CoverLyricsService:
     @staticmethod
     def _kill(process: subprocess.Popen) -> None:
         if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True)
+            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, **hidden_process_options())
         else:
             process.terminate()
 

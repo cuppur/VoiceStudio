@@ -122,12 +122,15 @@ class MediaService(WebService):
             for track in self.plan.active_tracks if self.plan else []:
                 self.outputs[track.role.value].setVolume(min(1, track.gain * volume))
         elif operation == 'seek':
+            self.preview_end = None
             self.position = max(0, int(float(data.get('value', 0))))
             for player in self.players.values(): player.setPosition(self.position)
         elif operation == 'pause':
             self.stop()
         elif operation == 'play':
             if not self.plan or not self.plan.active_tracks: raise ValueError('当前试听模式没有可播放的音轨')
+            limit = data.get('value')
+            self.preview_end = self.position + 20000 if limit == 20 else None
             self.playing = True
             for track in self.plan.active_tracks:
                 player = self.players[track.role.value]
@@ -152,6 +155,8 @@ class MediaService(WebService):
             duration = primary.duration() or active[0].duration_ms
             if self.playing:
                 self.position = primary.position()
+                if getattr(self, 'preview_end', None) is not None and self.position >= self.preview_end:
+                    self.stop()
                 if primary.mediaStatus() == QMediaPlayer.EndOfMedia:
                     self.stop()
                     self.position = 0

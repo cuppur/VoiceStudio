@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, QTimer, Signal, Slot, QRunnable, QThreadPool
 
 from .audio import copy_original, scan_audio_files, sha256_file
 from .models import (
@@ -66,7 +66,7 @@ def draft_from_preparation(project: Path, workflow: TrainingWorkflow, manifest_p
 
 
 def freeze_draft(store: StudioStore, project: Path, profile: VoiceProfile, draft: DatasetDraft) -> DatasetManifest:
-    valid = [item for item in draft.segments if item.human_confirmed and item.eligible]
+    valid = [item for item in draft.segments if item.accepted and item.eligible]
     seconds = sum(item.duration_seconds for item in valid)
     if seconds < 60:
         raise ValueError(f"已确认的合格素材不足 60 秒，还差 {60 - seconds:.1f} 秒")
@@ -110,24 +110,42 @@ def freeze_draft(store: StudioStore, project: Path, profile: VoiceProfile, draft
     return dataset
 
 
+class _DatasetTask(QRunnable):
+    def __init__(self, key, action, complete):
+        super().__init__()
+        self.key, self.action, self.complete = key, action, complete
+
+    def run(self):
+        try:
+            result = self.action()
+            self.complete.emit(self.key, result, '')
+        except Exception as exc:
+            self.complete.emit(self.key, None, str(exc))
+
+
 class TrainingWorkflowController(QObject):
     workflow_changed = Signal(object)
     draft_ready = Signal(object)
     profile_changed = Signal(str)
     job_created = Signal(object)
+    background_finished = Signal(str, object, str)
 
     def __init__(self, store: StudioStore, project: Path, client, parent=None):
         super().__init__(parent); self.store, self.project, self.client = store, project, client
         self.requests: dict[str, tuple[str, str, Job]] = {}
         self.verify_index: dict[str, int] = {}
+        self.background = {}
+        self._closing = False
+        self.background_finished.connect(self._background_done)
         self.client.event.connect(self._on_event)
         self.store.recover_workflows(project)
 
-    def start(self, profile: VoiceProfile, source_asset_ids: list[str], smart_optimization: bool = True) -> TrainingWorkflow:
+    def start(self, profile: VoiceProfile, source_asset_ids: list[str], smart_optimization: bool = True, *, auto_continue=False, quality='standard') -> TrainingWorkflow:
         if not profile.consent_confirmed: raise ValueError("请先确认声音属于本人或已取得明确授权")
         workflow = TrainingWorkflow(
             profile.id, profile.name, list(source_asset_ids), status=WorkflowStatus.WAITING,
-            processing_options={"language": "zh", "separate_vocals": smart_optimization, "denoise": smart_optimization},
+            processing_options={"language": "zh", "separate_vocals": smart_optimization, "denoise": smart_optimization,
+                                "auto_continue": bool(auto_continue), "quality": quality},
             consent_record=profile.consent_record, consent_confirmed_at=profile.consent_confirmed_at,
         )
         profile.current_workflow_id = workflow.id; profile.last_workflow_id = workflow.id
@@ -149,24 +167,75 @@ class TrainingWorkflowController(QObject):
         })
         self._send(workflow, "prepare_dataset", "pipeline", JobKind.PREPARE_DATASET, payload)
 
-    def confirm_and_train(self, workflow: TrainingWorkflow, draft: DatasetDraft) -> None:
+    def confirm_and_train(self, workflow: TrainingWorkflow, draft: DatasetDraft, *, automatic=False) -> None:
+        if workflow.id in self.background or any(value[0] == workflow.id for value in self.requests.values()):
+            raise ValueError('当前训练正在执行，请勿重复启动')
         profile = self._profile(workflow.voice_profile_id)
         if not profile.consent_confirmed: raise ValueError("授权记录已失效，请重新确认")
         for item in draft.segments:
-            item.human_confirmed = bool(item.eligible)
+            if automatic:
+                item.included = bool(item.included and not item.quality_flags and item.text.strip())
+                item.auto_accepted = bool(item.eligible)
+            else:
+                item.human_confirmed = bool(item.eligible)
+                item.auto_accepted = False
         self.store.save_draft(self.project, draft)
         if draft.confirmed_seconds < 60:
             workflow.stage = WorkflowStage.REVIEW_REQUIRED; workflow.status = WorkflowStatus.WAITING
             workflow.waiting_reason = f"还差 {60 - draft.confirmed_seconds:.1f} 秒合格素材"
             self._save(workflow); raise ValueError(workflow.waiting_reason)
-        if not any(5 <= item.duration_seconds <= 10 for item in draft.segments if item.human_confirmed and item.eligible):
+        if not any(5 <= item.duration_seconds <= 10 for item in draft.segments if item.accepted and item.eligible):
             workflow.stage = WorkflowStage.REVIEW_REQUIRED; workflow.status = WorkflowStatus.WAITING
             workflow.waiting_reason = "需要至少一个 5–10 秒的干净参考片段"
             self._save(workflow); raise ValueError(workflow.waiting_reason)
         workflow.stage = WorkflowStage.FREEZING; workflow.status = WorkflowStatus.RUNNING; workflow.progress = .52; workflow.message = "正在锁定已确认数据"; self._save(workflow)
-        dataset = freeze_draft(self.store, self.project, profile, draft)
-        workflow.dataset_snapshot_id = dataset.id; workflow.snapshot_sha256 = dataset.snapshot_sha256
-        self._prepare_features(workflow, dataset)
+        project = self.project
+        self._background(workflow, 'freeze', lambda: freeze_draft(self.store, project, profile, draft))
+
+    def _background(self, workflow, operation, action):
+        self.background[workflow.id] = (operation, self.project)
+        QThreadPool.globalInstance().start(_DatasetTask(workflow.id, action, self.background_finished))
+
+    @Slot(str, object, str)
+    def _background_done(self, workflow_id, result, error):
+        context = self.background.pop(workflow_id, None)
+        if self._closing or context is None or context[1] != self.project:
+            return
+        workflow = self.store.load_workflow(self.project, workflow_id)
+        if workflow.status == WorkflowStatus.CANCELLED:
+            return
+        try:
+            if error:
+                raise ValueError(error)
+            if context[0] == 'draft':
+                self.store.save_draft(self.project, result)
+                workflow.draft_id = result.id
+                workflow.stage = WorkflowStage.REVIEW_REQUIRED
+                workflow.status = WorkflowStatus.WAITING
+                workflow.progress = .48
+                workflow.waiting_reason = '素材已准备，可自动继续或选择人工校对'
+                workflow.message = workflow.waiting_reason
+                self._save(workflow)
+                if workflow.processing_options.get('auto_continue'):
+                    try:
+                        self.confirm_and_train(workflow, result, automatic=True)
+                    except ValueError as exc:
+                        workflow.status = WorkflowStatus.WAITING
+                        workflow.message = '合格素材不足，请补充素材或校对后继续'
+                        workflow.waiting_reason = str(exc)
+                        self._save(workflow)
+                        self.draft_ready.emit(result)
+                else:
+                    self.draft_ready.emit(result)
+            else:
+                workflow.dataset_snapshot_id = result.id
+                workflow.snapshot_sha256 = result.snapshot_sha256
+                self._prepare_features(workflow, result)
+        except Exception as exc:
+            workflow.status = WorkflowStatus.FAILED
+            workflow.error = str(exc)
+            workflow.message = '素材处理失败，可重试'
+            self._save(workflow)
 
     def resume(self, workflow: TrainingWorkflow) -> None:
         if workflow.stage == WorkflowStage.REVIEW_REQUIRED and workflow.draft_id:
@@ -193,11 +262,15 @@ class TrainingWorkflowController(QObject):
         self._send(workflow, "prepare_dataset", "features", JobKind.PREPARE_DATASET, payload)
 
     def _train(self, workflow: TrainingWorkflow, dataset: DatasetManifest) -> None:
+        if self._closing or workflow.status == WorkflowStatus.CANCELLED:
+            return
         profile = self._profile(workflow.voice_profile_id)
         if not profile.consent_confirmed: raise ValueError("训练前授权记录已失效")
         workflow.stage = WorkflowStage.TRAINING; workflow.status = WorkflowStatus.RUNNING; workflow.training_run_id = uuid4().hex; workflow.attempt += 1; workflow.progress = .68; workflow.message = "正在训练声音模型"; self._save(workflow)
         payload = self._dataset_payload(workflow, dataset)
         payload.update({"training_run_id": workflow.training_run_id, "training_mode": "new"})
+        epochs = {'quick': (4, 5), 'standard': (8, 15), 'extended': (12, 20)}
+        payload['sovits_epochs'], payload['gpt_epochs'] = epochs.get(workflow.processing_options.get('quality'), epochs['standard'])
         self._send(workflow, "train", "train", JobKind.TRAIN, payload)
 
     def _verify(self, workflow: TrainingWorkflow) -> None:
@@ -247,6 +320,12 @@ class TrainingWorkflowController(QObject):
         context = self.requests.get(request_id)
         if not context: return
         workflow = self.store.load_workflow(self.project, context[0]); operation, job = context[1], context[2]
+        if workflow.status == WorkflowStatus.CANCELLED:
+            if event in {'result', 'error'}:
+                self.requests.pop(request_id, None)
+                job.status = JobStatus.CANCELLED
+                self.store.save_job(job)
+            return
         if event == "progress":
             job.status = JobStatus.RUNNING; job.progress = float(payload.get("progress", 0)); job.message = str(payload.get("message", "")); self.store.save_job(job)
             bases = {"pipeline": (.05, .42), "features": (.58, .1), "train": (.68, .21), "verify_0": (.9, .04), "verify_1": (.94, .05)}
@@ -258,9 +337,9 @@ class TrainingWorkflowController(QObject):
         self.requests.pop(request_id, None); job.status = JobStatus.COMPLETED; job.progress = 1; job.outputs = list(payload.get("outputs", [])); self.store.save_job(job)
         try:
             if operation == "pipeline":
-                draft = draft_from_preparation(self.project, workflow, Path(job.outputs[0])); self.store.save_draft(self.project, draft)
-                workflow.draft_id = draft.id; workflow.stage = WorkflowStage.REVIEW_REQUIRED; workflow.status = WorkflowStatus.WAITING; workflow.progress = .48
-                workflow.waiting_reason = f"已识别 {len(draft.segments)} 个片段，请确认合格数据"; workflow.message = workflow.waiting_reason; self._save(workflow); self.draft_ready.emit(draft)
+                workflow.message = '正在后台检查切片并筛选训练素材'; self._save(workflow)
+                project, manifest = self.project, Path(job.outputs[0])
+                self._background(workflow, 'draft', lambda: draft_from_preparation(project, workflow, manifest))
             elif operation == "features":
                 workflow.feature_manifest = job.outputs[0]; self._save(workflow)
                 QTimer.singleShot(50, lambda workflow_id=workflow.id: self._train(

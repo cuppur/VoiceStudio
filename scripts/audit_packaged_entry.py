@@ -24,6 +24,37 @@ from PySide6.QtWebSockets import QWebSocket
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def training_fixture(root):
+    """Create an isolated long material list and a resumable old review draft."""
+    sys.path.insert(0, str(ROOT / 'src'))
+    from local_voice_studio.paths import AppPaths
+    from local_voice_studio.storage import StudioStore
+    from local_voice_studio.models import VoiceProfile, SourceAsset, TrainingWorkflow, WorkflowStage, DatasetDraft, DatasetDraftSegment
+    data = root / 'data'
+    paths = AppPaths(data, root/'projects', data/'runtime', data/'engine', root/'models', data/'logs', data/'studio.sqlite3', root/'cache')
+    store = StudioStore(paths)
+    project = store.create_project('操作验证')
+    store.set_setting('ui.last_project', str(project))
+    profile = VoiceProfile('测试声音', True, consent_record='隔离测试', consent_confirmed_at='2026-09-09')
+    store.save_profile(project, profile)
+    from local_voice_studio.audio import sha256_file
+    assets = []
+    for index in range(29):
+        path = project / 'raw' / f'素材 {index + 1:02}.wav'
+        path.parent.mkdir(exist_ok=True)
+        with wave.open(str(path), 'wb') as audio:
+            audio.setnchannels(1); audio.setsampwidth(2); audio.setframerate(8000)
+            audio.writeframes(b'\0\0' * 8000 * 24)
+        assets.append(SourceAsset(profile.id,str(path),str(path),sha256_file(path),duration_seconds=24,sample_rate=8000,channels=1,codec='pcm_s16le'))
+    store.save_source_assets(project, assets)
+    workflow = TrainingWorkflow(profile.id, profile.name, stage=WorkflowStage.REVIEW_REQUIRED,
+                                message='素材已准备，可自动继续或选择人工校对')
+    draft = DatasetDraft(workflow.id,profile.id,'test-preparation',[
+        DatasetDraftSegment('raw/素材 01.wav',0,6,text='这是用于界面验证的文字。') for _ in range(12)])
+    workflow.draft_id = draft.id
+    store.save_draft(project,draft); store.save_workflow(project,workflow)
+
+
 def main():
     app = QCoreApplication([])
     output = Path(sys.argv[1])
@@ -39,6 +70,7 @@ def main():
             audio.setframerate(8000)
             audio.writeframes(b"\0\0" * 8000)
         verify = '--verify-fixed' in sys.argv
+        round2 = '--verify-round2' in sys.argv
         formats = []
         installed_tools = Path(os.environ.get('LOCALAPPDATA', '')) / 'LocalVoiceStudio' / 'tools'
         if verify and (installed_tools / 'ffmpeg.exe').is_file():
@@ -57,6 +89,8 @@ def main():
                            LOCAL_VOICE_STUDIO_MODELS=str(root / "models"),
                            LOCAL_VOICE_STUDIO_CACHE=str(root / "cache"),
                            QTWEBENGINE_REMOTE_DEBUGGING=f"127.0.0.1:{port}")
+        if round2:
+            training_fixture(root)
         executable = ROOT / "dist" / "LocalVoiceStudio" / "LocalVoiceStudio.exe"
         process = subprocess.Popen([str(executable)], cwd=executable.parent, env=environment,
                                    creationflags=subprocess.CREATE_NO_WINDOW)
@@ -131,6 +165,27 @@ def main():
                     result['formats'].append({'format': target.suffix, 'ok': response['ok'], 'duration': evaluate('__vsBridge.song.duration_ms')})
             screenshot = command("Page.captureScreenshot", {"format": "png"})
             (output / "packaged-import.png").write_bytes(base64.b64decode(screenshot["data"]))
+            if round2:
+                evaluate("document.querySelector('[data-page=\"train\"]').click()")
+                until(lambda: evaluate("document.querySelectorAll('#sampleList .sample-row').length===29"))
+                result['training_viewports'] = []
+                for width,height in ((1440,900),(1280,720)):
+                    command('Emulation.setDeviceMetricsOverride', {'width':width,'height':height,'deviceScaleFactor':1,'mobile':False})
+                    state = evaluate("""(() => { const b=document.querySelector('#trainStart').getBoundingClientRect(); const r=document.querySelector('#reviewTraining').getBoundingClientRect();return {width:innerWidth,height:innerHeight,primary:document.querySelector('#trainStart').textContent,visible:b.top>=0&&b.bottom<=innerHeight&&r.top>=0&&r.bottom<=innerHeight,manualDefault:document.querySelector('#manualTrainingReview').checked};})()""")
+                    assert state['visible'] and not state['manualDefault'],state
+                    result['training_viewports'].append(state)
+                    screenshot=command('Page.captureScreenshot',{'format':'png'})
+                    (output/f'training-{width}.png').write_bytes(base64.b64decode(screenshot['data']))
+                evaluate("document.querySelector('#reviewTraining').click()")
+                until(lambda:evaluate("document.querySelectorAll('#trainDraftPanel textarea').length===12"))
+                result['review_accessible'] = True
+                screenshot=command('Page.captureScreenshot',{'format':'png'})
+                (output/'training-review.png').write_bytes(base64.b64decode(screenshot['data']))
+                evaluate("document.querySelector('.modal-mask.show button').click()")
+                started=time.perf_counter()
+                for _ in range(20):
+                    evaluate("new Promise(resolve=>__vsBridge.invoke('cover.state',{cover_id:__vsBridge.song.id},resolve))")
+                result['cover_state_roundtrip_mean_ms'] = round((time.perf_counter()-started)*1000/20,2)
             (output / "packaged-evidence.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             print(json.dumps(result, ensure_ascii=False), flush=True)
         finally:

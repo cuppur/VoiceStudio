@@ -68,7 +68,7 @@ PROBE_SCRIPT = """(() => {
     result.drawerOpen = q('#taskDrawer').classList.contains('show');
     q('#closeTaskDrawer').click();
     result.drawerClosed = !q('#taskDrawer').classList.contains('show');
-    result.unsupportedHidden = q('#advancedBtn').classList.contains('hidden') && q('.take-strip').classList.contains('hidden');
+    result.unsupportedHidden = q('#previewRender')===null && q('.take-strip').classList.contains('hidden');
     result.importDemoRemoved = !q('#importModal');
     return JSON.stringify(result);
 })()"""

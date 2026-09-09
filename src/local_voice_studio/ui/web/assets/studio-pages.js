@@ -98,6 +98,9 @@ window.VS_PAGES = (function () {
 
   function showTask(requestId, title, cancelAction) {
     const pop = taskPopup();
+    if (TASKS.has(String(requestId))) return;
+    clearTimeout(pop.hideTimer);
+    pop.dataset.requestId=String(requestId);
     TASKS.set(String(requestId), { title: title || '正在处理' });
     S.setText('#taskTitle', title || '正在处理');
     S.setText('#taskStage', '准备中…');
@@ -111,7 +114,7 @@ window.VS_PAGES = (function () {
       cancel.disabled = true;
     }; }
     const close = q('#taskClose');
-    if (close) { close.onclick = () => { pop.classList.remove('show'); TASKS.delete(String(requestId)); }; }
+    if (close) { close.onclick = () => { pop.classList.remove('show'); }; }
   }
 
   function updateTask(requestId, percent, stage, message) {
@@ -131,7 +134,7 @@ window.VS_PAGES = (function () {
     S.setText('#taskPct', '100%');
     const bar = q('#taskBar');
     if (bar) { bar.style.width = '100%'; }
-    setTimeout(() => pop.classList.remove('show'), 1200);
+    pop.hideTimer=setTimeout(() => { if(pop.dataset.requestId===String(requestId)) pop.classList.remove('show'); }, 1200);
   }
 
   // ------------------------------------------------------------------- cover
@@ -161,6 +164,18 @@ window.VS_PAGES = (function () {
       });
       const pitch = q('#coverPitch');
       if (pitch) { pitch.oninput = (event) => { S.setText('#coverPitchVal', (Number(event.target.value) > 0 ? '+' : '') + event.target.value); }; }
+      const presets = q('.recommend-row');
+      presets.innerHTML = '<span>参数预设</span><button class="mini" data-preset="balanced">均衡</button><button class="mini" data-preset="voice">音色优先</button><button class="mini" data-preset="clear">辅音优先</button>';
+      presets.onclick = event => {
+        const values = {balanced:[.75,.33],voice:[.9,.25],clear:[.5,.1]}[event.target.dataset.preset];
+        if (!values) return;
+        q('#rvcIndex').value=values[0];q('#rvcProtect').value=values[1];S.setText('#rvcIndexVal',values[0]);S.setText('#rvcProtectVal',values[1]);
+        toast('已更新检索强度与辅音保护参数，下次生成生效');
+      };
+      const advanced = q('#advancedPanel');
+      advanced.innerHTML = '<div class="field"><label>音色检索强度 · Index Rate <output id="rvcIndexVal">0.75</output></label><input id="rvcIndex" type="range" min="0" max="1" step="0.05" value="0.75"></div><div class="field"><label>辅音保护 · Protect <output id="rvcProtectVal">0.33</output></label><input id="rvcProtect" type="range" min="0" max="0.5" step="0.01" value="0.33"></div><div class="field"><label>音高平滑</label><select id="rvcSmoothing"><option value="off">关闭</option><option value="light">轻度</option><option value="medium">中度</option></select></div><div class="card-sub">F0：RMVPE。平滑用于减少抖动，不会自动修正跑调。</div>';
+      q('#advancedBtn').onclick = () => { advanced.classList.toggle('show'); };
+      ['Index','Protect'].forEach(key => q('#rvc'+key).oninput = e => S.setText('#rvc'+key+'Val',e.target.value));
       this.watchSong();
       if (!this.songId && S.songs && S.songs.length) {
         this.songId = S.songs[0].id;
@@ -306,7 +321,7 @@ window.VS_PAGES = (function () {
         cover_id: this.songId,
         profile_id: this.voiceId,
         pitch_shift: pitch ? Number(pitch.value) : 0,
-        settings: {},
+        settings: {index_rate: Number(q('#rvcIndex').value), protect: Number(q('#rvcProtect').value), f0_method:'rmvpe', autotune:q('#rvcSmoothing').value},
         cleanup: dereverb && dereverb.classList.contains('on') ? { mode: 'denoise', dereverb: 'light' } : null,
       });
     },
@@ -332,6 +347,8 @@ window.VS_PAGES = (function () {
         content: '<div class="format-grid">'
           + '<div class="format-opt active" data-choice data-format="wav">WAV<br><small>无损</small></div>'
           + '<div class="format-opt" data-choice data-format="mp3">MP3<br><small>320 kbps</small></div>'
+          + '<div class="format-opt" data-choice data-format="flac">FLAC<br><small>无损压缩</small></div>'
+          + '<div class="format-opt" data-choice data-format="m4a">M4A<br><small>AAC 320 kbps</small></div>'
           + '<div class="format-opt" data-choice data-format="both">两者<br><small>WAV + MP3</small></div></div>',
         actions: [
           { label: '取消', value: null },
@@ -634,12 +651,39 @@ window.VS_PAGES = (function () {
       if (start) { start.onclick = () => this.primary(); }
       const restore = qq('[data-page-view="train"] .page-actions .btn')[0];
       if (restore) { restore.onclick = () => this.resume(); }
+      this.setupTrainingUI();
       this.refresh();
+    },
+
+    setupTrainingUI() {
+      const page = q('[data-page-view="train"]');
+      const actions = q('.page-actions', page);
+      const review = actions.querySelector('button');
+      review.id = 'reviewTraining'; review.textContent = '校对片段（可选）';
+      review.onclick = () => this.confirmDraft();
+      actions.appendChild(q('#trainStart'));
+      q('.train-start', page).remove();
+      q('.train-center', page).insertAdjacentHTML('afterbegin', '<div id="trainStatus" class="card training-status" role="status">导入素材后点击一键训练，完成后可在声音库试听。</div>');
+      const settings = q('.train-settings', page);
+      settings.insertAdjacentHTML('beforeend', '<div class="field"><label><input type="checkbox" id="manualTrainingReview"> 训练前暂停，人工校对文字（可选）</label></div><div class="field"><label><input type="checkbox" id="smartTraining" checked> 自动清理与分离素材</label></div>');
+      const quality = q('select', settings); quality.id = 'trainingQuality';
+      quality.innerHTML = '<option value="standard">标准 · 8 / 15 轮</option><option value="quick">快速试训 · 4 / 5 轮</option><option value="extended">加长训练 · 12 / 20 轮</option>';
+      quality.parentElement.classList.remove('hidden'); q('label', quality.parentElement).textContent = '训练时长（SoVITS / GPT）';
+      q('.quality-card .section-label', page).textContent = '素材概况';
+      q('.quality-card .status', page).textContent = '以筛选结果为准';
+      qq('.quality-metric span', page).forEach((n,i) => n.textContent = ['素材数量','导入时长','声音授权','处理阶段'][i]);
+      qq('.diagnostic-line > span', page).forEach((n,i) => n.textContent = ['导入音频时长','素材文件数','当前状态'][i]);
+      q('.samples-card .mini', page).classList.add('hidden');
+      const caps = qq('.train-settings .toggle-row', page);
+      if (caps[1]) q('.toggle-copy span',caps[1]).textContent = '文字模型完成后继续训练 RVC';
     },
 
     refresh(profileId) {
       if (profileId) { this.profileId = profileId; }
+      if (this.refreshPending) return;
+      this.refreshPending = true;
       S.invoke('training.state', { profile_id: this.profileId || '' }, (reply) => {
+        this.refreshPending = false;
         if (!reply.ok) { return; }
         this.state = reply.data;
         this.profileId = (reply.data.profile && reply.data.profile.id) || '';
@@ -652,13 +696,15 @@ window.VS_PAGES = (function () {
       if (!state) { return; }
       const assets = state.assets || [];
       const list = q('#sampleList');
-      if (list) {
+      const assetsKey = JSON.stringify(assets);
+      if (list && this.assetsKey !== assetsKey) {
+        this.assetsKey = assetsKey;
         list.innerHTML = '';
         if (!assets.length) {
           list.innerHTML = '<div class="sample-row"><span></span><span>还没有导入素材</span>'
             + '<div class="quality"><i style="width:0%"></i></div><span class="status">空</span></div>';
         }
-        assets.slice(0, 40).forEach((asset) => {
+        assets.forEach((asset) => {
           const row = document.createElement('div');
           row.className = 'sample-row';
           const flags = (asset.flags || []).length;
@@ -678,7 +724,7 @@ window.VS_PAGES = (function () {
       if (score) {
         const total = state.total_seconds || 0;
         const target = state.singing_min_seconds || 180;
-        score.innerHTML = `${Math.min(100, Math.round((total / target) * 100))} <small>/ 100</small>`;
+        score.textContent = state.total_text || '0:00';
       }
       const storage = q('[data-page-view="train"] .storage-bar i');
       if (storage) {
@@ -689,17 +735,17 @@ window.VS_PAGES = (function () {
         metrics[0].textContent = assets.length;
         metrics[1].textContent = state.total_text || '0:00';
         metrics[2].textContent = state.profile && state.profile.consent ? '已授权' : '未授权';
-        metrics[3].textContent = (state.workflow && state.workflow.stage) || '未开始';
+        metrics[3].textContent = ({preprocessing:'预处理',review_required:'等待处理',freezing:'锁定素材',feature_preparing:'提取特征',training:'训练中',verifying:'生成试听',saved:'已完成'})[(state.workflow || {}).stage] || '未开始';
       }
       const lines = qq('[data-page-view="train"] .diagnostic-line b');
       if (lines.length >= 3) {
         lines[0].textContent = (state.total_text || '0:00') + ' 已导入';
         lines[1].textContent = `${assets.length} 个文件`;
-        lines[2].textContent = state.workflow ? (state.workflow.status || '') : '未开始';
+        lines[2].textContent = ({running:'运行中',waiting:'等待处理',completed:'完成',failed:'失败',cancelled:'已取消',interrupted:'已中断'})[(state.workflow || {}).status] || '未开始';
       }
       const alert = q('[data-page-view="train"] .quality-alert');
       if (alert) {
-        const flags = assets.reduce((sum, item) => sum + (item.flags || []).length, 0);
+        const flags = assets.filter(item => (item.flags || []).length).length;
         if (flags) { alert.textContent = `⚠ ${flags} 个素材存在质量标记，预处理阶段会进一步检查。`; alert.classList.remove('hidden'); }
         else { alert.classList.add('hidden'); }
       }
@@ -713,14 +759,18 @@ window.VS_PAGES = (function () {
       if (start) {
         const workflow = state.workflow || {};
         if (workflow.running) { start.textContent = '取消当前任务'; }
-        else if (workflow.stage === 'review_required' && state.draft && state.draft.segments) { start.textContent = '确认并训练'; }
+        else if (workflow.stage === 'review_required' && state.draft && state.draft.segments) { start.textContent = '自动筛选并继续训练'; }
         else if (workflow.can_resume) { start.textContent = '继续上次任务'; }
-        else if (assets.length) { start.textContent = '开始自动处理'; }
+        else if (assets.length) { start.textContent = '一键训练'; }
         else { start.textContent = '导入素材'; }
       }
+      if (state.singing_request) start.textContent = '取消歌唱训练';
+      const wf = state.workflow || {};
+      q('#reviewTraining').disabled = !(state.draft && state.draft.segments && !wf.running);
+      q('#trainStatus').textContent = wf.error || wf.waiting_reason && !wf.running && wf.waiting_reason || wf.message || '导入素材后点击一键训练，自动筛选合格片段并训练。';
+      if (state.scanning) { start.disabled = true; start.textContent = '正在导入素材…'; } else { start.disabled = false; }
       const nameInput = q('[data-page-view="train"] .train-settings input');
       if (nameInput && state.profile && !nameInput.value) { nameInput.value = state.profile.name; }
-      this.paintDraft();
     },
 
     paintDraft() {
@@ -767,16 +817,20 @@ window.VS_PAGES = (function () {
     async primary() {
       const state = this.state || {};
       const workflow = state.workflow || {};
+      if (state.singing_request) { S.invoke('task.cancel',{request_id:state.singing_request}); return; }
       if (workflow.running) { S.invoke('training.cancel', { workflow_id: workflow.id }); return; }
-      if (workflow.stage === 'review_required' && state.draft) { this.confirmDraft(); return; }
+      if (workflow.stage === 'review_required' && state.draft) { S.invoke('training.resume', {workflow_id:workflow.id}); return; }
       if (workflow.can_resume) { S.invoke('training.resume', { workflow_id: workflow.id }); return; }
       if (!(state.assets || []).length) { this.importAssets(); return; }
       const consent = state.profile && state.profile.consent;
       if (!consent) { toast('请先确认授权后再开始训练'); return; }
-      const smart = q('[data-page-view="train"] .train-settings .switch');
+      const smart = q('#smartTraining');
+      const capabilities = qq('[data-page-view="train"] .train-settings .toggle-row .switch');
       S.invoke('training.start', {
         profile_id: this.profileId,
-        smart: smart ? smart.classList.contains('on') : true,
+        smart: smart ? smart.checked : true,
+        manual_review: q('#manualTrainingReview').checked, quality: q('#trainingQuality').value,
+        train_tts: capabilities[0].classList.contains('on'), train_singing: capabilities[1].classList.contains('on'),
       });
     },
 
@@ -814,7 +868,11 @@ window.VS_PAGES = (function () {
     },
 
     onEvent(name, data) {
-      if (name === 'training.scanned') {
+      if (name.indexOf('job.') === 0 && data.kind === 'singing') {
+        if (name === 'job.started') { showTask(data.request_id,'训练歌唱模型',()=>S.invoke('task.cancel',{request_id:data.request_id})); this.refresh(); }
+        else if (name === 'job.progress') updateTask(data.request_id,data.percent,data.message,'');
+        else if (['job.result','job.error','job.cancelled'].includes(name)) { finishTask(data.request_id,name==='job.result'?'歌唱训练完成':(data.message||'已取消'));this.refresh();S.refresh(); }
+      } else if (name === 'training.scanned') {
         toast(data.message || '素材已导入');
         this.refresh(data.profile_id);
       } else if (name === 'training.scanning') {
@@ -824,12 +882,18 @@ window.VS_PAGES = (function () {
       } else if (name === 'training.workflow') {
         const workflow = data.workflow || {};
         this.state = this.state || {};
+        const previous = this.state.workflow || {};
         this.state.workflow = workflow;
-        if (workflow.profile_id) { this.profileId = workflow.profile_id; }
+        if (data.profile_id) { this.profileId = data.profile_id; }
         if (workflow.running) { showTask('training-' + workflow.id, '训练声音', () => S.invoke('training.cancel', {workflow_id: workflow.id})); updateTask('training-' + workflow.id, workflow.progress, workflow.message, ''); }
         else if (workflow.stage === 'saved') { finishTask('training-' + workflow.id, '训练完成'); toast('新声音已验证并启用'); }
         else if (workflow.status === 'failed') { finishTask('training-' + workflow.id, '失败'); toast(workflow.error || '训练失败'); }
-        this.refresh(workflow.profile_id);
+        if (previous.stage !== workflow.stage || previous.status !== workflow.status) this.refresh(data.profile_id);
+        else this.paint();
+        if (!workflow.running && workflow.stage === 'review_required') {
+          q('#taskPop').classList.remove('show');
+          q('#trainStatus').textContent = workflow.waiting_reason || workflow.message;
+        }
       } else if (name === 'training.draft') {
         this.state = this.state || {};
         this.state.draft = data.draft;
@@ -892,6 +956,14 @@ window.VS_PAGES = (function () {
   // ----------------------------------------------------------------- exports
   const exportsPage = {
     install() {
+      const action = document.createElement('button'); action.className = 'btn primary'; action.textContent = '导出当前歌曲';
+      action.onclick = () => {
+        const option = q('[data-page-view="exports"] .format-opt.active');
+        const format = (((option && option.textContent) || 'WAV').match(/WAV|MP3|FLAC|M4A/) || ['wav'])[0].toLowerCase();
+        if (!cover.songId || !cover.state || !cover.state.has_final_mix) { toast('请先在翻唱页生成最终混音'); return; }
+        S.invoke('cover.export', {cover_id:cover.songId,format,existing_policy:'reject'});
+      };
+      q('[data-page-view="exports"] .page-actions').appendChild(action);
       const buttons = qq('[data-page-view="exports"] .page-actions .btn');
       if (buttons[0]) { buttons[0].onclick = () => S.invoke('exports.open_folder', {}); }
       if (buttons[1]) { buttons[1].onclick = () => S.invoke('exports.clean_cache', {}); }
@@ -948,13 +1020,7 @@ window.VS_PAGES = (function () {
 
   // ----------------------------------------------------------- unsupported UI
   const UNSUPPORTED = [
-    '.recommend-row',        // 效果预设：后端没有预设概念
-    '#advancedBtn',          // RVC 高级参数：当前 Worker 不接受
-    '#advancedPanel',
     '.take-strip',           // 多 Take 版本：Worker 只产出单次结果
-    '#abSeg',                // A/B 对比：无对应能力
-    '#abCompare',
-    '#previewRangeBtn',      // 20 秒局部试听：无局部渲染
     '#previewRender',
   ];
 
@@ -1008,7 +1074,7 @@ window.VS_PAGES = (function () {
     // 导出：后端只支持 WAV / MP3
     qq('[data-page-view="exports"] .format-opt').forEach((node) => {
       const text = node.textContent || '';
-      if (text.includes('FLAC') || text.includes('M4A')) { node.classList.add('hidden'); }
+      node.onclick = () => { qq('[data-page-view="exports"] .format-opt').forEach(n => n.classList.remove('active')); node.classList.add('active'); };
     });
     // 训练：训练质量下拉没有后端参数
     qq('[data-page-view="train"] .train-settings .field').forEach((node) => {
@@ -1031,6 +1097,11 @@ window.VS_PAGES = (function () {
       return;
     }
     installed = true;
+    const style = document.createElement('style');
+    style.textContent = `
+      .train-right{min-height:0;overflow:auto;padding-right:4px}.train-center .drop-card{flex:none;padding:12px}.train-center .dropzone{height:90px}.train-center .drop-icon{display:none}.train-center .samples-card{flex:1}.training-status{flex:none;padding:12px 16px;color:#9d501a;background:#fff7ef;font-size:12px;line-height:1.5}.train-settings .field{margin-top:12px}.train-settings input[type=checkbox]{width:auto;accent-color:#ff781d}.train-settings label{line-height:1.7}.page-actions #trainStart{min-width:150px}.sample-row{font-size:11px;min-height:42px}.sample-row>span{overflow-wrap:anywhere}.song-status{font-size:10px}.song-delete{background:transparent;color:#a37961;font-size:11px;cursor:pointer;padding:6px}.song-row{grid-template-columns:42px minmax(0,1fr) auto}.song-actions{display:flex;flex-direction:column;align-items:flex-end}.song-delete:hover{color:#c44728}.train-right .score{font-size:24px}.train-right .quality-metric b{font-size:13px;overflow-wrap:anywhere}.train-right .quality-alert{line-height:1.6}#advancedPanel input[type=range]{width:100%}#advancedPanel .field{margin-top:12px}#advancedPanel output{float:right}#previewMode{font:inherit;border:1px solid #e5dcd4;border-radius:8px;padding:5px;background:white}
+    `;
+    document.head.appendChild(style);
     hideUnsupported();
     cover.install();
     tts.install();
@@ -1043,7 +1114,7 @@ window.VS_PAGES = (function () {
     // No demonstration handler is allowed to claim a successful operation.
     qq('.demo').forEach(node => {
       node.removeAttribute('data-msg');
-      if (!node.onclick && !node.dataset.page) { node.disabled = true; node.title = '暂未提供此功能'; }
+      if (!node.onclick && !node.dataset.page) { node.disabled = false; node.title = '该功能尚未接入新界面'; node.onclick=()=>toast('该功能尚未接入新界面'); }
     });
   }
 
@@ -1069,6 +1140,7 @@ window.VS_PAGES = (function () {
     }
     media.onEvent(event, payload);
     if (event.indexOf('job.') === 0) {
+      if (payload.kind === 'singing') { training.onEvent(event,payload); return; }
       cover.onEvent(event, payload);
       tts.onEvent(event, payload);
       return;

@@ -62,7 +62,11 @@
   S.setText = setText;
   S.state = S;
   S.selectSong = selectSong;
-  S.refresh = () => invoke('app.refresh');
+  let refreshTimer = null;
+  S.refresh = () => {
+    if (refreshTimer) return;
+    refreshTimer = setTimeout(() => { refreshTimer = null; invoke('app.refresh'); }, 120);
+  };
 
   // ------------------------------------------------------------------ utils
   function toast(message) {
@@ -124,8 +128,13 @@
       row.innerHTML = `<div class="song-cover alt${index % 4}">♪</div>`
         + `<div><div class="song-name">${esc(song.title)}</div>`
         + `<div class="song-meta">${esc(song.duration_text)} · ${esc(song.format)}</div></div>`
-        + `<span class="song-status ${song.status === 'todo' ? '' : song.status === 'done' ? 'done' : 'ready'}">${esc(song.status_text)}</span>`;
+        + `<div class="song-actions"><span class="song-status ${song.status === 'todo' ? '' : song.status === 'done' ? 'done' : 'ready'}">${esc(song.status_text)}</span><button class="song-delete" title="移入工程回收目录">删除</button></div>`;
       row.onclick = () => selectSong(song);
+      row.querySelector('.song-delete').onclick = async event => {
+        event.stopPropagation();
+        const confirmed = await window.VS_PAGES.openModal({title:'删除歌曲', body:`将“${esc(song.title)}”及其工程音轨移入回收目录。外部原始文件不会删除。`,actions:[{label:'取消',value:false},{label:'删除',kind:'primary',value:true}]});
+        if (confirmed) invoke('song.delete',{cover_id:song.id});
+      };
       list.appendChild(row);
     });
     setText('#songCount', `${S.songs.length} 首`);
@@ -907,7 +916,10 @@
             toast(data.engine && data.engine.manifest_valid ? '引擎完整性校验通过' : '引擎完整性校验未通过');
             return;
           }
-          if (name === 'worker.event') { invoke('app.refresh'); return; }
+          if (name === 'worker.event') {
+            if (data.event === 'result' || data.event === 'error') S.refresh();
+            return;
+          }
           if (window.VS_PAGES && typeof window.VS_PAGES.onEvent === 'function') {
             window.VS_PAGES.onEvent(name, data);
           }

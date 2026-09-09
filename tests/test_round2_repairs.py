@@ -1,0 +1,124 @@
+"""Regression coverage for automatic training and desktop responsiveness."""
+import json
+import os
+import time
+from pathlib import Path
+
+import pytest
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QApplication
+
+from local_voice_studio import workflow as workflow_module
+from local_voice_studio.models import DatasetDraft, DatasetDraftSegment, VoiceProfile, WorkflowStatus
+from local_voice_studio.cover.project import CoverProject
+from local_voice_studio.ui.web.services.training import TrainingService
+from local_voice_studio.infrastructure.process_options import hidden_process_options
+from test_web_services import _fixture, _wav, _app
+
+
+def spin(predicate, timeout=10):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        QApplication.processEvents()
+        if predicate():
+            return
+        time.sleep(.005)
+    raise AssertionError('background operation did not complete')
+
+
+def test_preparation_continues_automatically_without_blocking_ui(tmp_path, monkeypatch):
+    app = _app()
+    paths, store, project, worker, _ = _fixture(tmp_path)
+    service = TrainingService(paths, store, project, worker)
+    profile = VoiceProfile('自动训练', True, consent_record='user consent', consent_confirmed_at='2026-09-09')
+    store.save_profile(project, profile)
+    controller = service.controller
+    ticks = []
+    timer = QTimer(); timer.timeout.connect(lambda: ticks.append(time.monotonic())); timer.start(10)
+    workflow = controller.start(profile, [], auto_continue=True)
+    source = _wav(project / 'segment.wav', 6)
+    segments = [DatasetDraftSegment(source.name, 0, 6, text='这是训练文本') for _ in range(10)]
+    segments.append(DatasetDraftSegment(source.name, 0, 6, text='异常片段', quality_flags=['clipping_risk'], included=True))
+    draft = DatasetDraft(workflow.id, profile.id, workflow.preparation_id, segments)
+    def prepare(*args):
+        time.sleep(.25)
+        return draft
+    monkeypatch.setattr(workflow_module, 'draft_from_preparation', prepare)
+    request = next(iter(controller.requests))
+    start = time.monotonic()
+    controller._on_event(request, 'result', {'outputs': ['manifest.json']})
+    assert time.monotonic() - start < .2
+    spin(lambda: any(value[1] == 'features' for value in controller.requests.values()))
+    timer.stop()
+    assert len(ticks) >= 5
+    stored = store.load_draft(project, draft.id)
+    assert stored.confirmed_seconds == 60
+    assert all(s.auto_accepted and not s.human_confirmed for s in stored.segments[:10])
+    assert not stored.segments[-1].included
+    assert store.load_workflow(project, workflow.id).dataset_snapshot_id
+    service.close()
+
+
+def test_cancel_during_background_scan_does_not_start_training(tmp_path, monkeypatch):
+    app = _app()
+    paths, store, project, worker, _ = _fixture(tmp_path)
+    service = TrainingService(paths, store, project, worker)
+    profile = VoiceProfile('取消', True); store.save_profile(project, profile)
+    workflow = service.controller.start(profile, [], auto_continue=True)
+    def prepare(*args):
+        time.sleep(.1)
+        return DatasetDraft(workflow.id, profile.id, workflow.preparation_id, [])
+    monkeypatch.setattr(workflow_module, 'draft_from_preparation', prepare)
+    service.controller._on_event(next(iter(service.controller.requests)), 'result', {'outputs':['manifest.json']})
+    service.controller.cancel(workflow)
+    spin(lambda: not service.controller.background)
+    assert not service.controller.requests
+    assert store.load_workflow(project, workflow.id).status == WorkflowStatus.CANCELLED
+    service.close()
+
+
+def test_song_delete_moves_only_managed_copy_and_blocks_active_job(tmp_path):
+    paths, store, project, worker, cover = _fixture(tmp_path)
+    source = _wav(tmp_path / '保留原件.wav', 1)
+    created = cover.import_song(source)
+    cover_id = created['cover_id']
+    cover._tasks['running'] = {'cover_id':cover_id, 'kind':'separation'}
+    with pytest.raises(ValueError, match='正在处理'):
+        cover.delete_song(cover_id)
+    cover._tasks.clear()
+    cover.delete_song(cover_id)
+    assert source.is_file()
+    assert not CoverProject.list(project)
+    assert (project / '.trash' / 'songs' / cover_id / 'manifest.json').is_file()
+
+
+def test_engine_status_does_not_read_model_contents(tmp_path, monkeypatch):
+    from local_voice_studio.cover import separation
+    paths, store, project, worker, cover = _fixture(tmp_path)
+    model = paths.models_root / 'separation' / separation.ROFORMER_MODEL_NAME
+    model.parent.mkdir(parents=True); model.write_bytes(b'fake')
+    monkeypatch.setattr(separation, 'ROFORMER_MODEL_SIZE', 4)
+    pin = {'id':'roformer-vocals-onnx','size':4,'sha256':separation.ROFORMER_MODEL_SHA256}
+    original = Path.read_text
+    monkeypatch.setattr(Path, 'read_text', lambda p,*a,**kw: json.dumps({'installed_file_pins':[pin]}) if p.name=='runtime-assets-v1.json' else original(p,*a,**kw))
+    monkeypatch.setattr(separation, 'sha256_file', lambda p: pytest.fail('UI read the model contents'))
+    assert cover.engines()['roformer']['ready']
+
+
+def test_audio_helper_processes_are_hidden():
+    import subprocess
+    options = hidden_process_options()
+    assert options == ({'creationflags':subprocess.CREATE_NO_WINDOW} if os.name=='nt' else {})
+
+
+@pytest.mark.parametrize('fmt,codec', [('flac','flac'),('m4a','aac')])
+def test_new_export_formats_encode_and_validate_real_audio(tmp_path, fmt, codec):
+    from local_voice_studio.cover.exporting import FFmpegExportBackend, ExportOutputValidator
+    tools = Path(os.environ.get('LOCALAPPDATA','')) / 'LocalVoiceStudio' / 'tools'
+    if not (tools / 'ffmpeg.exe').is_file(): pytest.skip('local FFmpeg unavailable')
+    source = _wav(tmp_path / 'source.wav', 1)
+    target = tmp_path / ('中文 导出.' + fmt)
+    FFmpegExportBackend(tools / 'ffmpeg.exe').encode(source, target, format=fmt)
+    result = ExportOutputValidator(ffprobe=tools/'ffprobe.exe').validate(target, expected_format=fmt, source_duration_seconds=1)
+    assert result.codec_name == codec
+    assert result.sample_rate == 48000 and result.channels == 2

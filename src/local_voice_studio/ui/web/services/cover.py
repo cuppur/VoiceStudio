@@ -26,8 +26,8 @@ class CoverService(WebService):
         return CoverProject.load(self.project, str(cover_id))
 
     def engines(self) -> dict[str, Any]:
-        uvr5 = UVR5RuntimeStatus.detect(self.paths)
-        roformer = RoFormerRuntimeStatus.detect(self.paths)
+        uvr5 = UVR5RuntimeStatus.detect(self.paths, deep=False)
+        roformer = RoFormerRuntimeStatus.detect(self.paths, deep=False)
         return {
             "uvr5": {"ready": bool(uvr5.ready), "detail": str(getattr(uvr5, "message", "") or "")},
             "roformer": {"ready": bool(roformer.ready), "detail": str(getattr(roformer, "message", "") or "")},
@@ -55,6 +55,18 @@ class CoverService(WebService):
         }
 
     # ---------------------------------------------------------------- actions
+    def delete_song(self, cover_id: str) -> dict[str, Any]:
+        from ....paths import ensure_within
+        if self.active_request(cover_id):
+            raise ValueError('歌曲正在处理，请先取消或等待任务完成')
+        cover = self._cover(cover_id)
+        source = ensure_within(self.project / 'covers', cover.root)
+        trash = ensure_within(self.project, self.project / '.trash' / 'songs' / cover.id)
+        trash.parent.mkdir(parents=True, exist_ok=True)
+        source.rename(trash)
+        self.notify('songs.changed', {'deleted_id': cover.id})
+        return {'cover_id': cover.id, 'message': '歌曲已移入工程回收目录，外部原始文件不受影响'}
+
     def import_song(self, source: Path) -> dict[str, Any]:
         source = Path(source)
         if not source.is_file():

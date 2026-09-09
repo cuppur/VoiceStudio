@@ -33,7 +33,7 @@ from .services.voices import VoicesService
 from .services.media import MediaService
 
 AUDIO_SUFFIXES = (".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg")
-NOT_CONNECTED = "该功能尚未接入"
+NOT_CONNECTED = "该功能尚未接入新界面"
 
 
 class _EngineVerifyTask(QRunnable):
@@ -89,6 +89,7 @@ class StudioBridge(QObject):
             "project.open": self._project_open,
             "project.reveal": self._project_reveal,
             "song.import": self._song_import,
+            "song.delete": self._song_delete,
             "cover.import_lrc": self._import_lrc,
             "cover.media": lambda data: self.media.analyze(str(data.get('cover_id', ''))),
             "preview.configure": self.media.configure,
@@ -138,7 +139,7 @@ class StudioBridge(QObject):
     # ------------------------------------------------------------------
     def set_project(self, project: Path) -> None:
         if Path(project) != self.project and (self.training._scanning or self.cover._tasks or self.tts._pending
-                or self.training._tasks or (self.training.controller and self.training.controller.requests)):
+                or self.training._tasks or (self.training.controller and (self.training.controller.requests or self.training.controller.background))):
             raise ValueError('请等待当前任务结束或取消后再切换工程')
         self.project = Path(project)
         self.snapshot = StudioSnapshot(self.paths, self.store, self.project)
@@ -154,6 +155,17 @@ class StudioBridge(QObject):
         token = uuid4().hex
         self._native_selections = {token: (time.monotonic(), list(paths))}
         self.notify('files.dropped', {'selection': token})
+
+    def _song_delete(self, data):
+        cover_id = str(data.get('cover_id', ''))
+        if self.cover.active_request(cover_id):
+            raise ValueError('歌曲正在处理，请先取消或等待任务完成')
+        if self.media.cover_id == cover_id:
+            self.media.set_project(self.project)
+            for player in self.media.players.values():
+                player.setSource(QUrl())
+        result = self.cover.delete_song(cover_id)
+        return {'ok': True, **result, 'data': self.snapshot.state()}
 
     def _selection(self, data):
         token = data.get('selection')
@@ -350,11 +362,7 @@ class StudioBridge(QObject):
         identifier = str(data.get('id', ''))
         for service in (self.cover, self.training):
             for request, info in service._tasks.items():
-                if info['job_id'] == identifier:
-                    if service is self.training:
-                        service.client.send('cancel', {'target_request_id': request})
-                        service.notify('job.cancelling', {'request_id': request})
-                        return {'ok': True, 'request_id': request, 'message': '已请求取消训练'}
+                if info['job_id'] == identifier or request == str(data.get('request_id', '')):
                     return {'ok': True, **service.cancel_task(request)}
         for request, info in self.tts._pending.items():
             if info['job'].id == identifier:
@@ -565,6 +573,8 @@ class StudioBridge(QObject):
         asset_ids = data.get("asset_ids")
         result = self.training.start(
             str(data.get("profile_id", "")), smart=bool(data.get("smart", True)),
+            manual_review=bool(data.get('manual_review', False)), quality=str(data.get('quality', 'standard')),
+            train_tts=bool(data.get('train_tts', True)), train_singing=bool(data.get('train_singing', False)),
             asset_ids=[str(item) for item in asset_ids] if isinstance(asset_ids, list) else None,
         )
         return {"ok": True, "message": "已开始自动处理素材", **result}

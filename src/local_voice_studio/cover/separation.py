@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from local_voice_studio.infrastructure.process_options import hidden_process_options
+
 import hashlib
 import json
 import os
@@ -81,7 +83,7 @@ class RoFormerRuntimeStatus:
         return self.status == "ready"
 
     @classmethod
-    def detect(cls, paths: AppPaths | None = None) -> "RoFormerRuntimeStatus":
+    def detect(cls, paths: AppPaths | None = None, *, deep: bool = True) -> "RoFormerRuntimeStatus":
         paths = paths or AppPaths.default()
         model = paths.models_root / "separation" / ROFORMER_MODEL_NAME
         if not model.is_file():
@@ -94,6 +96,8 @@ class RoFormerRuntimeStatus:
                 return cls("corrupt", model, error="RoFormer 资产清单缺少固定版本")
             if model.stat().st_size != ROFORMER_MODEL_SIZE:
                 return cls("corrupt", model, error="RoFormer 文件损坏")
+            if not deep:
+                return cls("ready", model)  # Availability only; worker always verifies before use.
             actual = sha256_file(model)
             if actual != ROFORMER_MODEL_SHA256:
                 return cls("hash_mismatch", model, actual, error="RoFormer 模型 Hash 不匹配")
@@ -151,7 +155,7 @@ class UVR5RuntimeStatus:
     def ready(self) -> bool: return self.status == "ready"
 
     @classmethod
-    def detect(cls, paths: AppPaths | None = None) -> "UVR5RuntimeStatus":
+    def detect(cls, paths: AppPaths | None = None, *, deep: bool = True) -> "UVR5RuntimeStatus":
         paths = paths or AppPaths.default()
         model = paths.engine_root / "tools" / "uvr5" / "uvr5_weights" / MODEL_NAME
         if not model.exists(): return cls("missing", model, error="UVR5 未安装")
@@ -164,6 +168,8 @@ class UVR5RuntimeStatus:
                 return cls("corrupt", model, error="UVR5 资产清单缺少固定 Hash")
             if not model.is_file() or model.stat().st_size != int(pin["size"]):
                 return cls("corrupt", model, error="UVR5 文件损坏")
+            if not deep:
+                return cls("ready", model)  # Availability only; worker always verifies before use.
             actual = sha256_file(model)
             if actual != str(pin["sha256"]).lower():
                 return cls("hash_mismatch", model, actual, error="UVR5 模型 Hash 不匹配")
@@ -177,7 +183,7 @@ def _cancelled(cancel) -> bool:
 
 
 def _kill_tree(process: subprocess.Popen) -> None:
-    if os.name == "nt": subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True)
+    if os.name == "nt": subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, **hidden_process_options())
     else: process.terminate()
 
 
@@ -234,7 +240,7 @@ class SongSeparationPipeline:
             # song had finished, so keep the child quiet and poll its state.
             self.process = subprocess.Popen(command, cwd=str(self.paths.engine_root), env=env,
                                             stdin=subprocess.DEVNULL,
-                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **hidden_process_options())
             if progress: progress(.25, "separating", "正在分离人声与伴奏")
             while self.process.poll() is None:
                 if _cancelled(cancel):

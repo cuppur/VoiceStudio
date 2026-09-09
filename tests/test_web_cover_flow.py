@@ -48,8 +48,8 @@ def test_cover_page_flow_reaches_the_real_service():
     assert flow["taskPopup"] == {"shown": True, "title": "分离人声与伴奏"}
     # prototype controls without backend support are hidden
     hidden = flow["hidden"]
-    assert hidden["presets"] == 1 and hidden["advanced"] == 1 and hidden["takes"] == 1
-    assert hidden["ab"] == 1 and hidden["preview"] == 0  # toolbar replaced with real preview mode selector
+    assert hidden["presets"] == 0 and hidden["advanced"] == 0 and hidden["takes"] == 1
+    assert hidden["ab"] == 0 and hidden["preview"] == 0  # toolbar replaced with real preview mode selector
     assert hidden["strength"] == 2 and hidden["toggles"] == 3
     # the primary button reflects the real next step
     assert flow["renderLabel"].endswith("分离人声与伴奏")

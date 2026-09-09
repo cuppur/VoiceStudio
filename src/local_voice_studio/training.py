@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from local_voice_studio.infrastructure.process_options import hidden_process_options
+
 import json
 import os
 import shutil
@@ -31,7 +33,7 @@ class TrainingPipeline:
         process = self.process
         if process and process.poll() is None:
             if os.name == "nt":
-                subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True)
+                subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, **hidden_process_options())
             else:
                 process.terminate()
 
@@ -92,6 +94,7 @@ class TrainingPipeline:
             command, cwd=self.paths.engine_root, env=process_env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+            **hidden_process_options(),
         )
         assert self.process.stdout is not None
         for line in self.process.stdout:
@@ -299,7 +302,7 @@ class TrainingPipeline:
         manifest = paths["manifest"]
         manifest.write_text(json.dumps({"schema_version": 1, "preparation_id": preparation_id, "profile_id": profile_id, "source_asset_ids": sorted(selected), "processing_options": options, "created_at": utc_now(), "normalized_dir": str(processed), "segments_dir": str(sliced), "asr_list": "", "status": "running"}, ensure_ascii=False, indent=2), encoding="utf-8")
         candidates = [self.paths.data_root / "tools" / "ffmpeg.exe", self.paths.runtime_root / "env" / "Library" / "bin" / "ffmpeg.exe"]
-        ffmpeg = next((item for item in candidates if item.is_file() and subprocess.run([str(item), "-version"], capture_output=True).returncode == 0), None)
+        ffmpeg = next((item for item in candidates if item.is_file() and subprocess.run([str(item), "-version"], capture_output=True, **hidden_process_options()).returncode == 0), None)
         if not ffmpeg:
             raise RuntimeError("FFmpeg 尚未安装，请先修复本地引擎")
         normalized: list[str] = []
@@ -316,7 +319,7 @@ class TrainingPipeline:
             if digest != asset.get("sha256"): raise ValueError(f"素材哈希不一致：{source.name}")
             target = processed / f"{asset['id']}.wav"
             command = [str(ffmpeg), "-y", "-i", str(source), "-vn", "-ac", "1", "-ar", "32000", "-c:a", "pcm_s16le", str(target)]
-            completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+            completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", **hidden_process_options())
             if completed.returncode or not target.is_file(): raise RuntimeError(f"音频标准化失败：{source.name}\n{completed.stderr[-500:]}")
             normalized.append(str(target)); progress(0.2 * index / len(assets), f"标准化 {index}/{len(assets)}：{source.name}")
         python = self.paths.private_python

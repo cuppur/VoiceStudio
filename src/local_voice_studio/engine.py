@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from local_voice_studio.infrastructure.process_options import hidden_process_options
+
 import contextlib
 import hashlib
 import io
@@ -231,7 +233,7 @@ class GptSovitsEngine:
         for item in candidates:
             if not item.is_file(): continue
             try:
-                if subprocess.run([str(item), "-version"], capture_output=True, timeout=10).returncode == 0: return item
+                if subprocess.run([str(item), "-version"], capture_output=True, timeout=10, **hidden_process_options()).returncode == 0: return item
             except (OSError, subprocess.SubprocessError): continue
         return None
 
@@ -243,6 +245,7 @@ class GptSovitsEngine:
         subprocess.run(
             [str(ffmpeg), "-y", "-i", str(merged_wav), "-codec:a", "libmp3lame", "-b:a", "320k", str(mp3)],
             capture_output=True, check=True,
+            **hidden_process_options(),
         )
         return [merged_wav, mp3]
 
