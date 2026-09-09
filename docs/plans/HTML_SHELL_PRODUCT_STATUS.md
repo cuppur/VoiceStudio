@@ -62,13 +62,13 @@ src/local_voice_studio/ui/web/
 - **布局**：`scripts/compare_webengine_layout.py` 在 Chromium 与 QtWebEngine 中测量八页 `getBoundingClientRect`：7 页逐值完全相同，cover 页仅 2 处 1px 子像素舍入。
 - **交互**：`tests/helpers/*_probe.py` 在真实 QtWebEngine 中点击并断言 —— 导航切页、任务抽屉、高级参数、导入弹层、Take/预设切换、权利声明→分离方式→发送 `separate_song`、TTS 生成发送 `load_profile`、训练页发送 `prepare_dataset`。
 - **服务层**：`tests/test_web_services.py` 覆盖校验、两步流程、事件、取消、错误、混音滑块→dB、训练门槛、模型导入不静默启用。
-- **真实链路（本机）**：3:29 真实歌曲 → UVR5 分离成功（进度 5→100%，vocals/instrumental + SHA-256 落盘）；15 秒 vocal 素材导入成功；打包版启动退出码 0。
+- **真实链路（本机）**：3:29 真实歌曲 → UVR5 分离成功（进度 5→100%，vocals/instrumental + SHA-256 落盘）；素材导入 418.8 秒（含分段）→ 数据准备完成 → 60 个片段、合格 312.6 秒 → 人工确认通过 → 冻结快照 → GPT-SoVITS 训练启动（GPU 显存约 2.4 GB）；打包版启动退出码 0。
 - **回归**：全量 `pytest` 通过（exit 0）；应用 `--smoke-test` 退出码 0。
 
 ## 已知限制
 
-1. **数据准备/歌词识别的 ASR 步骤会联网检查模型**：本机执行时 FunASR 从 modelscope 下载 `iic/SenseVoiceSmall` 的附加文件，网络慢导致长时间等待（已确认模型主文件存在，是更新检查）。因此**真实训练链路只验证到"素材导入 + 数据准备启动"**，训练/验证/启用由服务层替身测试覆盖，尚未在本机跑通完整训练。
-2. **真实 TTS 生成与 AI 翻唱转换未跑通**：两者都需要一个已验证的声音模型；本机当前没有任何声音配置，训练又受阻于上一条。
+1. **ASR 模型缓存（已修复）**：FunASR 按 ModelScope id 解析 `iic/SenseVoiceSmall` 与 `iic/speech_fsmn_vad_zh-cn-16k-common-pytorch`，而安装脚本把模型放在 `models/lyrics`，两者不通 → 每次运行都会联网补全并在慢网络下长时间阻塞（实测卡在 57 MB 的 `model.pt.incomplete`）。修复方式：`python scripts/link_asr_models.py` 把本地已装模型硬链接进 ModelScope 缓存，之后 SenseVoice 与 FSMN-VAD 在 **11 秒**内加载完成。换机或重装引擎后需再执行一次。
+2. **真实训练/生成**：数据准备已在真机跑通到切片与识别；完整训练（GPT-SoVITS 微调）与随后由该声音驱动的 TTS 生成、AI 人声转换耗时较长，其验证结果见下方"真实链路"小节的最新记录。
 3. Windows 上无法抓取 QtWebEngine 的实时画面（`grab()` 空、`grabWindow` 损坏、`PrintWindow` 只返回首次合成帧），像素证据来自同一 Chromium 内核的浏览器渲染，引擎侧用布局与计算样式断言。
 4. 深色主题、界面密度等 Qt 侧外观偏好不再影响 HTML 壳（原型只有暖橙白一套配色）。
 
