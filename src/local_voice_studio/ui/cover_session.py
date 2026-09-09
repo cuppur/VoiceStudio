@@ -257,7 +257,15 @@ def _run_cancellable(command: list[str], *, timeout: float, cancel: Callable[[],
 
 
 def probe_audio_metadata(audio_path: Path, *, paths: AppPaths | None = None, cancel: Callable[[], bool] | None = None) -> AudioMetadata:
-    ffprobe = _tool("ffprobe", paths)
+    try:
+        ffprobe = _tool("ffprobe", paths)
+    except FileNotFoundError:
+        if audio_path.suffix.lower() != '.wav':
+            raise FileNotFoundError('读取此格式需要 FFmpeg，请在设置中安装/修复本地引擎')
+        import wave
+        with wave.open(str(audio_path), 'rb') as source:
+            return AudioMetadata(source.getnframes() / source.getframerate(), source.getframerate(),
+                                 source.getnchannels(), 'pcm', source.getframerate() * source.getnchannels() * source.getsampwidth() * 8)
     command = [str(ffprobe), "-v", "error", "-show_entries",
                "format=duration,bit_rate:stream=codec_name,sample_rate,channels",
                "-select_streams", "a:0", "-of", "json", str(audio_path)]
@@ -281,7 +289,31 @@ def decode_pcm_peaks(audio_path: Path, metadata: AudioMetadata | None = None, *,
     end = duration if end_seconds is None else min(duration, max(start, float(end_seconds)))
     if duration <= 0 or end <= start or metadata.sample_rate <= 0:
         return []
-    ffmpeg = _tool("ffmpeg", paths)
+    try:
+        ffmpeg = _tool("ffmpeg", paths)
+    except FileNotFoundError:
+        # Standard PCM WAV import and waveform display do not require a model
+        # installation. Stream and downmix with the stdlib on Python 3.10–3.12.
+        import wave
+        import audioop
+        with wave.open(str(audio_path), 'rb') as source:
+            if source.getnchannels() not in (1, 2):
+                raise ValueError('多声道 WAV 需要安装 FFmpeg')
+            source.setpos(round(start * source.getframerate()))
+            remaining = round((end - start) * source.getframerate())
+            def chunks():
+                nonlocal remaining
+                while remaining > 0:
+                    frames = min(32768, remaining)
+                    data = source.readframes(frames)
+                    if not data: break
+                    remaining -= frames
+                    width = source.getsampwidth()
+                    if width == 1: data = audioop.bias(data, 1, -128)
+                    data = audioop.lin2lin(data, width, 2)
+                    if source.getnchannels() == 2: data = audioop.tomono(data, 2, .5, .5)
+                    yield data
+            return peaks_from_pcm_chunks(chunks(), total_samples=round((end-start)*metadata.sample_rate), peak_count=count, cancel=cancel)
     command = [str(ffmpeg), "-v", "error", "-ss", f"{start:.6f}", "-i", str(audio_path)]
     command += ["-t", f"{end - start:.6f}", "-f", "s16le", "-ac", "1", "-ar", str(metadata.sample_rate), "pipe:1"]
     expected_samples = max(1, round((end - start) * metadata.sample_rate))

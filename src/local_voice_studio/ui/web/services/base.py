@@ -115,8 +115,12 @@ class WebService(QObject):
         elif event == "error":
             self._tasks.pop(str(request_id), None)
             message = str(payload.get("message", "本地任务失败"))
-            self.coordinator.handle_error(job_id, message)
-            self.notify("job.error", {
+            cancelled = payload.get('cancelled') or payload.get('status') == 'cancelled'
+            if cancelled:
+                self.coordinator.mark_cancelled(job_id)
+            else:
+                self.coordinator.handle_error(job_id, message)
+            self.notify("job.cancelled" if cancelled else "job.error", {
                 "request_id": str(request_id), "job_id": job_id, "kind": info["kind"],
                 "stage": stage, "message": message, "cover_id": info["cover_id"],
             })

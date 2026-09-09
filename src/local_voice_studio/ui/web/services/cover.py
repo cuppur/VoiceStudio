@@ -9,6 +9,7 @@ from ....cover.mixing.models import CoverMixSettings, GainScale
 from ....cover.project import RIGHTS_ATTESTATION_TEXT, CoverProject
 from ....cover.separation import RoFormerRuntimeStatus, UVR5RuntimeStatus
 from .base import WebService
+from ...cover_session import probe_audio_metadata, parse_lrc, write_lrc
 
 AUDIO_SUFFIXES = (".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg")
 SEPARATION_MODES = ("uvr5", "roformer")
@@ -60,11 +61,41 @@ class CoverService(WebService):
             raise ValueError(f"文件不存在：{source}")
         if source.suffix.lower() not in AUDIO_SUFFIXES:
             raise ValueError(f"不支持的音频格式：{source.suffix}")
+        metadata = probe_audio_metadata(source, paths=self.paths)
+        if metadata.duration_seconds <= 0 or metadata.sample_rate <= 0:
+            raise ValueError('文件中没有可解码的音频')
         cover = CoverProject.create(self.project, title=source.stem or "未命名翻唱")
         cover.copy_source(source)
+        cover.duration_ms = round(metadata.duration_seconds * 1000)
+        lrc = source.with_suffix('.lrc')
+        if lrc.is_file():
+            try:
+                self.import_lrc(cover.id, lrc)
+                cover = self._cover(cover.id)
+                cover.duration_ms = round(metadata.duration_seconds * 1000)
+            except (OSError, UnicodeError, ValueError):
+                pass  # An invalid optional sidecar must not reject valid audio.
         cover.save()
         self.notify("songs.changed", {"cover_id": cover.id})
         return {"cover_id": cover.id, "title": cover.title}
+
+    def import_lrc(self, cover_id: str, source: Path) -> dict[str, Any]:
+        cover = self._cover(cover_id)
+        if source.suffix.lower() != '.lrc' or source.stat().st_size > 2 * 1024 * 1024:
+            raise ValueError('请选择不超过 2 MB 的 LRC 歌词文件')
+        try:
+            text = source.read_text(encoding='utf-8-sig')
+        except UnicodeDecodeError:
+            text = source.read_text(encoding='gb18030')
+        lines = parse_lrc(text)
+        if not lines: raise ValueError('LRC 中没有有效的时间标签和歌词')
+        target = cover.root / 'lyrics' / 'manual.lrc'
+        write_lrc(target, lines)
+        cover.lyrics_path = target.relative_to(cover.root).as_posix()
+        cover.lyrics_origin = 'manual'
+        cover.save()
+        self.notify('songs.changed', {'cover_id': cover.id})
+        return {'line_count': len(lines)}
 
     def attest_rights(self, cover_id: str, confirmed: bool = True) -> dict[str, Any]:
         cover = self._cover(cover_id)

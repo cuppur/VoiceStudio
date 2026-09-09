@@ -101,6 +101,7 @@ button,input,textarea,select{font:inherit}button{border:0;color:inherit}.hidden{
 <div class="modal-mask" id="importModal"><div class="modal"><h3>导入媒体</h3><p>原型中会模拟把文件加入当前页面。正式版可根据所在模块自动识别歌曲、声音素材或分离任务。</p><div class="field"><label>导入到</label><select id="importTarget"><option>AI 翻唱歌曲库</option><option>训练声音素材</option><option>音频分离工具</option></select></div><div class="field" style="margin-top:10px"><label>示例文件名</label><input id="importName" value="新歌曲.wav" /></div><div class="modal-actions"><button class="btn ghost" id="cancelImport">取消</button><button class="btn primary" id="confirmImport">导入</button></div></div></div>
 <input type="file" id="realFileInput" accept="audio/*" hidden>
 <script>
+if (!window.qt || window.__VS_STATIC__) {
 (()=>{
 const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
 const toast=$('#toast'); let toastTimer; function showToast(msg){toast.textContent=msg;toast.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.classList.remove('show'),1800)}
@@ -151,7 +152,9 @@ const oldRunTask=runTask;runTask=function(title,stages){$('#gpuLabel').textConte
 // keyboard shortcut within document
 $('#scriptText').addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){e.preventDefault();$('#ttsGenerate').click()}});
 })();
+}
 </script>
 <script src="studio-bridge.js"></script>
+<script src="studio-media.js"></script>
 <script src="studio-pages.js"></script>
 </body></html>

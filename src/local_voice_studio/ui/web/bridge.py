@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import sys
+import time
+from uuid import uuid4
 from pathlib import Path
 from typing import Any, Callable
 
@@ -28,9 +30,10 @@ from .services.exports import ExportsService
 from .services.training import TrainingService
 from .services.tts import TtsService
 from .services.voices import VoicesService
+from .services.media import MediaService
 
 AUDIO_SUFFIXES = (".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg")
-NOT_CONNECTED = "该功能尚未接入新界面（可用 --ui-qt 打开经典界面）"
+NOT_CONNECTED = "该功能尚未接入"
 
 
 class _EngineVerifyTask(QRunnable):
@@ -63,6 +66,7 @@ class StudioBridge(QObject):
         self.snapshot = StudioSnapshot(paths, store, self.project)
         self._window: QWidget | None = parent if isinstance(parent, QWidget) else None
         self._closing = False
+        self._native_selections = {}
         self.cover = CoverService(paths, store, self.project, client, self)
         self.cover.event.connect(self.event)
         self.tts = TtsService(paths, store, self.project, client, self)
@@ -75,6 +79,8 @@ class StudioBridge(QObject):
         self.exports.event.connect(self.event)
         self.engine = EngineService(paths, store, self.project, client, self)
         self.engine.event.connect(self.event)
+        self.media = MediaService(paths, store, self.project, client, self)
+        self.media.event.connect(self.event)
         self._handlers: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
             "app.refresh": self._refresh,
             "engine.verify": self._engine_verify,
@@ -83,6 +89,12 @@ class StudioBridge(QObject):
             "project.open": self._project_open,
             "project.reveal": self._project_reveal,
             "song.import": self._song_import,
+            "cover.import_lrc": self._import_lrc,
+            "cover.media": lambda data: self.media.analyze(str(data.get('cover_id', ''))),
+            "preview.configure": self.media.configure,
+            "preview.control": self.media.control,
+            "task.cancel": self._task_cancel,
+            "training.edit_draft": self._training_edit_draft,
             "song.select": self._song_select,
             "file.reveal": self._file_reveal,
             "file.open": self._file_open,
@@ -125,10 +137,31 @@ class StudioBridge(QObject):
 
     # ------------------------------------------------------------------
     def set_project(self, project: Path) -> None:
+        if Path(project) != self.project and (self.training._scanning or self.cover._tasks or self.tts._pending
+                or self.training._tasks or (self.training.controller and self.training.controller.requests)):
+            raise ValueError('请等待当前任务结束或取消后再切换工程')
         self.project = Path(project)
         self.snapshot = StudioSnapshot(self.paths, self.store, self.project)
-        for service in (self.cover, self.tts, self.voices, self.training, self.exports, self.engine):
+        for service in (self.cover, self.tts, self.voices, self.training, self.exports, self.engine, self.media):
             service.set_project(self.project)
+        self.store.set_setting('ui.last_project', str(self.project))
+        if self._window is not None and hasattr(self._window, 'session'):
+            if self._window.session.current != self.project:
+                self._window.session.activate(self.project)
+
+    def offer_files(self, paths):
+        """Only called by the native view's drop event, never exposed as a Slot."""
+        token = uuid4().hex
+        self._native_selections = {token: (time.monotonic(), list(paths))}
+        self.notify('files.dropped', {'selection': token})
+
+    def _selection(self, data):
+        token = data.get('selection')
+        if not token: return None
+        selected = self._native_selections.pop(str(token), None)
+        if not selected or time.monotonic() - selected[0] > 300:
+            raise ValueError('文件选择已过期，请重新拖入文件')
+        return selected[1]
 
     def notify(self, name: str, payload: dict[str, Any] | None = None) -> None:
         self.event.emit(str(name), json.dumps(payload or {}, ensure_ascii=False))
@@ -273,7 +306,11 @@ class StudioBridge(QObject):
         """
         source: Path | None = None
         raw = str(data.get("path", "")).strip()
-        if raw:
+        selected = self._selection(data)
+        if selected is not None:
+            if len(selected) != 1: raise ValueError('请每次导入一首歌曲；训练素材支持多选')
+            source = Path(selected[0])
+        elif raw:
             source = self._resolve_owned(raw, field="音频路径")
         elif self._window is not None:
             chosen, _filter = QFileDialog.getOpenFileName(
@@ -294,6 +331,43 @@ class StudioBridge(QObject):
             if item["id"] == cover_id:
                 return {"ok": True, "data": item}
         raise ValueError("找不到该歌曲工程")
+
+    def _import_lrc(self, data):
+        cover_id = str(data.get('cover_id', ''))
+        self._cover(cover_id)
+        raw = str(data.get('path', ''))
+        if raw:
+            source = self._resolve_owned(raw)
+        else:
+            if self._window is None: raise ValueError('没有可用的窗口')
+            chosen, _ = QFileDialog.getOpenFileName(self._window, '导入 LRC 歌词', '', 'LRC 歌词 (*.lrc)')
+            if not chosen: return {'ok': False, 'message': '已取消导入歌词'}
+            source = Path(chosen)
+        result = self.cover.import_lrc(cover_id, source)
+        return {'ok': True, 'message': f"已导入 {result['line_count']} 行歌词", 'data': self.snapshot.state()}
+
+    def _task_cancel(self, data):
+        identifier = str(data.get('id', ''))
+        for service in (self.cover, self.training):
+            for request, info in service._tasks.items():
+                if info['job_id'] == identifier:
+                    if service is self.training:
+                        service.client.send('cancel', {'target_request_id': request})
+                        service.notify('job.cancelling', {'request_id': request})
+                        return {'ok': True, 'request_id': request, 'message': '已请求取消训练'}
+                    return {'ok': True, **service.cancel_task(request)}
+        for request, info in self.tts._pending.items():
+            if info['job'].id == identifier:
+                return {'ok': True, **self.tts.cancel(request)}
+        if self.training.controller:
+            for request, (workflow_id, operation, job) in self.training.controller.requests.items():
+                if job.id == identifier:
+                    return {'ok': True, **self.training.cancel(workflow_id)}
+        raise ValueError('任务已结束或不属于当前运行会话，请刷新任务列表')
+
+    def _training_edit_draft(self, data):
+        result = self.training.edit_draft(str(data.get('draft_id', '')), data.get('segments') or [])
+        return {'ok': True, 'data': result, 'message': '校对已保存'}
 
     # ------------------------------------------------------------------
     def _file_reveal(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -437,7 +511,11 @@ class StudioBridge(QObject):
         """Import an audio file for the standalone separation page."""
         raw = str(data.get("path", "")).strip()
         source: Path | None = None
-        if raw:
+        selected = self._selection(data)
+        if selected is not None:
+            if len(selected) != 1: raise ValueError('请每次选择一首待分离歌曲')
+            source = Path(selected[0])
+        elif raw:
             source = self._resolve_owned(raw, field="音频路径")
         elif self._window is not None:
             chosen, _filter = QFileDialog.getOpenFileName(
@@ -462,7 +540,8 @@ class StudioBridge(QObject):
 
     def _training_import(self, data: dict[str, Any]) -> dict[str, Any]:
         paths = data.get("paths")
-        chosen = [str(item) for item in paths] if isinstance(paths, list) and paths else []
+        native = self._selection(data)
+        chosen = native if native is not None else ([str(self._resolve_owned(str(item))) for item in paths] if isinstance(paths, list) and paths else [])
         if not chosen:
             if self._window is None:
                 raise ValueError("没有选择音频文件或文件夹")
@@ -581,6 +660,6 @@ class StudioBridge(QObject):
     # ------------------------------------------------------------------
     def cleanup(self) -> None:
         self._closing = True
-        for service in (self.cover, self.tts, self.voices, self.training, self.exports, self.engine):
+        for service in (self.cover, self.tts, self.voices, self.training, self.exports, self.engine, self.media):
             service.close()
         self._handlers.clear()

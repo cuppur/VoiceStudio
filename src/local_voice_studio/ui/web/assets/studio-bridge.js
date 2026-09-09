@@ -27,7 +27,7 @@
   const esc = (value) => String(value == null ? '' : value).replace(/[&<>"']/g, (ch) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
   ));
-  const NOT_WIRED = '该功能尚未接入新界面（可用 --ui-qt 打开经典界面）';
+  const NOT_WIRED = '该功能暂未提供';
   const S = {
     bridge: null,
     data: null,
@@ -37,10 +37,13 @@
     exports: [],
     generations: [],
     song: null,
+    selectionVersion: 0,
     voice: null,
     songQuery: '',
     songFilter: 'all',
     voiceQuery: '',
+    ttsQuery: '',
+    ttsVoiceId: '',
     voiceFilter: 'all',
     exportFilter: 'all',
     settingsTab: 'general',
@@ -58,6 +61,8 @@
   S.invoke = invoke;
   S.setText = setText;
   S.state = S;
+  S.selectSong = selectSong;
+  S.refresh = () => invoke('app.refresh');
 
   // ------------------------------------------------------------------ utils
   function toast(message) {
@@ -75,10 +80,14 @@
 
   function invoke(action, payload, done) {
     if (!S.bridge) { toast('本地桥接未连接'); return; }
+    const selectionVersion = S.selectionVersion;
     S.bridge.invoke(action, JSON.stringify(payload || {}), (reply) => {
       const result = parse(reply);
       if (result.message) { toast(result.message); }
-      if (result.ok && result.data && result.data.songs) { applyState(result.data); }
+      if (result.ok && result.data && result.data.songs) {
+        if (result.cover_id && selectionVersion === S.selectionVersion) { S.song = { id: result.cover_id }; }
+        applyState(result.data);
+      }
       if (done) { done(result); }
     });
   }
@@ -111,6 +120,7 @@
       const row = document.createElement('div');
       const active = S.song && S.song.id === song.id;
       row.className = 'song-row' + (active ? ' active' : '');
+      row.dataset.coverId = song.id;
       row.innerHTML = `<div class="song-cover alt${index % 4}">♪</div>`
         + `<div><div class="song-name">${esc(song.title)}</div>`
         + `<div class="song-meta">${esc(song.duration_text)} · ${esc(song.format)}</div></div>`
@@ -122,12 +132,14 @@
   }
 
   function selectSong(song) {
+    S.selectionVersion += 1;
     S.song = song;
     renderSongs();
     renderHero();
     renderStems();
     renderLyrics();
     loadAudio();
+    if (window.VS_PAGES && S.pagesReady) { window.VS_PAGES.cover.syncFromLibrary(); }
   }
 
   function renderHero() {
@@ -223,7 +235,8 @@
   function renderTtsVoices() {
     const list = $('#ttsVoiceList');
     if (!list) { return; }
-    const query = S.voiceQuery.toLowerCase();
+    const query = S.ttsQuery.toLowerCase();
+    if (!S.voices.some(v => v.id === S.ttsVoiceId)) { S.ttsVoiceId = (S.voices[0] || {}).id || ''; }
     const rows = S.voices.filter((voice) => !query || voice.name.toLowerCase().includes(query));
     list.innerHTML = '';
     if (!rows.length) {
@@ -234,13 +247,14 @@
     }
     rows.forEach((voice, index) => {
       const row = document.createElement('div');
-      row.className = 'voice-row' + (index === 0 ? ' active' : '');
+      row.className = 'voice-row' + (voice.id === S.ttsVoiceId ? ' active' : '');
       row.dataset.voiceId = voice.id;
       row.innerHTML = `<div class="voice-badge">◉</div>`
         + `<div><b style="font-size:9.7px">${esc(voice.name)}</b>`
         + `<div style="font-size:7.8px;color:var(--muted);margin-top:3px">${esc(voice.subtitle)}</div></div>`
         + `<span class="status ${voice.tts_ready ? 'ready' : 'orange'}">${voice.tts_ready ? '可生成' : '未就绪'}</span>`;
       row.onclick = () => {
+        S.ttsVoiceId = voice.id;
         $$('.voice-row').forEach((node) => node.classList.remove('active'));
         row.classList.add('active');
         setText('#nowSub', voice.name);
@@ -373,7 +387,7 @@
       const job = document.createElement('div');
       job.className = 'job';
       const actions = task.cancellable
-        ? `<div class="job-actions"><button class="mini" data-task-note="运行中的任务请先在经典界面取消">取消</button></div>`
+        ? `<div class="job-actions"><button class="mini" data-task-cancel="${esc(task.id)}">取消</button></div>`
         : task.outputs.length
           ? `<div class="job-actions"><button class="mini" data-task-reveal="${esc(task.outputs[0])}">打开输出</button></div>`
           : '';
@@ -383,8 +397,8 @@
         + actions;
       drawer.appendChild(job);
     });
-    $$('[data-task-note]', drawer).forEach((button) => {
-      button.onclick = () => toast(button.dataset.taskNote || NOT_WIRED);
+    $$('[data-task-cancel]', drawer).forEach((button) => {
+      button.onclick = () => invoke('task.cancel', {id: button.dataset.taskCancel});
     });
     $$('[data-task-reveal]', drawer).forEach((button) => {
       button.onclick = () => invoke('file.reveal', { path: button.dataset.taskReveal });
@@ -630,6 +644,7 @@
   }
 
   function loadAudio() {
+    if (S.pagesReady) { return; }
     const source = audioSource();
     const audio = ensureAudio();
     if (!source) {
@@ -672,6 +687,7 @@
   }
 
   function seekSeconds(seconds) {
+    if (S.pagesReady && S.playbackKind !== 'file') { window.VS_MEDIA.seek(seconds * 1000); return; }
     const audio = ensureAudio();
     if (!audio.src || !audio.duration) { return; }
     audio.currentTime = Math.max(0, Math.min(audio.duration, seconds));
@@ -679,6 +695,9 @@
   }
 
   function playFile(path, label) {
+    if (!path) { toast('素材路径不可用'); return; }
+    if (S.pagesReady) { window.VS_MEDIA.pause(); }
+    S.playbackKind = 'file';
     const audio = ensureAudio();
     audio.dataset.source = path;
     audio.src = fileUrl(path);
@@ -704,6 +723,8 @@
 
   // ------------------------------------------------------------------ apply
   function applyState(data) {
+    const changed = S.data && S.data.project.path !== data.project.path;
+    if (changed) { S.song = null; S.ttsVoiceId = ''; S.selectionVersion += 1; }
     S.data = data;
     S.songs = data.songs || [];
     S.voices = data.voices || [];
@@ -718,7 +739,7 @@
     renderLyrics();
     renderTtsVoices();
     renderVoiceGrid();
-    renderSamples();
+    if (!S.pagesReady) { renderSamples(); }
     renderTasks();
     renderExports();
     renderRecent();
@@ -726,6 +747,7 @@
     renderSettings(S.settingsTab);
     renderEngine();
     loadAudio();
+    if (S.pagesReady) { window.VS_PAGES.onState(changed); }
   }
 
   // ------------------------------------------------------------------- wire
@@ -734,6 +756,25 @@
   ];
 
   function wire() {
+    const showPage = (name) => {
+      $$('[data-page-view]').forEach(node => node.classList.toggle('hidden', node.dataset.pageView !== name));
+      $$('.nav-item').forEach(node => node.classList.toggle('active', node.dataset.page === name));
+      if (S.pagesReady && window.VS_PAGES.media) { window.VS_PAGES.media.draw(); }
+    };
+    S.showPage = showPage;
+    $$('[data-page]').forEach(node => node.addEventListener('click', () => showPage(node.dataset.page)));
+    $('#settingsBtn').onclick = () => showPage('settings');
+    $('#recentBtn').onclick = () => showPage('recent');
+    $$('.switch').forEach(node => { node.onclick = () => node.classList.toggle('on'); });
+    $$('input[type="range"]').forEach(node => {
+      node.addEventListener('input', () => {
+        const label = node.parentElement.querySelector('.value,.mix-val');
+        if (label) { label.textContent = node.value; }
+      });
+    });
+    $('#scriptText').addEventListener('keydown', event => {
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); $('#ttsGenerate').click(); }
+    });
     document.addEventListener('click', (event) => {
       const button = event.target.closest && event.target.closest(UNWIRED.join(','));
       if (button) {
@@ -755,7 +796,7 @@
     });
 
     const ttsSearch = $('#ttsVoiceSearch');
-    if (ttsSearch) { ttsSearch.oninput = () => { S.voiceQuery = ttsSearch.value; renderTtsVoices(); }; }
+    if (ttsSearch) { ttsSearch.oninput = () => { S.ttsQuery = ttsSearch.value; renderTtsVoices(); }; }
 
     const voiceSearch = $('#voiceSearch');
     if (voiceSearch) { voiceSearch.oninput = () => { S.voiceQuery = voiceSearch.value; renderVoiceGrid(); }; }
@@ -768,14 +809,14 @@
       };
     });
 
-    const confirmImport = $('#confirmImport');
-    if (confirmImport) {
-      confirmImport.onclick = () => {
-        const modal = $('#importModal');
-        if (modal) { modal.classList.remove('show'); }
-        invoke('song.import', {});
-      };
-    }
+    $('#importModal').remove();
+    $('#coverImport').onclick = () => invoke('song.import', {});
+    $('#quickImportBtn').onclick = () => {
+      const page = $('[data-page-view]:not(.hidden)');
+      if (S.pagesReady && page && page.dataset.pageView === 'train') { window.VS_PAGES.training.importAssets(); }
+      else if (S.pagesReady && page && page.dataset.pageView === 'separator') { window.VS_PAGES.separator.choose(); }
+      else { invoke('song.import', {}); }
+    };
 
     const play = $('#playBtn');
     if (play) { play.onclick = togglePlay; }
@@ -867,7 +908,7 @@
             return;
           }
           if (name === 'worker.event') { invoke('app.refresh'); return; }
-          if (window.VS_PAGES && typeof window.VS_PAGES.onEvent === 'function' && name.indexOf('job.') === 0) {
+          if (window.VS_PAGES && typeof window.VS_PAGES.onEvent === 'function') {
             window.VS_PAGES.onEvent(name, data);
           }
         });
@@ -880,6 +921,8 @@
           applyState(result.data);
           if (window.VS_PAGES && typeof window.VS_PAGES.install === 'function') {
             window.VS_PAGES.install(S);
+            S.pagesReady = true;
+            window.VS_PAGES.onState(false);
           }
         } catch (error) {
           S.error = String((error && error.stack) || error);

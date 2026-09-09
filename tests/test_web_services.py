@@ -396,6 +396,8 @@ def test_training_import_registers_source_assets(tmp_path: Path):
     state = training.state(payload["profile_id"])
     assert state["profile"]["consent"] is True
     assert "voice.wav" in state["assets"][0]["name"]
+    assert Path(state['assets'][0]['path']).is_file()
+    assert Path(state['assets'][0]['path']).is_relative_to(project)
 
 
 def test_training_import_requires_consent_for_new_voice(tmp_path: Path):

@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QRunnable, QThreadPool
+from PySide6.QtCore import QRunnable, QThreadPool, Signal, Slot
 
 from ....audio import copy_original, scan_audio_files
 from ....models import Job, JobKind, SourceAsset, VoiceProfile, WorkflowStage, WorkflowStatus, utc_now
@@ -39,12 +39,18 @@ class _ScanTask(QRunnable):
 class TrainingService(WebService):
     """Real training workflow for the HTML shell."""
 
+    scan_finished = Signal(object)
+    scan_failed = Signal(str)
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.controller = TrainingWorkflowController(self.store, self.project, self.client, self) if self.client is not None else None
         self._workflow_id = ""
         self._draft_id = ""
         self._scanning = False
+        self._scan_profile = None
+        self.scan_finished.connect(self._finish_scan)
+        self.scan_failed.connect(self._fail_scan)
         if self.controller is not None:
             self.controller.workflow_changed.connect(self._on_workflow)
             self.controller.draft_ready.connect(self._on_draft)
@@ -68,7 +74,8 @@ class TrainingService(WebService):
                 "confirmed_seconds": round(float(item.confirmed_seconds or 0), 1),
                 "segments": int(item.segment_count or 0), "status": str(item.processing_status or ""),
                 "flags": [str(flag) for flag in item.quality_flags],
-                "exists": Path(item.project_path or item.original_path).is_file(),
+                "exists": bool(self._asset_path(item)) and Path(self._asset_path(item)).is_file(),
+                "path": str(self._asset_path(item)),
             } for item in rows]
             workflows = self.store.list_workflows(self.project, profile.id)
             current = next((item for item in workflows if item.id == self._workflow_id), workflows[0] if workflows else None)
@@ -93,6 +100,13 @@ class TrainingService(WebService):
             "scanning": self._scanning,
         }
 
+    def _asset_path(self, asset):
+        from ....paths import ensure_within
+        try:
+            return ensure_within(self.project, Path(asset.project_path or asset.original_path))
+        except ValueError:
+            return ''
+
     @staticmethod
     def _workflow_dict(workflow) -> dict[str, Any]:
         return {
@@ -112,10 +126,12 @@ class TrainingService(WebService):
         for item in draft.segments:
             rows.append({
                 "id": item.id, "seconds": round(float(item.duration_seconds or 0), 2),
-                "text": str(item.text or item.asr_text or ""),
+                "text": str(item.text or ""),
                 "flags": [str(flag) for flag in item.quality_flags],
                 "included": bool(item.included), "confirmed": bool(item.human_confirmed),
                 "eligible": bool(item.eligible),
+                "override_reason": item.override_reason,
+                "hard_blocked": item.hard_blocked,
             })
         return {
             "id": draft.id, "workflow_id": draft.workflow_id,
@@ -136,22 +152,26 @@ class TrainingService(WebService):
         self._scanning = True
         self.notify("training.scanning", {"profile_id": profile.id})
 
-        def done(probes) -> None:
-            self._scanning = False
-            try:
-                payload = self._register(profile, probes)
-            except Exception as exc:  # noqa: BLE001
-                self.notify("training.error", {"message": self.translate_error(exc)})
-                return
-            self.notify("training.scanned", payload)
-
-        def failed(message: str) -> None:
-            self._scanning = False
-            self.notify("training.error", {"message": message})
-
+        self._scan_profile = profile
         ffprobe = EngineRuntimeResolver(self.paths).resolve_private_tool("ffprobe")
-        QThreadPool.globalInstance().start(_ScanTask(existing_paths, ffprobe, done, failed))
+        QThreadPool.globalInstance().start(_ScanTask(existing_paths, ffprobe, self.scan_finished.emit, self.scan_failed.emit))
         return {"profile_id": profile.id, "message": "正在检查素材文件……"}
+
+    @Slot(object)
+    def _finish_scan(self, probes):
+        self._scanning = False
+        if self._closing: return
+        try:
+            payload = self._register(self._scan_profile, probes)
+        except Exception as exc:
+            self._fail_scan(self.translate_error(exc))
+            return
+        self.notify('training.scanned', payload)
+
+    @Slot(str)
+    def _fail_scan(self, message):
+        self._scanning = False
+        self.notify('training.error', {'message': message})
 
     def _profile(self, profile_id: str, *, name: str, consent: bool, create: bool) -> VoiceProfile:
         if profile_id:
@@ -218,6 +238,24 @@ class TrainingService(WebService):
         workflow = self.controller.start(profile, [item.id for item in assets], bool(smart))
         self._workflow_id = workflow.id
         return {"workflow_id": workflow.id, "state": self.state(profile.id)}
+
+    def edit_draft(self, draft_id, edits):
+        draft = self.store.load_draft(self.project, draft_id)
+        workflow = self.store.load_workflow(self.project, draft.workflow_id)
+        if workflow.stage != WorkflowStage.REVIEW_REQUIRED:
+            raise ValueError('当前任务不处于人工审核阶段')
+        if not isinstance(edits, list): raise ValueError('片段编辑格式错误')
+        segments = {s.id: s for s in draft.segments}
+        if any(not isinstance(edit, dict) or edit.get('id') not in segments for edit in edits):
+            raise ValueError('片段不属于当前草稿')
+        for edit in edits:
+            segment = segments[edit['id']]
+            segment.text = str(edit.get('text', segment.text)).strip()
+            segment.included = bool(edit.get('included', segment.included))
+            segment.override_reason = str(edit.get('override_reason', segment.override_reason)).strip()
+            segment.human_confirmed = False
+        self.store.save_draft(self.project, draft)
+        return self._draft_dict(draft)
 
     def confirm(self, draft_id: str, *, include: list[str] | None = None, exclude: list[str] | None = None) -> dict[str, Any]:
         if self.controller is None:

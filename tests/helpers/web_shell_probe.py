@@ -68,19 +68,8 @@ PROBE_SCRIPT = """(() => {
     result.drawerOpen = q('#taskDrawer').classList.contains('show');
     q('#closeTaskDrawer').click();
     result.drawerClosed = !q('#taskDrawer').classList.contains('show');
-    q('#advancedBtn').click();
-    result.advancedOpen = q('#advancedPanel').classList.contains('show');
-    q('#advancedBtn').click();
-    q('#quickImportBtn').click();
-    result.modalOpen = q('#importModal').classList.contains('show');
-    q('#cancelImport').click();
-    result.modalClosed = !q('#importModal').classList.contains('show');
-    const chips = document.querySelectorAll('.take-chip');
-    chips[1].click();
-    result.takeActive = chips[1].classList.contains('active');
-    const presets = document.querySelectorAll('.preset');
-    presets[2].click();
-    result.presetActive = presets[2].classList.contains('active');
+    result.unsupportedHidden = q('#advancedBtn').classList.contains('hidden') && q('.take-strip').classList.contains('hidden');
+    result.importDemoRemoved = !q('#importModal');
     return JSON.stringify(result);
 })()"""
 

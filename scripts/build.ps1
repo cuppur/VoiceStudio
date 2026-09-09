@@ -39,6 +39,8 @@ try {
     }
     $appIcon = Join-Path $repoRoot "assets\voicestudio.ico"
     if (-not (Test-Path -LiteralPath $appIcon -PathType Leaf)) { throw "Application icon is missing: $appIcon" }
+    & $python scripts\sync_web_assets.py
+    if ($LASTEXITCODE -ne 0) { throw "Web asset synchronization failed" }
     & $python -m PyInstaller --noconfirm --clean --onedir --windowed --name LocalVoiceStudio --icon $appIcon --paths src --add-data "scripts;scripts" --add-data "manifests;manifests" --add-data "locks;locks" --add-data "src/local_voice_studio;worker_source/local_voice_studio" --add-data "src/local_voice_studio/ui/theme;local_voice_studio/ui/theme" --add-data "src/local_voice_studio/ui/web/assets;local_voice_studio/ui/web/assets" --exclude-module torch --exclude-module torchaudio --exclude-module torchvision --exclude-module numpy launcher.py
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed" }
     $packagedRoot = Join-Path $repoRoot "dist\LocalVoiceStudio\_internal"

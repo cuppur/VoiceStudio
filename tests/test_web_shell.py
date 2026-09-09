@@ -53,17 +53,18 @@ def _project(tmp_path: Path, *, profile: bool = True, cover: bool = True):
     return paths, store, project
 
 
-def test_shell_assets_are_a_verbatim_prototype_copy():
-    """index.html must differ from the prototype only by the adapter script tag."""
+def test_shell_preserves_reference_markup_but_guards_demo_script():
+    """Keep visual markup and explicitly isolate simulation from the desktop."""
     if not PROTOTYPE.is_file():
         pytest.skip("prototype file is not part of this checkout")
     source = PROTOTYPE.read_text(encoding="utf-8")
     asset = (web_shell.ASSETS / "index.html").read_text(encoding="utf-8")
     expected = source.replace(
         "</script>\n</body></html>",
-        "</script>\n<script src=\"studio-bridge.js\"></script>\n<script src=\"studio-pages.js\"></script>\n</body></html>",
+        "}\n</script>\n<script src=\"studio-bridge.js\"></script>\n<script src=\"studio-media.js\"></script>\n<script src=\"studio-pages.js\"></script>\n</body></html>",
         1,
     )
+    expected = expected.replace('<script>\n', '<script>\nif (!window.qt || window.__VS_STATIC__) {\n', 1)
     assert asset == expected
     assert (web_shell.ASSETS / "studio-bridge.js").is_file()
     assert (web_shell.ASSETS / "studio-pages.js").is_file()
@@ -124,10 +125,8 @@ def test_shell_renders_prototype_pages_with_real_data():
     assert probe["ttsVisible"] is True and probe["coverHidden"] is True
     assert probe["coverVisible"] is True
     assert probe["drawerOpen"] is True and probe["drawerClosed"] is True
-    assert probe["advancedOpen"] is True
-    assert probe["modalOpen"] is True and probe["modalClosed"] is True
-    assert probe["takeActive"] is True
-    assert probe["presetActive"] is True
+    assert probe["unsupportedHidden"] is True
+    assert probe["importDemoRemoved"] is True
 
 
 def test_bridge_reports_unwired_actions_explicitly(tmp_path: Path):

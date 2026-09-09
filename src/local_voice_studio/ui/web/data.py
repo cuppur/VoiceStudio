@@ -360,7 +360,7 @@ class StudioSnapshot:
                     "status_text": text,
                     "status_class": style,
                     "progress": max(0.0, min(100.0, float(job.progress or 0))),
-                    "message": str(job.current_stage or job.message or ""),
+                    "message": str(job.current_stage or ""),
                     "error": str(job.error or ""),
                     "created_at": str(job.created_at),
                     "updated_at": str(getattr(job, "updated_at", job.created_at)),

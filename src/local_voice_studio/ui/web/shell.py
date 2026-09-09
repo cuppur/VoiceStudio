@@ -49,6 +49,29 @@ def _channel_source() -> str:
     return ""
 
 
+class StudioWebView(QWebEngineView):
+    """Keep file drops in the application instead of navigating away from it."""
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls(): event.acceptProposedAction()
+        else: super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if event.mimeData().hasUrls():
+            paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+            if paths:
+                self.window().bridge.offer_files(paths)
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+
 class WebStudioWindow(QMainWindow):
     """Main window whose entire UI is the HTML v4 prototype."""
 
@@ -63,7 +86,7 @@ class WebStudioWindow(QMainWindow):
         self.project = self.session.current
         self.client = client or WorkerClient(paths, self)
 
-        self.view = QWebEngineView(self)
+        self.view = StudioWebView(self)
         self.view.setObjectName("webShell")
         settings = self.view.settings()
         settings.setAttribute(QWebEngineSettings.LocalContentCanAccessFileUrls, True)

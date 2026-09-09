@@ -8,6 +8,7 @@ window.VS_PAGES = (function () {
   'use strict';
   let S = null;
   let installed = false;
+  const media = window.VS_MEDIA;
   const RIGHTS_TEXT = '我确认自己拥有或已经获得处理、使用该音频所需的权利，并理解公开传播或商业发行可能需要额外取得歌曲、录音等相关授权。';
 
   const q = (selector, root) => (root || document).querySelector(selector);
@@ -27,10 +28,14 @@ window.VS_PAGES = (function () {
         + `<div class="modal-actions">${actions}</div></div>`;
       const close = (value) => { mask.remove(); resolve(value); };
       qq('button[data-index]', mask).forEach((button) => {
-        button.onclick = () => {
+        button.onclick = async () => {
           const action = (options.actions || [])[Number(button.dataset.index)] || {};
           if (typeof action.onClick === 'function') {
-            const value = action.onClick(mask);
+            button.disabled = true;
+            let value;
+            try { value = await action.onClick(mask); }
+            catch (error) { toast(String(error)); }
+            button.disabled = false;
             if (value === undefined) { return; }
             close(value);
             return;
@@ -84,10 +89,14 @@ window.VS_PAGES = (function () {
         + '<div class="task-foot"><span id="taskPct">0%</span><span>本地 GPU 任务</span></div>';
       document.body.appendChild(pop);
     }
+    if (!q('#taskCancel')) {
+      const cancel = document.createElement('button'); cancel.id = 'taskCancel'; cancel.className = 'mini'; cancel.textContent = '取消';
+      q('#taskClose').before(cancel);
+    }
     return pop;
   }
 
-  function showTask(requestId, title) {
+  function showTask(requestId, title, cancelAction) {
     const pop = taskPopup();
     TASKS.set(String(requestId), { title: title || '正在处理' });
     S.setText('#taskTitle', title || '正在处理');
@@ -97,7 +106,10 @@ window.VS_PAGES = (function () {
     if (bar) { bar.style.width = '0%'; }
     pop.classList.add('show');
     const cancel = q('#taskCancel');
-    if (cancel) { cancel.onclick = () => { S.invoke('cover.cancel', { request_id: requestId }); cancel.disabled = true; }; }
+    if (cancel) { cancel.disabled = false; cancel.onclick = () => {
+      if (cancelAction) cancelAction(); else S.invoke('cover.cancel', { request_id: requestId });
+      cancel.disabled = true;
+    }; }
     const close = q('#taskClose');
     if (close) { close.onclick = () => { pop.classList.remove('show'); TASKS.delete(String(requestId)); }; }
   }
@@ -138,7 +150,15 @@ window.VS_PAGES = (function () {
       const voiceSelect = q('.voice-select');
       if (voiceSelect) { voiceSelect.onclick = () => this.pickVoice(); }
       const lyricImport = q('.lyrics .mini');
-      if (lyricImport) { lyricImport.onclick = () => this.transcribe(); }
+      if (lyricImport) {
+        lyricImport.onclick = () => S.invoke('cover.import_lrc', {cover_id: this.songId});
+        const auto = document.createElement('button');
+        auto.className = 'mini'; auto.textContent = '自动识别';
+        auto.onclick = () => this.transcribe(); lyricImport.parentNode.appendChild(auto);
+      }
+      qq('.settings-body .toggle-row').forEach(row => {
+        if ((q('b', row) || {}).textContent === '去混响') { q('.switch', row).id = 'dereverbToggle'; }
+      });
       const pitch = q('#coverPitch');
       if (pitch) { pitch.oninput = (event) => { S.setText('#coverPitchVal', (Number(event.target.value) > 0 ? '+' : '') + event.target.value); }; }
       this.watchSong();
@@ -159,19 +179,18 @@ window.VS_PAGES = (function () {
     },
 
     syncFromLibrary() {
-      const active = q('#songList .song-row.active');
-      if (!active) { return; }
-      const title = q('.song-name', active);
-      const song = (S.songs || []).find((item) => title && item.title === title.textContent);
-      if (song && song.id !== this.songId) {
-        this.songId = song.id;
-        this.refresh();
-      }
+      const id = (S.song && S.song.id) || '';
+      if (id !== this.songId) { this.state = null; this.songId = id; }
+      if (id) { this.refresh(); }
+      else { const button = q('#coverRender'); if (button) { button.textContent = '请先导入歌曲'; } }
+      if (window.VS_PAGES.media) { window.VS_PAGES.media.load(); }
     },
 
     refresh() {
       if (!this.songId) { return; }
-      S.invoke('cover.state', { cover_id: this.songId }, (reply) => {
+      const id = this.songId;
+      S.invoke('cover.state', { cover_id: id }, (reply) => {
+        if (id !== this.songId) { return; }
         if (!reply.ok) { return; }
         this.state = reply.data;
         this.paint();
@@ -288,7 +307,7 @@ window.VS_PAGES = (function () {
         profile_id: this.voiceId,
         pitch_shift: pitch ? Number(pitch.value) : 0,
         settings: {},
-        cleanup: dereverb && dereverb.classList.contains('on') ? { mode: 'denoise', dereverb: 'medium' } : null,
+        cleanup: dereverb && dereverb.classList.contains('on') ? { mode: 'denoise', dereverb: 'light' } : null,
       });
     },
 
@@ -345,6 +364,8 @@ window.VS_PAGES = (function () {
           const value = Number(data.data.suggested_transpose);
           const pitch = q('#coverPitch');
           if (pitch) { pitch.value = value; S.setText('#coverPitchVal', (value > 0 ? '+' : '') + value); }
+          S.setText('.smart-value', (value > 0 ? '+' : '') + value);
+          S.setText('.smart-copy', '已按歌曲与目标声音的实际音高分析，建议已填入下方音调。');
           toast(`RMVPE 建议 ${value > 0 ? '+' : ''}${value} 半音（已填入）`);
         }
         if (data.kind === 'export' && data.data && data.data.outputs) {
@@ -352,6 +373,8 @@ window.VS_PAGES = (function () {
         }
         S.invoke('app.refresh');
         setTimeout(() => this.refresh(), 300);
+      } else if (name === 'job.cancelled') {
+        finishTask(data.request_id, '已取消'); S.invoke('app.refresh');
       } else if (name === 'job.error') {
         finishTask(data.request_id, '失败');
         toast((data.message || '任务失败'));
@@ -375,8 +398,6 @@ window.VS_PAGES = (function () {
       if (area) { area.oninput = () => this.updateChars(); this.updateChars(); }
       const play = q('#ttsPlay');
       if (play) { play.onclick = () => this.togglePlay(); }
-      const search = q('#ttsVoiceSearch');
-      if (search) { search.oninput = () => { /* 列表由适配层重渲染 */ }; }
       this.refreshHistory();
     },
 
@@ -457,7 +478,7 @@ window.VS_PAGES = (function () {
       if (data.kind !== 'tts') { return; }
       if (name === 'job.started') {
         this.pending = data.request_id;
-        showTask(data.request_id, '生成语音');
+        showTask(data.request_id, '生成语音', () => this.cancel());
       } else if (name === 'job.progress') {
         updateTask(data.request_id, data.percent, data.stage === 'load' ? '加载声音模型' : '语音合成', data.message);
       } else if (name === 'job.result') {
@@ -703,26 +724,27 @@ window.VS_PAGES = (function () {
     },
 
     paintDraft() {
-      const draft = this.state && this.state.draft;
+      const draft = this.reviewDraft;
       if (!draft || !draft.segments) { return; }
       const holder = q('#trainDraftPanel');
       if (!holder) { return; }
-      const rows = draft.abnormal.length ? draft.abnormal : draft.segments.slice(0, 12);
+      const rows = draft.segments;
       holder.innerHTML = rows.map((segment) => `<div class="sample-row" data-segment="${esc(segment.id)}">`
-        + `<button class="sample-play" data-toggle>${segment.included ? '✓' : '✕'}</button>`
-        + `<span>${esc((segment.text || '(无识别文字)').slice(0, 24))}</span>`
-        + `<div class="quality"><i style="width:${Math.min(100, Math.round(segment.seconds * 20))}%"></i></div>`
-        + `<span class="status ${segment.eligible ? 'ready' : 'orange'}">${segment.seconds.toFixed(1)}s</span></div>`).join('');
-      holder.onclick = (event) => {
-        const button = event.target.closest('[data-toggle]');
-        if (!button) { return; }
-        const row = button.closest('[data-segment]');
-        const segment = draft.segments.find((item) => item.id === row.dataset.segment);
-        if (segment) { segment.included = !segment.included; button.textContent = segment.included ? '✓' : '✕'; }
+        + `<input type="checkbox" data-field="included" aria-label="纳入训练" ${segment.included ? 'checked' : ''} ${segment.hard_blocked ? 'disabled' : ''}>`
+        + `<div><textarea data-field="text" aria-label="校对文字" style="width:100%">${esc(segment.text || '')}</textarea>`
+        + `<div>${esc((segment.flags || []).join('、'))}</div>`
+        + ((segment.flags || []).length && !segment.hard_blocked ? `<input data-field="override_reason" aria-label="人工复核原因" placeholder="确认质量可用时填写复核原因" value="${esc(segment.override_reason || '')}">` : '')
+        + `</div><span>${Number(segment.seconds).toFixed(1)}s</span><span>${segment.hard_blocked ? '不可训练' : ''}</span></div>`).join('');
+      holder.oninput = (event) => {
+        const field = event.target.dataset.field;
+        const row = event.target.closest('[data-segment]');
+        if (!field || !row) { return; }
+        const segment = draft.segments.find(item => item.id === row.dataset.segment);
+        if (segment) { segment[field] = field === 'included' ? event.target.checked : event.target.value; }
       };
     },
 
-    async importAssets() {
+    async importAssets(selection) {
       const consent = this.state && this.state.profile && this.state.profile.consent;
       if (!consent) {
         const nameInput = q('[data-page-view="train"] .train-settings input');
@@ -736,10 +758,10 @@ window.VS_PAGES = (function () {
           ],
         });
         if (!value) { return; }
-        S.invoke('training.import', { profile_id: '', name: value, consent: true });
+        S.invoke('training.import', { profile_id: '', name: value, consent: true, selection });
         return;
       }
-      S.invoke('training.import', { profile_id: this.profileId });
+      S.invoke('training.import', { profile_id: this.profileId, selection });
     },
 
     async primary() {
@@ -762,25 +784,27 @@ window.VS_PAGES = (function () {
       const draft = this.state && this.state.draft;
       if (!draft) { toast('还没有可确认的片段'); return; }
       const abnormal = draft.abnormal || [];
-      if (!abnormal.length) {
-        S.invoke('training.confirm', { draft_id: draft.id });
-        return;
-      }
+      this.reviewDraft = JSON.parse(JSON.stringify(draft));
+      const save = async (confirm) => {
+        const reply = await new Promise(resolve => S.invoke('training.edit_draft', {
+          draft_id: draft.id, segments: this.reviewDraft.segments.map(({id, text, included, override_reason}) => ({id, text, included, override_reason})),
+        }, resolve));
+        return reply.ok ? confirm : undefined;
+      };
       const ok = await openModal({
         title: '确认训练片段',
         body: `已识别 ${draft.segments.length} 个片段，其中 ${abnormal.length} 个需要检查。`
           + `当前已确认 ${draft.confirmed_seconds.toFixed(1)} 秒（最低 60 秒）。`,
         content: '<div id="trainDraftPanel" class="sample-list" style="max-height:280px;overflow:auto"></div>',
+        onReady: () => this.paintDraft(),
         actions: [
           { label: '取消', value: false },
-          { label: '确认并训练', kind: 'primary', value: true },
+          { label: '保存校对', onClick: () => save(false) },
+          { label: '确认并训练', kind: 'primary', onClick: () => save(true) },
         ],
       });
       if (!ok) { return; }
-      const include = [];
-      const exclude = [];
-      (draft.segments || []).forEach((segment) => (segment.included ? include : exclude).push(segment.id));
-      S.invoke('training.confirm', { draft_id: draft.id, include: include, exclude: exclude });
+      S.invoke('training.confirm', { draft_id: draft.id });
     },
 
     resume() {
@@ -802,7 +826,7 @@ window.VS_PAGES = (function () {
         this.state = this.state || {};
         this.state.workflow = workflow;
         if (workflow.profile_id) { this.profileId = workflow.profile_id; }
-        if (workflow.running) { showTask('training-' + workflow.id, '训练声音'); updateTask('training-' + workflow.id, workflow.progress, workflow.message, ''); }
+        if (workflow.running) { showTask('training-' + workflow.id, '训练声音', () => S.invoke('training.cancel', {workflow_id: workflow.id})); updateTask('training-' + workflow.id, workflow.progress, workflow.message, ''); }
         else if (workflow.stage === 'saved') { finishTask('training-' + workflow.id, '训练完成'); toast('新声音已验证并启用'); }
         else if (workflow.status === 'failed') { finishTask('training-' + workflow.id, '失败'); toast(workflow.error || '训练失败'); }
         this.refresh(workflow.profile_id);
@@ -838,8 +862,8 @@ window.VS_PAGES = (function () {
       return (active && active.dataset.mode) || 'uvr5';
     },
 
-    choose() {
-      S.invoke('separator.import', {}, (reply) => {
+    choose(selection) {
+      S.invoke('separator.import', {selection}, (reply) => {
         if (!reply.ok) { return; }
         this.coverId = reply.cover_id;
         S.invoke('app.refresh');
@@ -941,7 +965,32 @@ window.VS_PAGES = (function () {
 
   function hideUnsupported() {
     UNSUPPORTED.forEach((selector) => qq(selector).forEach((node) => node.classList.add('hidden')));
-    UNSUPPORTED_TEXT.forEach((selector) => qq(selector).forEach((node) => node.classList.add('hidden')));
+    qq('.settings-body .setting-row').forEach(row => {
+      if (/音色强度|细节保留/.test(row.textContent)) row.classList.add('hidden');
+    });
+    qq('#previewRange').forEach(node => node.remove());
+    const selector = q('.voice-select');
+    if (selector) selector.innerHTML = '<div class="avatar">◉</div><div class="voice-copy"><div class="voice-name">请选择目标声音</div><div class="voice-meta">仅显示已授权且验证通过的模型</div></div>';
+    S.setText('.voice-card .caps', '选择声音后显示可用模型');
+    S.setText('.smart-value', '—');
+    S.setText('.smart-copy', '选择声音后可分析歌曲音高，结果以实际检测为准。');
+    S.setText('#applyPitch', '分析移调建议');
+    S.setText('.estimate', '处理时间以实际任务为准');
+    qq('.cover-right b').forEach(node => { if (node.textContent.includes('缓存命中')) node.textContent = '等待任务'; });
+    qq('.settings-body .toggle-row').forEach(row => {
+      if (row.textContent.includes('自动识别歌词')) row.classList.add('hidden');
+    });
+    const suggestion = q('.pitch-advice') || (q('#applyPitch') && q('#applyPitch').parentElement.parentElement);
+    if (suggestion) {
+      const number = suggestion.querySelector('.pitch-number,.pitch-value'); if (number) number.textContent = '—';
+    }
+    S.setText('.timeline .card-sub', '点击音轨定位；使用 M 静音、S 独奏或快速混音试听');
+    S.setText('.library-foot', '歌曲、音轨、歌词与分析缓存保存在当前工程。');
+    S.setText('.render-foot,.render-meta', '处理进度以实际任务为准');
+    S.setText('#nowTitle', S.song ? S.song.title : '尚未选择音频');
+    S.setText('#nowSub', '本地试听');
+    S.setText('#playerMode', '选中音轨');
+    S.setText('#gpuBtn b', '本地任务');
     // 自动处理开关里后端不支持的项（保留“去混响”）
     qq('.settings-body .toggle-row').forEach((row) => {
       const label = q('b', row);
@@ -990,11 +1039,35 @@ window.VS_PAGES = (function () {
     separator.install();
     exportsPage.install();
     enginePage.install();
+    media.install(S);
+    // No demonstration handler is allowed to claim a successful operation.
+    qq('.demo').forEach(node => {
+      node.removeAttribute('data-msg');
+      if (!node.onclick && !node.dataset.page) { node.disabled = true; node.title = '暂未提供此功能'; }
+    });
+  }
+
+  function onState(projectChanged) {
+    if (projectChanged) {
+      cover.songId = ''; cover.state = null; cover.voiceId = '';
+      training.profileId = ''; training.state = null;
+      separator.coverId = ''; voices.selectedId = ''; tts.voiceId = '';
+    }
+    cover.syncFromLibrary();
+    if (projectChanged) { training.refresh(); tts.refreshHistory(); }
   }
 
   function onEvent(name, data) {
     const event = String(name);
     const payload = data || {};
+    if (event === 'files.dropped') {
+      const page = q('[data-page-view]:not(.hidden)');
+      if (page && page.dataset.pageView === 'train') training.importAssets(payload.selection);
+      else if (page && page.dataset.pageView === 'separator') separator.choose(payload.selection);
+      else S.invoke('song.import', {selection: payload.selection});
+      return;
+    }
+    media.onEvent(event, payload);
     if (event.indexOf('job.') === 0) {
       cover.onEvent(event, payload);
       tts.onEvent(event, payload);
@@ -1005,5 +1078,5 @@ window.VS_PAGES = (function () {
     if (event.indexOf('engine.') === 0) { enginePage.onEvent(event, payload); }
   }
 
-  return { install, onEvent, cover, tts, voices, training, separator, exportsPage, enginePage, openModal };
+  return { install, onState, onEvent, cover, tts, voices, training, separator, exportsPage, enginePage, openModal, media };
 })();
