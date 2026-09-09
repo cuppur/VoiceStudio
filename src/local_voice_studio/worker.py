@@ -225,6 +225,7 @@ class WorkerService:
             }[message.type]
             self.current_request_id = message.id
             self._request_context = {key: message.payload[key] for key in ("workflow_id", "stage", "attempt", "overall_progress", "project_path", "cover_id") if key in message.payload}
+            self._request_context["product_job_id"] = product_job.id
             self._request_context["command"] = message.type
             self.current_thread = threading.Thread(target=self._run_guarded, args=(message.id, target, message.payload), daemon=True)
             self.current_thread.start()
@@ -435,6 +436,7 @@ class WorkerService:
         return dataset
 
     def _train(self, request_id: str, payload: dict[str, Any]) -> None:
+        self.emit(request_id, "progress", {"progress": 0, "message": "正在校验训练数据与 GPU 环境"})
         project = ensure_within(self.paths.projects_root, Path(str(payload.get("project_path", ""))))
         validate_id(str(payload.get("profile_id", "")), legacy=True, field="profile_id")
         validate_id(str(payload.get("training_run_id", "")), legacy=True, field="training_run_id")
@@ -643,6 +645,11 @@ def main() -> int:
         sys.stdin.reconfigure(encoding="utf-8", errors="strict")
         sys.stdout.reconfigure(encoding="utf-8", errors="strict")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    # NumPy's Windows native initialization can deadlock when first imported
+    # on a training thread while the main thread blocks in stdin.readline().
+    # Initialize it on the worker's main thread before accepting commands.
+    # The desktop process remains free of NumPy and Torch.
+    import numpy  # noqa: F401
     service = WorkerService()
     service.emit("worker", "ready", {"version": 1, "commands": sorted(COMMANDS)})
     # QProcess can transiently report EOF on the write channel while a
