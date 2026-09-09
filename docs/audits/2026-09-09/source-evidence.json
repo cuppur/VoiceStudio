@@ -1,0 +1,113 @@
+{
+  "import_entry": {
+    "modal": "导入媒体原型中会模拟把文件加入当前页面。正式版可根据所在模块自动识别歌曲、声音素材或分离任务。导入到AI 翻唱歌曲库训练声音素材音频分离工具示例文件名取消导入",
+    "filePickerCalls": 0
+  },
+  "first_import": {
+    "songs": 1,
+    "selectedId": "1b0b25deed02435daae6614db6e96cc0",
+    "operationId": "",
+    "duration": "—",
+    "toast": "已导入：same-name.wav",
+    "filePickerCalls": 1
+  },
+  "first_render_toast": "请先导入或选择一首歌",
+  "duplicate_title_selection": {
+    "selectedId": "1b0b25deed02435daae6614db6e96cc0",
+    "operationId": "8dad7dbac1c4446cab95f63c0124494e",
+    "names": [
+      "same-name",
+      "same-name"
+    ]
+  },
+  "forwarded_events": [
+    "job.progress"
+  ],
+  "engine_dialog_visible": false,
+  "remaining_demo_controls": [
+    {
+      "id": "",
+      "text": "工程信息",
+      "message": "工程信息面板已展开（原型）",
+      "handler": null
+    },
+    {
+      "id": "",
+      "text": "导入 LRC",
+      "message": "已载入示例 LRC（原型）",
+      "handler": "() => this.transcribe()"
+    },
+    {
+      "id": "",
+      "text": "重置",
+      "message": "混音参数已重置",
+      "handler": null
+    },
+    {
+      "id": "",
+      "text": "◉Studio Voice 01已训练 · 支持 AI 翻唱 · 音域 A2–E5⌄",
+      "message": "声音选择器已打开（原型）",
+      "handler": "() => this.pickVoice()"
+    },
+    {
+      "id": "",
+      "text": "查看分析",
+      "message": "已打开音域分析详情（原型）",
+      "handler": null
+    }
+  ],
+  "mute_solo_handlers": [
+    {
+      "text": "M",
+      "handler": "()=>b.classList.toggle('active')"
+    },
+    {
+      "text": "S",
+      "handler": "()=>b.classList.toggle('active')"
+    },
+    {
+      "text": "M",
+      "handler": "()=>b.classList.toggle('active')"
+    },
+    {
+      "text": "S",
+      "handler": "()=>b.classList.toggle('active')"
+    },
+    {
+      "text": "M",
+      "handler": "()=>b.classList.toggle('active')"
+    },
+    {
+      "text": "S",
+      "handler": "()=>b.classList.toggle('active')"
+    },
+    {
+      "text": "M",
+      "handler": "()=>b.classList.toggle('active')"
+    },
+    {
+      "text": "S",
+      "handler": "()=>b.classList.toggle('active')"
+    },
+    {
+      "text": "M",
+      "handler": "()=>b.classList.toggle('active')"
+    },
+    {
+      "text": "S",
+      "handler": "()=>b.classList.toggle('active')"
+    }
+  ],
+  "tts_search_handler": "() => { /* 列表由适配层重渲染 */ }",
+  "dereverb_toggle_matches": 0.0,
+  "tts_selection_after_refresh": {
+    "before": "8e59a3041b9d4fddbd0357daba27c02f",
+    "after": "b360f9e8d13f4ebeb37d311a3b79f853"
+  },
+  "draft_review": {
+    "dialog": true,
+    "rows": 0,
+    "editors": 0
+  },
+  "bridge_error": ""
+}
