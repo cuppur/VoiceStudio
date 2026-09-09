@@ -29,7 +29,8 @@ class VoicesService(WebService):
                 "kind": "tts", "id": version.id, "name": version.name,
                 "meta": f"GPT-SoVITS · {str(version.created_at)[:10]}",
                 "active": version.id == profile.active_model_version_id,
-                "usable": str(version.status) == "available",
+                "usable": str(version.status) in {"available", "active"},
+                "previews": [p for p in version.preview_outputs if p.lower().endswith('.wav') and Path(p).is_file()],
             })
         for model in getattr(profile, "singing_models", []) or []:
             versions.append({

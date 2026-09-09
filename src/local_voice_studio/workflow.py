@@ -299,22 +299,23 @@ class TrainingWorkflowController(QObject):
         if len(workflow.verification_outputs) < 2 or any(not Path(item).is_file() or Path(item).stat().st_size < 44 for item in workflow.verification_outputs if item.lower().endswith(".wav")):
             raise RuntimeError("新声音验证文件不完整，旧声音未被替换")
         profile = self._profile(workflow.voice_profile_id)
-        for item in profile.model_versions:
-            if item.status == "active": item.status = "available"
+        keep_previous = bool(profile.active_model_version_id)
         version = ModelVersion(
             name=f"训练版本 {len(profile.model_versions) + 1}", training_run_id=workflow.training_run_id,
             dataset_snapshot_id=workflow.dataset_snapshot_id, snapshot_sha256=workflow.snapshot_sha256,
             gpt_checkpoint=workflow.candidate_gpt_checkpoint, sovits_checkpoint=workflow.candidate_sovits_checkpoint,
             gpt_sha256=sha256_file(Path(workflow.candidate_gpt_checkpoint)), sovits_sha256=sha256_file(Path(workflow.candidate_sovits_checkpoint)),
             origin="trained-local", trust_status="verified",
-            preview_outputs=workflow.verification_outputs, status="active",
+            preview_outputs=workflow.verification_outputs, status="available" if keep_previous else "active",
         )
-        profile.model_versions.append(version); profile.active_model_version_id = version.id
-        profile.active_gpt_checkpoint = version.gpt_checkpoint; profile.active_sovits_checkpoint = version.sovits_checkpoint
-        profile.active_gpt_sha256 = version.gpt_sha256; profile.active_sovits_sha256 = version.sovits_sha256; profile.active_model_trust_status = version.trust_status
+        profile.model_versions.append(version)
+        if not keep_previous:
+            profile.active_model_version_id = version.id
+            profile.active_gpt_checkpoint = version.gpt_checkpoint; profile.active_sovits_checkpoint = version.sovits_checkpoint
+            profile.active_gpt_sha256 = version.gpt_sha256; profile.active_sovits_sha256 = version.sovits_sha256; profile.active_model_trust_status = version.trust_status
         profile.default_model_mode = "fine_tuned"; profile.training_state = ""; profile.current_workflow_id = ""
         self.store.save_profile(self.project, profile)
-        workflow.stage = WorkflowStage.SAVED; workflow.status = WorkflowStatus.COMPLETED; workflow.progress = 1; workflow.message = "新声音已验证并启用"; workflow.waiting_reason = ""; self._save(workflow); self.profile_changed.emit(profile.id)
+        workflow.stage = WorkflowStage.SAVED; workflow.status = WorkflowStatus.COMPLETED; workflow.progress = 1; workflow.message = "新声音已保存，请试听后选择启用；当前继续使用旧版本" if keep_previous else "新声音已验证并启用，可试听两段样音"; workflow.waiting_reason = ""; self._save(workflow); self.profile_changed.emit(profile.id)
 
     def _on_event(self, request_id: str, event: str, payload: dict) -> None:
         context = self.requests.get(request_id)
@@ -370,6 +371,8 @@ class TrainingWorkflowController(QObject):
             raise
 
     def _save(self, workflow: TrainingWorkflow) -> None:
+        if workflow.status == WorkflowStatus.RUNNING:
+            workflow.waiting_reason = ""
         result = workflow.step_results.setdefault(workflow.stage.value, {"started_at": utc_now()})
         result.update({"status": workflow.status.value, "progress": workflow.progress, "message": workflow.message, "error": workflow.error})
         if workflow.status in {WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED} or workflow.stage == WorkflowStage.SAVED:

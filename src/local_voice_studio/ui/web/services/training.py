@@ -83,7 +83,7 @@ class TrainingService(WebService):
             current = next((item for item in workflows if item.id == self._workflow_id), workflows[0] if workflows else None)
             if current is not None:
                 workflow = self._workflow_dict(current)
-                if current.draft_id and current.stage == WorkflowStage.REVIEW_REQUIRED:
+                if current.draft_id:
                     try:
                         draft = self._draft_dict(self.store.load_draft(self.project, current.draft_id))
                     except (KeyError, ValueError, OSError):
@@ -101,7 +101,19 @@ class TrainingService(WebService):
             "draft": draft,
             "scanning": self._scanning,
             "singing_request": self.active_request(kind='singing'),
+            "result": self._result(profile),
         }
+
+    @staticmethod
+    def _result(profile):
+        if profile is None:
+            return {}
+        version = profile.model_versions[-1] if profile.model_versions else None
+        return {"tts_ready": bool(profile.active_model_version_id),
+                "singing_ready": bool(profile.active_singing_model_id),
+                "version_id": version.id if version else '',
+                "active": bool(version and version.id == profile.active_model_version_id),
+                "previews": [p for p in version.preview_outputs if p.lower().endswith('.wav') and Path(p).is_file()] if version else []}
 
     def _asset_path(self, asset):
         from ....paths import ensure_within
@@ -121,10 +133,12 @@ class TrainingService(WebService):
             "dataset_snapshot_id": str(workflow.dataset_snapshot_id or ""),
             "can_resume": workflow.status in {WorkflowStatus.INTERRUPTED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED},
             "running": workflow.status == WorkflowStatus.RUNNING,
+            "created_at": workflow.created_at, "updated_at": workflow.updated_at,
+            "steps": workflow.step_results,
         }
 
-    @staticmethod
-    def _draft_dict(draft) -> dict[str, Any]:
+    def _draft_dict(self, draft) -> dict[str, Any]:
+        from ....paths import ensure_within
         rows = []
         for item in draft.segments:
             rows.append({
@@ -135,12 +149,19 @@ class TrainingService(WebService):
                 "eligible": bool(item.eligible),
                 "override_reason": item.override_reason,
                 "hard_blocked": item.hard_blocked,
+                "audio_relative_path": item.audio_relative_path,
+                "path": str(ensure_within(self.project, self.project / item.audio_relative_path)),
             })
         return {
             "id": draft.id, "workflow_id": draft.workflow_id,
             "confirmed_seconds": round(float(draft.confirmed_seconds or 0), 1),
             "segments": rows,
             "abnormal": [row for row in rows if row["flags"] or not row["eligible"]],
+            "eligible_seconds": round(draft.eligible_seconds, 1),
+            "missing_seconds": round(max(0, 60 - draft.eligible_seconds), 1),
+            "empty_text": sum(not row['text'].strip() for row in rows),
+            "too_short": sum(row['seconds'] < 1 for row in rows),
+            "clipped": sum(any('clip' in flag.lower() for flag in row['flags']) for row in rows),
         }
 
     # ---------------------------------------------------------------- actions

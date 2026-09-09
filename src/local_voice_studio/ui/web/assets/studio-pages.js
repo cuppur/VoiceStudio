@@ -535,6 +535,8 @@ window.VS_PAGES = (function () {
       const versions = q('[data-page-view="voices"] .model-versions');
       if (versions) {
         versions.addEventListener('click', (event) => {
+          const preview = event.target.closest('button[data-preview]');
+          if (preview) { S.playFile(preview.dataset.preview, '模型版本试听'); return; }
           const button = event.target.closest('button[data-version]');
           if (button) { this.activate(button.dataset.version, button.dataset.kind); }
         });
@@ -565,7 +567,7 @@ window.VS_PAGES = (function () {
           ? '<span class="status ready">当前</span>'
           : `<button class="mini" data-version="${esc(item.id)}" data-kind="${esc(item.kind)}"${item.usable ? '' : ' disabled'}>设为默认</button>`;
         return `<div class="model-version"><div><b>${esc(item.name)}${item.active ? ' · 当前' : ''}</b>`
-          + `<span>${esc(item.meta)}</span></div>${action}</div>`;
+          + `<span>${esc(item.meta)}</span></div><div>${(item.previews || []).map((p,i) => `<button class="mini" data-preview="${esc(p)}">试听 ${i+1}</button>`).join(' ')} ${action}</div></div>`;
       }).join('');
     },
 
@@ -766,6 +768,23 @@ window.VS_PAGES = (function () {
       }
       if (state.singing_request) start.textContent = '取消歌唱训练';
       const wf = state.workflow || {};
+      let conclusion = q('#trainingConclusion');
+      if (!conclusion) {
+        conclusion = document.createElement('div'); conclusion.id='trainingConclusion';
+        conclusion.className='card'; conclusion.style.cssText='padding:16px;margin-top:12px;flex-shrink:0';
+        q('[data-page-view="train"] .train-settings').after(conclusion);
+      }
+      const d = state.draft || {}, result = state.result || {};
+      conclusion.innerHTML = '<b>素材结论与训练结果</b>'
+        + (d.segments ? `<p>合格 ${d.eligible_seconds} 秒 · 还差 ${d.missing_seconds} 秒达到文字训练门槛</p><p>空文本 ${d.empty_text} · 过短 ${d.too_short} · 削波 ${d.clipped}</p><button class="mini" id="excludedPreview">查看排除片段并试听</button>` : '<p>预处理后显示合格时长和排除原因</p>')
+        + `<p>文字声音：${result.tts_ready?'可用':'未就绪'} · 歌唱声音：${result.singing_ready?'可用':'未就绪'}</p>`
+        + (result.previews || []).map((p,i)=>`<button class="mini" data-preview="${esc(p)}">新版本试听 ${i+1}</button>`).join(' ')
+        + (result.version_id && !result.active ? '<p>旧版本继续生效，可试听后启用新版本。</p><button class="mini" id="activateTrainingVersion">启用新版本</button>' : '');
+      conclusion.onclick = event => {
+        if (event.target.dataset.preview) S.playFile(event.target.dataset.preview,'训练完成试听');
+        if (event.target.id === 'activateTrainingVersion') S.invoke('voices.activate',{profile_id:this.profileId,version_id:result.version_id,kind:'tts'});
+        if (event.target.id === 'excludedPreview') openModal({title:'被排除的片段',content:(d.segments || []).filter(s=>!s.eligible).map(s=>`<p><button class="mini" data-excluded="${esc(s.path)}">试听</button> ${s.seconds} 秒 · ${esc(s.flags.join('、') || '空文本或未纳入')}<br>${esc(s.text)}</p>`).join('') || '<p>没有被排除的片段</p>',onReady:mask=>{mask.onclick=e=>{if(e.target.dataset.excluded)S.playFile(e.target.dataset.excluded,'排除片段');};},actions:[{label:'关闭',value:false}]});
+      };
       q('#reviewTraining').disabled = !(state.draft && state.draft.segments && !wf.running);
       q('#trainStatus').textContent = wf.error || wf.waiting_reason && !wf.running && wf.waiting_reason || wf.message || '导入素材后点击一键训练，自动筛选合格片段并训练。';
       if (state.scanning) { start.disabled = true; start.textContent = '正在导入素材…'; } else { start.disabled = false; }
