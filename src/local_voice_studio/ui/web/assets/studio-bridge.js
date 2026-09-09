@@ -27,7 +27,7 @@
   const esc = (value) => String(value == null ? '' : value).replace(/[&<>"']/g, (ch) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
   ));
-  const NOT_WIRED = '该功能暂未提供';
+  const NOT_WIRED = '该功能尚未接入新界面';
   const S = {
     bridge: null,
     data: null,

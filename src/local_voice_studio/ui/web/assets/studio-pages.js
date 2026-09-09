@@ -770,7 +770,7 @@ window.VS_PAGES = (function () {
       q('#trainStatus').textContent = wf.error || wf.waiting_reason && !wf.running && wf.waiting_reason || wf.message || '导入素材后点击一键训练，自动筛选合格片段并训练。';
       if (state.scanning) { start.disabled = true; start.textContent = '正在导入素材…'; } else { start.disabled = false; }
       const nameInput = q('[data-page-view="train"] .train-settings input');
-      if (nameInput && state.profile && !nameInput.value) { nameInput.value = state.profile.name; }
+      if (nameInput && state.profile && nameInput.dataset.profileId !== state.profile.id) { nameInput.value = state.profile.name; nameInput.dataset.profileId=state.profile.id; nameInput.readOnly=true; nameInput.title='可在我的声音页面修改名称'; }
     },
 
     paintDraft() {
@@ -850,7 +850,7 @@ window.VS_PAGES = (function () {
         body: `已识别 ${draft.segments.length} 个片段，其中 ${abnormal.length} 个需要检查。`
           + `当前已确认 ${draft.confirmed_seconds.toFixed(1)} 秒（最低 60 秒）。`,
         content: '<div id="trainDraftPanel" class="sample-list" style="max-height:280px;overflow:auto"></div>',
-        onReady: () => this.paintDraft(),
+        onReady: mask => { q('.modal',mask).classList.add('review-modal'); this.paintDraft(); },
         actions: [
           { label: '取消', value: false },
           { label: '保存校对', onClick: () => save(false) },
@@ -1051,7 +1051,7 @@ window.VS_PAGES = (function () {
       const number = suggestion.querySelector('.pitch-number,.pitch-value'); if (number) number.textContent = '—';
     }
     S.setText('.timeline .card-sub', '点击音轨定位；使用 M 静音、S 独奏或快速混音试听');
-    S.setText('.library-foot', '歌曲、音轨、歌词与分析缓存保存在当前工程。');
+    qq('.library-foot').filter(n=>n.textContent.includes('Take')).forEach(n=>n.textContent='歌曲、音轨、歌词与分析缓存保存在当前工程。');
     S.setText('.render-foot,.render-meta', '处理进度以实际任务为准');
     S.setText('#nowTitle', S.song ? S.song.title : '尚未选择音频');
     S.setText('#nowSub', '本地试听');
@@ -1099,7 +1099,7 @@ window.VS_PAGES = (function () {
     installed = true;
     const style = document.createElement('style');
     style.textContent = `
-      .train-right{min-height:0;overflow:auto;padding-right:4px}.train-center .drop-card{flex:none;padding:12px}.train-center .dropzone{height:90px}.train-center .drop-icon{display:none}.train-center .samples-card{flex:1}.training-status{flex:none;padding:12px 16px;color:#9d501a;background:#fff7ef;font-size:12px;line-height:1.5}.train-settings .field{margin-top:12px}.train-settings input[type=checkbox]{width:auto;accent-color:#ff781d}.train-settings label{line-height:1.7}.page-actions #trainStart{min-width:150px}.sample-row{font-size:11px;min-height:42px}.sample-row>span{overflow-wrap:anywhere}.song-status{font-size:10px}.song-delete{background:transparent;color:#a37961;font-size:11px;cursor:pointer;padding:6px}.song-row{grid-template-columns:42px minmax(0,1fr) auto}.song-actions{display:flex;flex-direction:column;align-items:flex-end}.song-delete:hover{color:#c44728}.train-right .score{font-size:24px}.train-right .quality-metric b{font-size:13px;overflow-wrap:anywhere}.train-right .quality-alert{line-height:1.6}#advancedPanel input[type=range]{width:100%}#advancedPanel .field{margin-top:12px}#advancedPanel output{float:right}#previewMode{font:inherit;border:1px solid #e5dcd4;border-radius:8px;padding:5px;background:white}
+      .train-right{min-height:0;overflow:auto;padding-right:4px}.train-right>.card{flex-shrink:0}.train-right .train-settings{order:-1}.recommend-row{font-size:11px;flex-wrap:wrap}.review-modal{width:min(720px,calc(100vw - 40px))}#trainDraftPanel textarea{min-height:56px;border:1px solid #e5dcd4;border-radius:8px;padding:8px;font:inherit;resize:vertical}#trainDraftPanel .sample-row{grid-template-columns:24px minmax(0,1fr) 48px}#trainDraftPanel .sample-row>span:last-child{grid-column:2 / -1}.train-center .drop-card{flex:none;padding:12px}.train-center .dropzone{height:90px}.train-center .drop-icon{display:none}.train-center .samples-card{flex:1}.training-status{flex:none;padding:12px 16px;color:#9d501a;background:#fff7ef;font-size:12px;line-height:1.5}.train-settings .field{margin-top:12px}.train-settings input[type=checkbox]{width:auto;accent-color:#ff781d}.train-settings label{line-height:1.7}.page-actions #trainStart{min-width:150px}.sample-row{font-size:11px;min-height:42px}.sample-row>span{overflow-wrap:anywhere}.song-status{font-size:10px}.song-delete{background:transparent;color:#a37961;font-size:11px;cursor:pointer;padding:6px}.song-row{grid-template-columns:42px minmax(0,1fr) auto}.song-actions{display:flex;flex-direction:column;align-items:flex-end}.song-delete:hover{color:#c44728}.train-right .score{font-size:24px}.train-right .quality-metric b{font-size:13px;overflow-wrap:anywhere}.train-right .quality-alert{line-height:1.6}#advancedPanel input[type=range]{width:100%}#advancedPanel .field{margin-top:12px}#advancedPanel output{float:right}#previewMode{font:inherit;border:1px solid #e5dcd4;border-radius:8px;padding:5px;background:white}
     `;
     document.head.appendChild(style);
     hideUnsupported();
