@@ -179,7 +179,7 @@ class WorkerIntegrationTests(unittest.TestCase):
 
     def test_feature_manifest_is_bound_to_exact_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp); phoneme = root / "2-name2text.txt"; semantic = root / "6-name2semantic.tsv"; phoneme.write_text("phoneme", encoding="utf-8"); semantic.write_text("semantic", encoding="utf-8")
+            root = Path(tmp); phoneme = root / "2-name2text.txt"; semantic = root / "6-name2semantic.tsv"; phoneme.write_text("voice.wav\tAA B\t[1, 1]\thello\n", encoding="utf-8"); semantic.write_text("voice.wav\t1 2 3\n", encoding="utf-8")
             manifest = root / "feature-manifest.json"; value = {"profile_id": "voice", "dataset_snapshot_id": "snapshot-a", "snapshot_sha256": "sha-a", "list_sha256": "list-a", "feature_files": {"phoneme": str(phoneme), "semantic": str(semantic)}}; manifest.write_text(json.dumps(value), encoding="utf-8")
             payload = {"profile_id": "voice", "dataset_snapshot_id": "snapshot-a", "snapshot_sha256": "sha-a", "list_sha256": "list-a"}; self.assertEqual(TrainingPipeline._validate_feature_manifest(manifest, payload)["snapshot_sha256"], "sha-a")
             for key, bad in (("profile_id", "other"), ("dataset_snapshot_id", "snapshot-b"), ("snapshot_sha256", "sha-b"), ("list_sha256", "list-b")):
@@ -187,7 +187,30 @@ class WorkerIntegrationTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "其他数据集"):
                     TrainingPipeline._validate_feature_manifest(manifest, changed)
             semantic.write_bytes(b"")
-            with self.assertRaisesRegex(RuntimeError, "缺失或为空"):
+            with self.assertRaisesRegex(RuntimeError, "没有有效"):
+                TrainingPipeline._validate_feature_manifest(manifest, payload)
+
+    def test_feature_manifest_rejects_newline_only_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); phoneme = root / "2-name2text.txt"; semantic = root / "6-name2semantic.tsv"
+            phoneme.write_text("\n", encoding="utf-8"); semantic.write_text("\n", encoding="utf-8")
+            manifest = root / "feature-manifest.json"
+            manifest.write_text(json.dumps({"profile_id": "voice", "dataset_snapshot_id": "snapshot-a", "snapshot_sha256": "sha-a", "list_sha256": "list-a", "feature_files": {"phoneme": str(phoneme), "semantic": str(semantic)}}), encoding="utf-8")
+            payload = {"profile_id": "voice", "dataset_snapshot_id": "snapshot-a", "snapshot_sha256": "sha-a", "list_sha256": "list-a"}
+            with self.assertRaisesRegex(RuntimeError, "没有有效"):
+                TrainingPipeline._validate_feature_manifest(manifest, payload)
+
+    def test_feature_manifest_rejects_low_audio_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); phoneme = root / "2-name2text.txt"; semantic = root / "6-name2semantic.tsv"
+            phoneme.write_text("first.wav\tAA B\t[1, 1]\ttext\n", encoding="utf-8")
+            semantic.write_text("first.wav\t1 2 3\n", encoding="utf-8")
+            manifest = root / "feature-manifest.json"
+            manifest.write_text(json.dumps({"profile_id": "voice", "dataset_snapshot_id": "snapshot-a", "snapshot_sha256": "sha-a", "list_sha256": "list-a", "feature_files": {"phoneme": str(phoneme), "semantic": str(semantic)}}), encoding="utf-8")
+            payload = {"profile_id": "voice", "dataset_snapshot_id": "snapshot-a", "snapshot_sha256": "sha-a", "list_sha256": "list-a",
+                       "segments": [{"audio_path": "first.wav", "start_seconds": 0, "end_seconds": 10},
+                                    {"audio_path": "second.wav", "start_seconds": 0, "end_seconds": 90}]}
+            with self.assertRaisesRegex(RuntimeError, "覆盖不足"):
                 TrainingPipeline._validate_feature_manifest(manifest, payload)
 
     def test_fresh_training_views_do_not_reuse_run_outputs(self):

@@ -3,6 +3,7 @@ from __future__ import annotations
 from local_voice_studio.infrastructure.process_options import hidden_process_options
 
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -139,7 +140,17 @@ class TrainingPipeline:
             return output_dir
         exp_name = payload["experiment_name"]
         profile_id = validate_id(str(payload["profile_id"]), legacy=True, field="profile_id"); snapshot_id = validate_id(str(payload["dataset_snapshot_id"]), legacy=True, field="dataset_snapshot_id"); snapshot_sha256 = validate_sha256(str(payload["snapshot_sha256"]), field="snapshot_sha256")
-        exp_dir = self.paths.data_root / "training" / profile_id / snapshot_sha256 / "features"
+        exp_dir = ensure_within(self.paths.data_root, self.paths.data_root / "training" / profile_id / snapshot_sha256 / "features")
+        existing_manifest = exp_dir / "feature-manifest.json"
+        if existing_manifest.is_file():
+            try:
+                self._validate_feature_manifest(existing_manifest, payload)
+                progress(1.0, "复用已校验的训练特征")
+                return existing_manifest
+            except (OSError, ValueError, RuntimeError, json.JSONDecodeError):
+                # Upstream scripts skip outputs that already exist. Discard a
+                # failed cache as a unit so retrying actually recomputes it.
+                shutil.rmtree(exp_dir)
         exp_dir.mkdir(parents=True, exist_ok=True)
         list_path = exp_dir / "runtime.list"
         list_path.write_text("\n".join(f"{item['audio_path']}|speaker|{item.get('language', 'zh')}|{item.get('text', '')}" for item in payload["segments"]) + "\n", encoding="utf-8")
@@ -172,11 +183,10 @@ class TrainingPipeline:
         semantic = exp_dir / "6-name2semantic.tsv"
         self._merge_feature_shards(exp_dir, "2-name2text-*.txt", phoneme, has_header=False)
         self._merge_feature_shards(exp_dir, "6-name2semantic-*.tsv", semantic, has_header=True)
-        if not phoneme.is_file() or not phoneme.stat().st_size or not semantic.is_file() or not semantic.stat().st_size:
-            raise RuntimeError("训练特征生成不完整")
         feature_manifest = exp_dir / "feature-manifest.json"
         feature_manifest.write_text(json.dumps({"schema_version": 1, "profile_id": profile_id, "dataset_snapshot_id": snapshot_id, "snapshot_sha256": snapshot_sha256, "list_sha256": payload["list_sha256"], "prepared_at": utc_now(), "feature_files": {"phoneme": str(phoneme), "semantic": str(semantic)}}, ensure_ascii=False, indent=2), encoding="utf-8")
-        progress(1.0, "数据集准备完成")
+        self._validate_feature_manifest(feature_manifest, payload)
+        progress(1.0, "训练特征已校验")
         return feature_manifest
 
     @staticmethod
@@ -269,9 +279,43 @@ class TrainingPipeline:
         value = json.loads(path.read_text(encoding="utf-8"))
         for key in ("profile_id", "dataset_snapshot_id", "snapshot_sha256", "list_sha256"):
             if str(value.get(key, "")) != str(payload.get(key, "")): raise RuntimeError("当前训练特征属于其他数据集，请重新准备训练特征")
-        for file_path in value.get("feature_files", {}).values():
-            item = Path(file_path)
-            if not item.is_file() or not item.stat().st_size: raise RuntimeError("训练特征文件缺失或为空，请重新准备训练特征")
+        feature_files = value.get("feature_files", {})
+        phoneme_path = Path(str(feature_files.get("phoneme", "")))
+        semantic_path = Path(str(feature_files.get("semantic", "")))
+        if not phoneme_path.is_file() or not semantic_path.is_file():
+            raise RuntimeError("训练特征文件缺失，请重新准备训练特征")
+
+        phoneme_names: set[str] = set()
+        for line in phoneme_path.read_text(encoding="utf-8").splitlines():
+            columns = line.split("\t")
+            if len(columns) >= 4 and all(column.strip() for column in (columns[0], columns[1], columns[2], columns[3])):
+                phoneme_names.add(Path(columns[0].strip()).name.casefold())
+        semantic_names: set[str] = set()
+        for line in semantic_path.read_text(encoding="utf-8").splitlines():
+            columns = line.split("\t", 1)
+            if len(columns) == 2 and re.fullmatch(r"\d+(?:\s+\d+)*", columns[1].strip()):
+                semantic_names.add(Path(columns[0].strip()).name.casefold())
+        if not phoneme_names or not semantic_names:
+            raise RuntimeError("训练特征没有有效音素或语义记录，请重新准备训练特征")
+
+        segments = payload.get("segments") or []
+        segment_durations: dict[str, float] = {}
+        for segment in segments:
+            name = Path(str(segment.get("audio_path") or segment.get("audio_relative_path") or "")).name.casefold()
+            duration = max(0.0, float(segment.get("end_seconds", 0) or 0) - float(segment.get("start_seconds", 0) or 0))
+            if name and duration:
+                segment_durations[name] = segment_durations.get(name, 0.0) + duration
+        total_seconds = sum(segment_durations.values())
+        if total_seconds:
+            minimum_seconds = min(total_seconds, max(60.0, total_seconds * 0.75))
+            phoneme_seconds = sum(seconds for name, seconds in segment_durations.items() if name in phoneme_names)
+            semantic_seconds = sum(seconds for name, seconds in segment_durations.items() if name in semantic_names)
+            if min(phoneme_seconds, semantic_seconds) < minimum_seconds:
+                raise RuntimeError(
+                    "有效训练特征覆盖不足：音素 {:.1f} 秒、语义 {:.1f} 秒；至少需要 {:.1f} 秒，请重新准备素材".format(
+                        phoneme_seconds, semantic_seconds, minimum_seconds
+                    )
+                )
         return value
 
     @staticmethod

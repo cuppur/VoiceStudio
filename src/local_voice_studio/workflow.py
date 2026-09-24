@@ -249,7 +249,7 @@ class TrainingWorkflowController(QObject):
         if workflow.dataset_snapshot_id:
             dataset = self.store.load_dataset_snapshot(self.project, workflow.dataset_snapshot_id)
             if workflow.stage in {WorkflowStage.FREEZING, WorkflowStage.FEATURE_PREPARING}: self._prepare_features(workflow, dataset); return
-            if workflow.stage == WorkflowStage.TRAINING: self._train(workflow, dataset); return
+            if workflow.stage == WorkflowStage.TRAINING: self._prepare_features(workflow, dataset); return
             if workflow.stage == WorkflowStage.VERIFYING: self._verify(workflow); return
         raise ValueError("上次任务缺少可恢复的数据，请重新处理素材")
 
@@ -400,7 +400,8 @@ class TrainingWorkflowController(QObject):
         root = self.store.paths.data_root / "training" / str(payload["profile_id"]) / str(payload["snapshot_sha256"]) / "features" / "feature-manifest.json"
         if not root.is_file(): return None
         try:
-            value = json.loads(root.read_text(encoding="utf-8"))
-            if all(str(value.get(key, "")) == str(payload.get(key, "")) for key in ("profile_id", "dataset_snapshot_id", "snapshot_sha256", "list_sha256")) and all(Path(item).is_file() and Path(item).stat().st_size for item in value.get("feature_files", {}).values()): return root
-        except (OSError, ValueError, TypeError, json.JSONDecodeError): pass
+            from .training import TrainingPipeline
+            TrainingPipeline._validate_feature_manifest(root, payload)
+            return root
+        except (OSError, ValueError, RuntimeError, TypeError, json.JSONDecodeError): pass
         return None

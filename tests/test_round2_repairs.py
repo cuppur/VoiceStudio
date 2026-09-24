@@ -147,6 +147,18 @@ def test_cancelled_training_resume_starts_a_new_worker_attempt(tmp_path):
                               list_sha256=sha256_file(list_path))
     dataset.snapshot_sha256 = dataset_snapshot_sha256(dataset)
     store.save_dataset_snapshot(project, dataset)
+    feature_dir = paths.data_root / 'training' / profile.id / dataset.snapshot_sha256 / 'features'
+    feature_dir.mkdir(parents=True)
+    phoneme = feature_dir / '2-name2text.txt'
+    semantic = feature_dir / '6-name2semantic.tsv'
+    phoneme.write_text('voice.wav\tAA B\t[1, 1]\ttext\n', encoding='utf-8')
+    semantic.write_text('voice.wav\t1 2 3\n', encoding='utf-8')
+    feature_manifest = feature_dir / 'feature-manifest.json'
+    feature_manifest.write_text(json.dumps({
+        'profile_id':profile.id, 'dataset_snapshot_id':dataset.id,
+        'snapshot_sha256':dataset.snapshot_sha256, 'list_sha256':dataset.list_sha256,
+        'feature_files':{'phoneme':str(phoneme), 'semantic':str(semantic)},
+    }), encoding='utf-8')
     workflow = TrainingWorkflow(profile.id, profile.name, stage=WorkflowStage.TRAINING,
                                 status=WorkflowStatus.CANCELLED, dataset_snapshot_id=dataset.id,
                                 snapshot_sha256=dataset.snapshot_sha256,
@@ -162,6 +174,48 @@ def test_cancelled_training_resume_starts_a_new_worker_attempt(tmp_path):
     assert worker.sent[-1][1] == 'train'
     assert worker.sent[-1][2]['training_run_id'] == current.training_run_id
     assert worker.sent[-1][2]['sovits_epochs'] == 4
+    service.close()
+
+
+def test_cancelled_training_resume_rebuilds_empty_feature_cache(tmp_path):
+    app = _app()
+    paths, store, project, worker, _ = _fixture(tmp_path)
+    service = TrainingService(paths, store, project, worker)
+    profile = VoiceProfile('重建特征', True, consent_record='user consent', consent_confirmed_at='2026-09-09')
+    store.save_profile(project, profile)
+    dataset_folder = project / 'datasets' / 'empty-feature-snapshot'
+    dataset_folder.mkdir(parents=True)
+    list_path = dataset_folder / 'dataset.list'
+    list_path.write_text('', encoding='utf-8')
+    dataset = DatasetManifest('frozen', profile.id, id='empty-feature-snapshot', frozen=True,
+                              list_path=str(list_path), wav_dir=str(dataset_folder / 'audio'),
+                              list_relative_path='datasets/empty-feature-snapshot/dataset.list',
+                              list_sha256=sha256_file(list_path))
+    dataset.snapshot_sha256 = dataset_snapshot_sha256(dataset)
+    store.save_dataset_snapshot(project, dataset)
+    feature_dir = paths.data_root / 'training' / profile.id / dataset.snapshot_sha256 / 'features'
+    feature_dir.mkdir(parents=True)
+    phoneme = feature_dir / '2-name2text.txt'
+    semantic = feature_dir / '6-name2semantic.tsv'
+    phoneme.write_text('\n', encoding='utf-8')
+    semantic.write_text('\n', encoding='utf-8')
+    (feature_dir / 'feature-manifest.json').write_text(json.dumps({
+        'profile_id':profile.id, 'dataset_snapshot_id':dataset.id,
+        'snapshot_sha256':dataset.snapshot_sha256, 'list_sha256':dataset.list_sha256,
+        'feature_files':{'phoneme':str(phoneme), 'semantic':str(semantic)},
+    }), encoding='utf-8')
+    workflow = TrainingWorkflow(profile.id, profile.name, stage=WorkflowStage.TRAINING,
+                                status=WorkflowStatus.CANCELLED, dataset_snapshot_id=dataset.id,
+                                snapshot_sha256=dataset.snapshot_sha256,
+                                processing_options={'quality':'quick'})
+    store.save_workflow(project, workflow)
+
+    service.resume(workflow.id)
+
+    current = store.load_workflow(project, workflow.id)
+    assert current.stage == WorkflowStage.FEATURE_PREPARING
+    assert current.status == WorkflowStatus.RUNNING
+    assert worker.sent[-1][1] == 'prepare_dataset'
     service.close()
 
 
