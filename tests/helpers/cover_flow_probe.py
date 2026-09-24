@@ -28,6 +28,7 @@ from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from local_voice_studio.paths import AppPaths  # noqa: E402
+from local_voice_studio.models import VoiceProfile  # noqa: E402
 from local_voice_studio.storage import StudioStore  # noqa: E402
 from local_voice_studio.ui.web.services.cover import CoverService  # noqa: E402
 from local_voice_studio.ui.web.shell import WebStudioWindow  # noqa: E402
@@ -89,6 +90,9 @@ def main() -> int:
     paths.ensure()
     store = StudioStore(paths)
     project = store.create_project("web-cover-flow")
+    voice = VoiceProfile("UI 翻唱测试声音", True)
+    voice.active_singing_model_id = "probe-singing-model"
+    store.save_profile(project, voice)
     client = FakeClient()
     service = CoverService(paths, store, project, client)
     service.import_song(_wav(root / "song.wav"))
@@ -116,18 +120,23 @@ def main() -> int:
         QTest.qWait(700)
 
     def flow() -> None:
-        evaluate("document.querySelector('#reSeparate').click(); 1")
+        evaluate("window.__vsBridge.voices = [{id:%s,name:'UI 翻唱测试声音',subtitle:'RVC 已验证',cover_ready:true}];"
+                 "document.querySelector('#coverRender').click(); 1" % json.dumps(voice.id))
         QTest.qWait(800)
         result["rights"] = json.loads(evaluate(
             "JSON.stringify({shown: document.querySelectorAll('.modal-mask.show').length,"
             "title: (document.querySelector('.modal-mask.show .modal h3')||{}).textContent||''})"))
         click_text("我确认")
-        result["modes"] = json.loads(evaluate(
+        result["voiceChoice"] = json.loads(evaluate(
             "JSON.stringify({shown: document.querySelectorAll('.modal-mask.show').length,"
             "title: (document.querySelector('.modal-mask.show .modal h3')||{}).textContent||'',"
-            "count: document.querySelectorAll('.modal-mask.show .mode').length})"))
-        click_text("开始分离")
-        QTest.qWait(400)
+            "count: document.querySelectorAll('.modal-mask.show .voice-row').length})"))
+        click_text("使用该声音")
+        QTest.qWait(500)
+        result["afterVoiceChoice"] = json.loads(evaluate(
+            "JSON.stringify({modal:!!document.querySelector('.modal-mask.show'),"
+            "voiceId:window.VS_PAGES.cover.voiceId,songId:window.VS_PAGES.cover.songId,"
+            "toast:(document.querySelector('#toast')||{}).textContent||''})"))
         result["sent"] = [list(item) for item in client.sent]
         result["taskPopup"] = json.loads(evaluate(
             "JSON.stringify({shown: !!document.querySelector('#taskPop.show'),"
@@ -143,6 +152,12 @@ def main() -> int:
         })"""))
         result["renderLabel"] = evaluate("document.querySelector('#coverRender').textContent")
         result["rightsState"] = evaluate("(document.querySelector('#heroStatus')||{}).textContent")
+        request_id, command, payload = client.sent[-1]
+        parent_job_id = window.bridge.cover._cover_runs.get(request_id, "")
+        parent_payload = store.load_product_job(parent_job_id).payload if parent_job_id else {}
+        result["oneClick"] = {"command": command, "cover_id": payload.get("cover_id"),
+                               "profile_id": parent_payload.get("profile_id"),
+                               "parent_job_id": parent_job_id}
         print("VS_FLOW " + json.dumps(result, ensure_ascii=False), flush=True)
         os._exit(0)
 

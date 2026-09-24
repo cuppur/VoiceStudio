@@ -215,6 +215,35 @@ window.VS_PAGES = (function () {
     paint() {
       const state = this.state;
       if (!state) { return; }
+      const strip = q('[data-page-view="cover"] .take-strip');
+      if (strip) {
+        strip.classList.remove('hidden');
+        const takes = state.takes || [];
+        strip.innerHTML = '<span class="label">成品版本</span>' + (takes.length ? takes.map((take,index) =>
+          `<button class="take-chip${take.id===state.active_take_id?' active':''}" data-take="${esc(take.id)}">Take ${index+1}</button>`).join('') : '<span>尚无成品</span>')
+          + (takes.length > 1 ? '<button class="mini" id="takeCompare">A/B 同位置试听</button>' : '')
+          + '<small id="takeDiff"></small>';
+        strip.onclick = event => {
+          const takeId = event.target.dataset.take;
+          if (takeId) { S.invoke('cover.select_take',{cover_id:this.songId,take_id:takeId},reply=>{if(reply.ok){this.state=reply.data;this.paint();S.invoke('app.refresh');}}); return; }
+          if (event.target.id==='takeCompare') {
+            const active = takes.find(t=>t.id===state.active_take_id) || takes[takes.length-1];
+            const other = takes.find(t=>t.id!==active.id);
+            if (!other) return;
+            const audio = S.audio, seconds = audio && Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
+            const next = this.comparingTake===other.id ? active : other;
+            this.comparingTake=next.id;
+            S.playFile(next.path,'Take '+(takes.indexOf(next)+1),seconds);
+            q('#takeDiff').textContent = '正在试听 Take '+(takes.indexOf(next)+1)+'；相同时间 '+Math.floor(seconds)+' 秒';
+          }
+        };
+        const active = takes.find(t=>t.id===state.active_take_id);
+        const previous = takes.length>1 && takes[takes.length-2];
+        if (active && previous) {
+          const changes=Object.keys(active.settings).filter(key=>active.settings[key]!==previous.settings[key]);
+          q('#takeDiff').textContent=changes.length ? '较上一版：'+changes.map(key=>key+' '+previous.settings[key]+'→'+active.settings[key]).join('，') : '混音参数与上一版相同';
+        }
+      }
       const rights = q('.rights-state') || q('#heroStatus');
       const render = q('#coverRender');
       const hints = [];
@@ -224,7 +253,7 @@ window.VS_PAGES = (function () {
       else if (!state.has_ai_vocal) { hints.push('下一步：生成 AI 人声'); }
       else if (!state.has_final_mix) { hints.push('下一步：生成最终混音'); }
       else { hints.push('已完成，可导出成品'); }
-      if (render) { render.textContent = '✦ ' + hints[0]; }
+      if (render) { render.textContent = state.active_request ? '✦ 翻唱任务进行中' : '✦ 一键翻唱'; render.title = hints[0]; }
       if (rights && rights.classList.contains('rights-state')) {
         rights.textContent = state.rights_confirmed ? '歌曲权利：已确认' : '歌曲权利：未确认';
       }
@@ -299,18 +328,25 @@ window.VS_PAGES = (function () {
       if (meta) { meta.textContent = voice.subtitle; }
       this.paint();
       toast('已选择声音：' + voice.name);
+      return voice.id;
     },
 
     async smartNext() {
       if (!this.songId) { toast('请先导入或选择一首歌'); return; }
       if (!this.state) { await new Promise((resolve) => { this.refresh(); setTimeout(resolve, 400); }); }
       const state = this.state || {};
-      if (!state.rights_confirmed) { await this.ensureRights(); return; }
-      if (!state.has_vocal) { await this.pickSeparation(); return; }
-      if (!this.voiceId) { await this.pickVoice(); return; }
-      if (!state.has_ai_vocal) { this.convert(); return; }
-      if (!state.has_final_mix) { this.render(); return; }
-      this.exportFinal();
+      if (!(await this.ensureRights())) return;
+      if (!this.voiceId && !(await this.pickVoice())) return;
+      const engines = state.engines || {};
+      const mode = engines.uvr5 && engines.uvr5.ready ? 'uvr5' : 'roformer';
+      const rows = qq('.mixer-body .mix-row');
+      const gain = (i,fallback) => { const input = rows[i] && q('input',rows[i]); return input ? Number(input.value) : fallback; };
+      S.invoke('cover.one_click', {
+        cover_id:this.songId,profile_id:this.voiceId,mode,
+        pitch_shift:Number((q('#coverPitch') || {}).value || 0),
+        settings:{index_rate:Number(q('#rvcIndex').value),protect:Number(q('#rvcProtect').value),f0_method:'rmvpe',autotune:q('#rvcSmoothing').value},
+        mix:{ai:gain(0,80),instrumental:gain(1,80),original:gain(2,0)},
+      });
     },
 
     convert() {
@@ -366,6 +402,8 @@ window.VS_PAGES = (function () {
     },
 
     onEvent(name, data) {
+      if (name === 'cover.pipeline.complete') { toast('一键翻唱已完成，可试听并导出'); this.refresh(); S.invoke('app.refresh'); return; }
+      if (name === 'cover.pipeline.error') { toast(data.message || '翻唱中断，可从任务中心继续'); S.invoke('app.refresh'); return; }
       if (name === 'job.started' && data.kind && ['separate', 'convert', 'render', 'export', 'cleanup', 'transpose', 'lyrics'].includes(data.kind)) {
         const labels = { separate: '分离人声与伴奏', convert: '生成 AI 人声', render: '生成最终混音', export: '导出成品', cleanup: '人声清理', transpose: '音高分析', lyrics: '歌词识别' };
         showTask(data.request_id, labels[data.kind] || '正在处理');
@@ -1038,8 +1076,7 @@ window.VS_PAGES = (function () {
   };
 
   // ----------------------------------------------------------- unsupported UI
-  const UNSUPPORTED = [
-    '.take-strip',           // 多 Take 版本：Worker 只产出单次结果
+    const UNSUPPORTED = [
     '#previewRender',
   ];
 
@@ -1165,7 +1202,8 @@ window.VS_PAGES = (function () {
       return;
     }
     if (event === 'voices.changed') { voices.onEvent(event, payload); return; }
-    if (event.indexOf('training.') === 0) { training.onEvent(event, payload); return; }
+      if (event.indexOf('training.') === 0) { training.onEvent(event, payload); return; }
+      if (event.indexOf('cover.pipeline.') === 0) { cover.onEvent(event, payload); return; }
     if (event.indexOf('engine.') === 0) { enginePage.onEvent(event, payload); }
   }
 

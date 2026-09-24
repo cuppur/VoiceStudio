@@ -242,6 +242,12 @@ class WorkerService:
         expected_sovits = validate_sha256(str(profile.get("active_sovits_sha256", "")), field="active_sovits_sha256")
         if sha256_file(gpt) != expected_gpt or sha256_file(sovits) != expected_sovits:
             raise ValueError("旧模型文件哈希不一致，已拒绝升级信任")
+        # The pinned checkpoints contain utils.HParams.  The restricted
+        # loader can allowlist it only after the installed engine is on the
+        # import path; otherwise an otherwise valid legacy voice never loads.
+        for directory in (self.paths.engine_root, self.paths.engine_root / 'GPT_SoVITS'):
+            if str(directory) not in sys.path:
+                sys.path.insert(0, str(directory))
         safe_torch_load(gpt, map_location="cpu")
         safe_torch_load(sovits, map_location="cpu")
         profile["active_model_trust_status"] = "trusted-local"

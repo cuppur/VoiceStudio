@@ -125,7 +125,7 @@ def test_shell_renders_prototype_pages_with_real_data():
     assert probe["ttsVisible"] is True and probe["coverHidden"] is True
     assert probe["coverVisible"] is True
     assert probe["drawerOpen"] is True and probe["drawerClosed"] is True
-    assert probe["unsupportedHidden"] is True
+    assert probe["unsupportedHidden"] is False  # Take 版本条现在接入真实成品
     assert probe["importDemoRemoved"] is True
 
 

@@ -32,10 +32,10 @@ def test_cover_page_flow_reaches_the_real_service():
     flow = _run_probe()
     # rights confirmation is mandatory before any separation
     assert flow["rights"] == {"shown": 1, "title": "歌曲权利确认"}
-    # both installed engines are offered
-    assert flow["modes"]["shown"] == 1
-    assert flow["modes"]["title"] == "选择分离方式"
-    assert flow["modes"]["count"] == 2
+    # the main action requests a target voice when none has been selected
+    assert flow["voiceChoice"]["shown"] == 1
+    assert flow["voiceChoice"]["title"] == "选择目标声音"
+    assert flow["voiceChoice"]["count"] == 1
     # the page sends a trusted command with project-owned paths only
     assert len(flow["sent"]) == 1
     _identifier, command, payload = flow["sent"][0]
@@ -48,8 +48,12 @@ def test_cover_page_flow_reaches_the_real_service():
     assert flow["taskPopup"] == {"shown": True, "title": "分离人声与伴奏"}
     # prototype controls without backend support are hidden
     hidden = flow["hidden"]
-    assert hidden["presets"] == 0 and hidden["advanced"] == 0 and hidden["takes"] == 1
+    assert hidden["presets"] == 0 and hidden["advanced"] == 0 and hidden["takes"] == 0
     assert hidden["ab"] == 0 and hidden["preview"] == 0  # toolbar replaced with real preview mode selector
     assert hidden["strength"] == 2 and hidden["toggles"] == 3
     # the primary button reflects the real next step
-    assert flow["renderLabel"].endswith("分离人声与伴奏")
+    assert flow["renderLabel"].endswith("一键翻唱")
+    one_click = flow["oneClick"]
+    assert one_click["command"] == "separate_song"
+    assert one_click["cover_id"] and one_click["profile_id"]
+    assert one_click["parent_job_id"]

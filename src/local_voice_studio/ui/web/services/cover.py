@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ....application.jobs import JobStage, ProductJobStatus
 from ....cover.application.service import CoverApplicationService
 from ....cover.mixing.models import CoverMixSettings, GainScale
 from ....cover.project import RIGHTS_ATTESTATION_TEXT, CoverProject
@@ -18,6 +19,16 @@ SEPARATION_MODES = ("uvr5", "roformer")
 class CoverService(WebService):
     """Real cover orchestration, free of Qt widgets."""
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._cover_runs: dict[str, str] = {}
+        for job in self.store.list_product_jobs():
+            if (job.kind == 'ai_cover' and Path(str(job.payload.get('project_path',''))).resolve() == self.project.resolve()
+                    and job.status in {ProductJobStatus.RUNNING,ProductJobStatus.PREPARING,ProductJobStatus.CANCELLING}):
+                job.status = ProductJobStatus.RECOVERABLE
+                job.error = '上次进程已结束，可从当前阶段继续'
+                self.store.save_product_job(job)
+
     # ------------------------------------------------------------------ state
     def _service(self) -> CoverApplicationService:
         return CoverApplicationService(self.project, paths=self.paths, store=self.store)
@@ -29,13 +40,16 @@ class CoverService(WebService):
         uvr5 = UVR5RuntimeStatus.detect(self.paths, deep=False)
         roformer = RoFormerRuntimeStatus.detect(self.paths, deep=False)
         return {
-            "uvr5": {"ready": bool(uvr5.ready), "detail": str(getattr(uvr5, "message", "") or "")},
-            "roformer": {"ready": bool(roformer.ready), "detail": str(getattr(roformer, "message", "") or "")},
+            "uvr5": {"ready": bool(uvr5.ready), "detail": str(getattr(uvr5, "message", "") or getattr(uvr5, "error", "") or "")},
+            "roformer": {"ready": bool(roformer.ready), "detail": str(getattr(roformer, "message", "") or getattr(roformer, "error", "") or "")},
         }
 
     def state(self, cover_id: str) -> dict[str, Any]:
         cover = self._cover(cover_id)
         assets = {str(asset.role): asset for asset in cover.assets}
+        active_mix = cover.get_asset(role='final_mix')
+        if active_mix:
+            assets['final_mix'] = active_mix
         return {
             "cover_id": cover.id,
             "title": cover.title,
@@ -52,7 +66,117 @@ class CoverService(WebService):
             "final_asset_id": assets["final_mix"].id if "final_mix" in assets else "",
             "engines": self.engines(),
             "active_request": self.active_request(cover.id),
+            "takes": [self._take(cover, asset) for asset in cover.assets if asset.role == 'final_mix'],
+            "active_take_id": active_mix.id if active_mix else '',
         }
+
+    @staticmethod
+    def _take(cover: CoverProject, asset) -> dict[str, Any]:
+        return {"id": asset.id, "path": str(cover.root / asset.relative_path),
+                "created_at": asset.created_at, "sha256": asset.sha256,
+                "settings": dict(asset.metadata.get('settings') or {}),
+                "model_id": asset.model_id,
+                "source_asset_ids": list(asset.source_asset_ids)}
+
+    def select_take(self, cover_id: str, take_id: str) -> dict[str, Any]:
+        from ....audio import sha256_file
+        cover = self._cover(cover_id)
+        asset = cover.get_asset(take_id)
+        if asset is None or asset.role != 'final_mix':
+            raise ValueError('找不到该成品版本')
+        path = cover.root / asset.relative_path
+        if not path.is_file() or sha256_file(path) != asset.sha256:
+            raise ValueError('成品文件缺失或已被修改，无法恢复')
+        cover.active_take_id = asset.id
+        cover.save()
+        self.notify('songs.changed', {'cover_id':cover.id})
+        return self.state(cover_id)
+
+    def start_cover(self, cover_id: str, profile_id: str, *, mode='uvr5', pitch_shift=0,
+                    settings=None, mix=None) -> dict[str, Any]:
+        cover = self._cover(cover_id)
+        if not cover.rights_confirmed:
+            raise ValueError('请先确认歌曲处理权利')
+        if self.active_request(cover_id):
+            raise ValueError('歌曲已有任务正在进行')
+        profile = next((p for p in self.store.list_profiles(self.project) if p.id == profile_id), None)
+        if profile is None or not profile.active_singing_model_id:
+            raise ValueError('请先选择已就绪的歌唱声音')
+        if mode not in SEPARATION_MODES:
+            raise ValueError('不支持的分离方式')
+        payload = {'project_path':str(self.project), 'cover_id':cover_id,
+                   'profile_id':profile_id, 'mode':mode, 'pitch_shift':int(pitch_shift),
+                   'settings':dict(settings or {}), 'mix':dict(mix or {}), 'title':cover.title}
+        job = self.coordinator.start('ai_cover', payload, ['separation','voice_conversion','mix'])
+        if cover.get_asset(role='vocal') and cover.get_asset(role='instrumental'):
+            job.mark_stage_running('separation')
+            job.mark_stage_succeeded('separation')
+        self.store.save_product_job(job)
+        return self._advance_cover(job.id)
+
+    def resume_cover(self, job_id: str) -> dict[str, Any]:
+        job = self.store.load_product_job(job_id)
+        if job.kind != 'ai_cover' or Path(str(job.payload.get('project_path',''))).resolve() != self.project.resolve():
+            raise ValueError('找不到当前工程的一键翻唱任务')
+        if job.status == ProductJobStatus.SUCCEEDED:
+            raise ValueError('一键翻唱已经完成')
+        if self.active_request(str(job.payload['cover_id'])):
+            raise ValueError('该歌曲已有任务正在进行')
+        self._cover(str(job.payload['cover_id']))
+        for stage in ('separation','voice_conversion','mix'):
+            item = job.stage(stage)
+            if item.status not in {ProductJobStatus.SUCCEEDED,ProductJobStatus.PUBLISHED}:
+                item.status = ProductJobStatus.QUEUED; item.progress = 0
+        job.error = ''; job.status = ProductJobStatus.QUEUED
+        self.store.save_product_job(job)
+        return self._advance_cover(job.id)
+
+    def _advance_cover(self, job_id: str) -> dict[str, Any]:
+        job = self.store.load_product_job(job_id)
+        payload = job.payload; cover_id = str(payload['cover_id']); profile_id = str(payload['profile_id'])
+        ready = job.ready_stages()
+        if not ready:
+            job.status = ProductJobStatus.SUCCEEDED; job.current_stage = ''
+            self.store.save_product_job(job)
+            self.notify('cover.pipeline.complete', {'job_id':job_id, 'cover_id':cover_id})
+            return {'job_id':job_id, 'completed':True}
+        stage = ready[0].name
+        try:
+            if stage == 'separation':
+                task = self.separate(cover_id, str(payload['mode']))
+            elif stage == 'voice_conversion':
+                task = self.convert_vocal(cover_id, profile_id, int(payload['pitch_shift']), payload['settings'])
+            else:
+                task = self.render(cover_id, profile_id, payload['mix'])
+        except Exception as exc:
+            job.status = ProductJobStatus.RECOVERABLE; job.error = str(exc)
+            self.store.save_product_job(job)
+            raise
+        job.mark_stage_running(stage)
+        self.store.save_product_job(job)
+        self._cover_runs[task['request_id']] = job_id
+        self.notify('cover.pipeline.stage', {'job_id':job_id,'stage':stage,'request_id':task['request_id']})
+        return {**task, 'job_id':job_id, 'stage':stage}
+
+    def handle_worker_event(self, request_id: str, event: str, payload: dict[str, Any]) -> bool:
+        parent_id = self._cover_runs.get(str(request_id))
+        handled = super().handle_worker_event(request_id,event,payload)
+        if parent_id and event in {'result','error'}:
+            self._cover_runs.pop(str(request_id),None)
+            job = self.store.load_product_job(parent_id)
+            if event == 'result':
+                job.mark_stage_succeeded(job.current_stage)
+                self.store.save_product_job(job)
+                try: self._advance_cover(parent_id)
+                except Exception as exc:
+                    self.notify('cover.pipeline.error',{'job_id':parent_id,'message':str(exc)})
+            else:
+                job.status = ProductJobStatus.RECOVERABLE
+                job.error = str(payload.get('message','本阶段失败'))
+                job.stage(job.current_stage).error = job.error
+                self.store.save_product_job(job)
+                self.notify('cover.pipeline.error',{'job_id':parent_id,'message':job.error})
+        return handled
 
     # ---------------------------------------------------------------- actions
     def delete_song(self, cover_id: str) -> dict[str, Any]:

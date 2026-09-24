@@ -129,6 +129,13 @@ class GptSovitsEngine:
             return result
 
     def load(self, profile: dict[str, Any], force_cpu: bool = False) -> None:
+        # GPT-SoVITS English references call nltk.pos_tag.  Keep its pinned
+        # tagger in the packaged worker so synthesis also works offline.
+        tagger_root = Path(__file__).resolve().parent / 'nltk_data'
+        if tagger_root.is_dir():
+            import nltk
+            if str(tagger_root) not in nltk.data.path:
+                nltk.data.path.insert(0, str(tagger_root))
         ready = self.readiness()
         if not ready["ready"]:
             raise EngineNotReady("GPT-SoVITS 尚未安装完整")

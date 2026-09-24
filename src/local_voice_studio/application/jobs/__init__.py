@@ -46,6 +46,7 @@ class ProductJob:
     progress: float = 0.0
     error: str = ""
     outputs: list[str] = field(default_factory=list)
+    log: list[str] = field(default_factory=list)
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
 
@@ -116,12 +117,13 @@ class ProductJob:
             "stages": [{"name": item.name, "dependencies": list(item.dependencies), "status": item.status.value, "progress": item.progress, "error": item.error, "outputs": list(item.outputs)} for item in self.stages],
             "status": self.status.value, "current_stage": self.current_stage, "progress": self.progress,
             "error": self.error, "outputs": list(self.outputs), "created_at": self.created_at, "updated_at": self.updated_at,
+            "log": list(self.log),
         }
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "ProductJob":
         stages = [JobStage(name=str(item["name"]), dependencies=list(item.get("dependencies", [])), status=ProductJobStatus(item.get("status", "queued")), progress=float(item.get("progress", 0)), error=str(item.get("error", "")), outputs=list(item.get("outputs", []))) for item in value.get("stages", [])]
-        return cls(kind=str(value.get("kind", "")), payload=dict(value.get("payload", {})), stages=stages, id=str(value.get("id", uuid4().hex)), status=ProductJobStatus(value.get("status", "queued")), current_stage=str(value.get("current_stage", "")), progress=float(value.get("progress", 0)), error=str(value.get("error", "")), outputs=list(value.get("outputs", [])), created_at=str(value.get("created_at", utc_now())), updated_at=str(value.get("updated_at", utc_now())))
+        return cls(kind=str(value.get("kind", "")), payload=dict(value.get("payload", {})), stages=stages, id=str(value.get("id", uuid4().hex)), status=ProductJobStatus(value.get("status", "queued")), current_stage=str(value.get("current_stage", "")), progress=float(value.get("progress", 0)), error=str(value.get("error", "")), outputs=list(value.get("outputs", [])), log=list(value.get("log", []))[-60:], created_at=str(value.get("created_at", utc_now())), updated_at=str(value.get("updated_at", utc_now())))
 
 
 

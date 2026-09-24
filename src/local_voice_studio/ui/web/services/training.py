@@ -57,6 +57,15 @@ class TrainingService(WebService):
             self.controller.workflow_changed.connect(self._on_workflow)
             self.controller.draft_ready.connect(self._on_draft)
             self.controller.profile_changed.connect(lambda profile_id: self.notify("voices.changed", {"profile_id": profile_id}))
+        self._recover_stale_workflows()
+
+    def _recover_stale_workflows(self):
+        for profile in self.store.list_profiles(self.project):
+            for workflow in self.store.list_workflows(self.project, profile.id):
+                if workflow.status == WorkflowStatus.RUNNING:
+                    workflow.status = WorkflowStatus.INTERRUPTED
+                    workflow.message = '上次进程已结束，可从当前阶段继续'
+                    self.store.save_workflow(self.project, workflow)
 
     # ------------------------------------------------------------------ state
     def state(self, profile_id: str = "") -> dict[str, Any]:
@@ -376,6 +385,7 @@ class TrainingService(WebService):
         self._draft_id = ''
         if self.controller is not None:
             self.controller.project = self.project
+        self._recover_stale_workflows()
 
     def close(self) -> None:
         if self.controller is not None:

@@ -95,6 +95,7 @@ class StudioBridge(QObject):
             "preview.configure": self.media.configure,
             "preview.control": self.media.control,
             "task.cancel": self._task_cancel,
+            "task.resume": self._task_resume,
             "training.edit_draft": self._training_edit_draft,
             "song.select": self._song_select,
             "file.reveal": self._file_reveal,
@@ -103,6 +104,9 @@ class StudioBridge(QObject):
             "settings.save": self._settings_save,
             "settings.pick_directory": self._settings_pick_directory,
             "cover.state": self._cover_state,
+            "cover.one_click": self._cover_one_click,
+            "cover.resume": self._cover_resume,
+            "cover.select_take": self._cover_select_take,
             "cover.attest": self._cover_attest,
             "cover.separate": self._cover_separate,
             "cover.cleanup": self._cover_cleanup,
@@ -360,6 +364,10 @@ class StudioBridge(QObject):
 
     def _task_cancel(self, data):
         identifier = str(data.get('id', ''))
+        if identifier:
+            for request, parent_id in self.cover._cover_runs.items():
+                if parent_id == identifier:
+                    return {'ok': True, **self.cover.cancel_task(request)}
         for service in (self.cover, self.training):
             for request, info in service._tasks.items():
                 if info['job_id'] == identifier or request == str(data.get('request_id', '')):
@@ -372,6 +380,22 @@ class StudioBridge(QObject):
                 if job.id == identifier:
                     return {'ok': True, **self.training.cancel(workflow_id)}
         raise ValueError('任务已结束或不属于当前运行会话，请刷新任务列表')
+
+    def _task_resume(self, data):
+        job_id = str(data.get('id',''))
+        if not job_id:
+            raise ValueError('请选择需要继续的任务')
+        try:
+            product = self.store.load_product_job(job_id)
+        except KeyError:
+            product = None
+        if product and product.kind == 'ai_cover':
+            return self._cover_resume({'job_id':job_id})
+        job = next((item for item in self.store.list_jobs(200) if item.id == job_id),None)
+        if job is None or not job.payload.get('workflow_id') or Path(str(job.payload.get('project_path',''))).resolve() != self.project.resolve():
+            raise ValueError('该任务不能从当前工程恢复')
+        result = self.training.resume(str(job.payload['workflow_id']))
+        return {'ok':True,'data':result,'message':'训练已继续'}
 
     def _training_edit_draft(self, data):
         result = self.training.edit_draft(str(data.get('draft_id', '')), data.get('segments') or [])
@@ -458,6 +482,21 @@ class StudioBridge(QObject):
 
     def _cover_state(self, data: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True, "data": self._cover_service().state(str(data.get("cover_id", "")))}
+
+    def _cover_one_click(self, data: dict[str, Any]) -> dict[str, Any]:
+        task = self._cover_service().start_cover(
+            str(data.get('cover_id','')), str(data.get('profile_id','')),
+            mode=str(data.get('mode','uvr5')), pitch_shift=int(data.get('pitch_shift',0)),
+            settings=data.get('settings') or {}, mix=data.get('mix') or {})
+        return {'ok':True,'message':'一键翻唱已开始，将自动完成分离、转换和混音',**task}
+
+    def _cover_resume(self, data: dict[str, Any]) -> dict[str, Any]:
+        task = self._cover_service().resume_cover(str(data.get('job_id','')))
+        return {'ok':True,'message':'已继续一键翻唱任务',**task}
+
+    def _cover_select_take(self, data: dict[str, Any]) -> dict[str, Any]:
+        state = self._cover_service().select_take(str(data.get('cover_id','')), str(data.get('take_id','')))
+        return {'ok':True,'data':state,'message':'已恢复成品版本'}
 
     def _cover_attest(self, data: dict[str, Any]) -> dict[str, Any]:
         state = self._cover_service().attest_rights(str(data.get("cover_id", "")), bool(data.get("confirmed", True)))

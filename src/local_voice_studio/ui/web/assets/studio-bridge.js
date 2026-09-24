@@ -395,20 +395,29 @@
     rows.forEach((task) => {
       const job = document.createElement('div');
       job.className = 'job';
-      const actions = task.cancellable
-        ? `<div class="job-actions"><button class="mini" data-task-cancel="${esc(task.id)}">取消</button></div>`
+        const resume = task.resumable ? `<button class="mini" data-task-resume="${esc(task.id)}">继续</button>` : '';
+        const actions = task.cancellable
+          ? `<div class="job-actions"><button class="mini" data-task-cancel="${esc(task.id)}">取消</button></div>`
         : task.outputs.length
           ? `<div class="job-actions"><button class="mini" data-task-reveal="${esc(task.outputs[0])}">打开输出</button></div>`
-          : '';
-      job.innerHTML = `<div class="job-top"><div><b>${esc(task.title)}</b><br><small>${esc(task.kind_text)}</small></div>`
-        + `<span class="status ${esc(task.status_class)}">${esc(task.status_text)}</span></div>`
-        + `<div class="jobbar"><i style="width:${Math.round(task.progress)}%"></i></div>`
-        + actions;
+            : '';
+        const detail = (task.stages || []).map(s => `${esc(s.name)}：${esc(s.status)} ${s.progress}%${s.error?' · '+esc(s.error):''}`).join('<br>');
+        const log = (task.log || []).map(line=>esc(line)).join('<br>');
+        job.innerHTML = `<div class="job-top"><div><b>${esc(task.title)}</b><br><small>${esc(task.kind_text)}</small></div>`
+          + `<span class="status ${esc(task.status_class)}">${esc(task.status_text)}</span></div>`
+          + `<div class="jobbar"><i style="width:${Math.round(task.progress)}%"></i></div>`
+          + `<small>已用 ${Math.floor((task.elapsed_seconds||0)/60)} 分钟 · 最近活动 ${esc(task.updated_text)}${task.message?' · '+esc(task.message):''}</small>`
+          + (task.waiting_reason ? `<small>${esc(task.waiting_reason)}</small>` : '')
+          + `<details><summary>阶段与日志</summary><small>${detail || esc(task.message || task.error || '暂无记录')}<br>${log}</small></details>`
+          + resume + actions;
       drawer.appendChild(job);
     });
-    $$('[data-task-cancel]', drawer).forEach((button) => {
-      button.onclick = () => invoke('task.cancel', {id: button.dataset.taskCancel});
-    });
+      $$('[data-task-cancel]', drawer).forEach((button) => {
+        button.onclick = () => invoke('task.cancel', {id: button.dataset.taskCancel});
+      });
+      $$('[data-task-resume]', drawer).forEach((button) => {
+        button.onclick = () => invoke('task.resume', {id: button.dataset.taskResume});
+      });
     $$('[data-task-reveal]', drawer).forEach((button) => {
       button.onclick = () => invoke('file.reveal', { path: button.dataset.taskReveal });
     });
@@ -703,13 +712,22 @@
     paintPlayhead();
   }
 
-  function playFile(path, label) {
+  function playFile(path, label, atSeconds) {
     if (!path) { toast('素材路径不可用'); return; }
     if (S.pagesReady) { window.VS_MEDIA.pause(); }
     S.playbackKind = 'file';
     const audio = ensureAudio();
     audio.dataset.source = path;
+    const seekToRequestedPosition = () => {
+      if (!Number.isFinite(Number(atSeconds)) || !audio.duration) { return; }
+      audio.currentTime = Math.max(0, Math.min(audio.duration - 0.1, Number(atSeconds)));
+      paintPlayhead();
+    };
+    if (Number.isFinite(Number(atSeconds))) {
+      audio.addEventListener('loadedmetadata', seekToRequestedPosition, { once: true });
+    }
     audio.src = fileUrl(path);
+    if (audio.readyState >= 1) { seekToRequestedPosition(); }
     audio.play().then(() => {
       S.playing = true;
       setText('#playBtn', 'Ⅱ');

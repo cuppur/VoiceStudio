@@ -30,6 +30,9 @@ class JobCoordinator:
         item.progress = max(0.0, min(1.0, float(progress)))
         if message:
             item.error = ""  # progress messages are not failure state
+            line = str(message).strip()[:500]
+            if line and (not job.log or job.log[-1] != line):
+                job.log = (job.log + [line])[-60:]
         job.progress = sum(stage_item.progress for stage_item in job.stages) / max(1, len(job.stages))
         self.store.save_product_job(job)
         return job

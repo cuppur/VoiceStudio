@@ -36,6 +36,10 @@ _JOB_STATUS_TEXT = {
 _PRODUCT_STATUS_TEXT = {
     "queued": ("排队中", ""),
     "running": ("运行中", "orange"),
+    "succeeded": ("完成", "ready"),
+    "preparing": ("准备中", "orange"),
+    "cancelling": ("取消中", "orange"),
+    "waiting_dependency": ("等待前置步骤", "orange"),
     "completed": ("完成", "ready"),
     "published": ("完成", "ready"),
     "failed": ("失败", "red"),
@@ -52,6 +56,7 @@ _KIND_TEXT = {
 }
 
 _PRODUCT_KIND_TEXT = {
+    "ai_cover": "一键翻唱",
     "separate": "音频分离",
     "render_cover": "AI 翻唱",
     "export_cover": "翻唱导出",
@@ -190,7 +195,10 @@ class StudioSnapshot:
         for cover in covers:
             assets = {}
             for asset in cover.assets:
-                assets.setdefault(str(asset.role), asset)
+                assets[str(asset.role)] = asset
+            active_mix = cover.get_asset(role='final_mix')
+            if active_mix:
+                assets['final_mix'] = active_mix
             stems = []
             for role, label in _STEM_LABELS:
                 asset = assets.get(role)
@@ -351,6 +359,20 @@ class StudioSnapshot:
             for job in self.store.list_product_jobs(limit):
                 raw_status = str(job.status.value if hasattr(job.status, "value") else job.status)
                 text, style = _PRODUCT_STATUS_TEXT.get(raw_status, (raw_status, ""))
+                try:
+                    elapsed = max(0, int((datetime.now(timezone.utc)-datetime.fromisoformat(job.created_at)).total_seconds()))
+                except ValueError:
+                    elapsed = 0
+                workflow_id = str(job.payload.get('workflow_id', ''))
+                workflow_resumable = (
+                    bool(workflow_id)
+                    and raw_status in {'interrupted', 'failed', 'cancelled', 'recoverable'}
+                    and Path(str(job.payload.get('project_path', ''))).resolve() == self.project.resolve()
+                )
+                cover_resumable = (
+                    job.kind == 'ai_cover'
+                    and raw_status in {'recoverable', 'failed', 'cancelled'}
+                )
                 rows.append({
                     "id": job.id,
                     "title": self._product_title(job),
@@ -366,8 +388,14 @@ class StudioSnapshot:
                     "updated_at": str(getattr(job, "updated_at", job.created_at)),
                     "updated_text": clock_text(str(getattr(job, "updated_at", job.created_at))),
                     "outputs": [str(item) for item in list(job.outputs or [])],
+                    "workflow_id": workflow_id,
+                    "elapsed_seconds": elapsed,
+                    "stages": [{"name":s.name,"status":s.status.value,"progress":round(s.progress*100),"error":s.error} for s in job.stages],
+                    "log": list(job.log),
+                    "resumable": workflow_resumable or cover_resumable,
+                    "waiting_reason": str(job.error or ''),
                     "cancellable": raw_status in {"queued", "running"},
-                    "removable": raw_status in {"completed", "published", "failed", "cancelled", "interrupted"},
+                    "removable": raw_status in {"succeeded", "published", "failed", "cancelled", "interrupted"},
                 })
         except (OSError, ValueError):
             pass

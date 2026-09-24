@@ -139,6 +139,7 @@ class CoverProject:
     output_hashes: dict[str, str] = field(default_factory=dict)
     output_paths: dict[str, str] = field(default_factory=dict)
     assets: list[CoverAsset] = field(default_factory=list)
+    active_take_id: str = ""
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
 
@@ -166,6 +167,8 @@ class CoverProject:
         for asset in self.assets:
             normalized_assets.append(asset if isinstance(asset, CoverAsset) else CoverAsset.from_dict(asset))
         self.assets = normalized_assets
+        if self.active_take_id and not any(a.id == self.active_take_id and a.role == 'final_mix' for a in self.assets):
+            self.active_take_id = ""
         ids = [asset.id for asset in self.assets]
         if len(ids) != len(set(ids)):
             raise CoverProjectError("assets 不允许重复 asset id")
@@ -347,6 +350,7 @@ class CoverProject:
             "output_hashes": dict(self.output_hashes),
             "output_paths": dict(self.output_paths),
             "assets": [asset.to_dict() for asset in self.assets],
+            "active_take_id": self.active_take_id,
             "created_at": self.created_at, "updated_at": self.updated_at,
         }
 
@@ -406,6 +410,8 @@ class CoverProject:
     def _upsert_asset(self, asset: CoverAsset) -> None:
         self.assets = [item for item in self.assets if item.id != asset.id]
         self.assets.append(asset)
+        if asset.role == 'final_mix':
+            self.active_take_id = asset.id
 
     def add_asset(self, asset: CoverAsset, *, save: bool = True) -> CoverAsset:
         """Append a new asset version, rejecting accidental ID reuse.
@@ -431,6 +437,10 @@ class CoverProject:
         if role is not None:
             requested_role = str(role.value) if isinstance(role, Enum) else str(role)
             if requested_role in ASSET_ROLES:
+                if requested_role == 'final_mix' and self.active_take_id:
+                    selected = next((a for a in self.assets if a.id == self.active_take_id), None)
+                    if selected is not None:
+                        return selected
                 for asset in reversed(self.assets):
                     if asset.role == requested_role:
                         return asset
