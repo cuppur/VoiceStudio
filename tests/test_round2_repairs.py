@@ -9,7 +9,8 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
 from local_voice_studio import workflow as workflow_module
-from local_voice_studio.models import DatasetDraft, DatasetDraftSegment, VoiceProfile, WorkflowStatus
+from local_voice_studio.models import DatasetDraft, DatasetDraftSegment, DatasetManifest, TrainingWorkflow, VoiceProfile, WorkflowStage, WorkflowStatus, dataset_snapshot_sha256
+from local_voice_studio.audio import sha256_file
 from local_voice_studio.cover.project import CoverProject
 from local_voice_studio.ui.web.services.training import TrainingService
 from local_voice_studio.infrastructure.process_options import hidden_process_options
@@ -127,6 +128,40 @@ def test_old_review_task_uses_current_training_options(tmp_path, monkeypatch):
     assert calls[0][1]['automatic']
     assert calls[0][0].processing_options['quality'] == 'quick'
     assert calls[0][0].processing_options['train_singing'] is True
+    service.close()
+
+
+def test_cancelled_training_resume_starts_a_new_worker_attempt(tmp_path):
+    app = _app()
+    paths, store, project, worker, _ = _fixture(tmp_path)
+    service = TrainingService(paths, store, project, worker)
+    profile = VoiceProfile('恢复训练', True, consent_record='user consent', consent_confirmed_at='2026-09-09')
+    store.save_profile(project, profile)
+    dataset_folder = project / 'datasets' / 'resume-snapshot'
+    dataset_folder.mkdir(parents=True)
+    list_path = dataset_folder / 'dataset.list'
+    list_path.write_text('', encoding='utf-8')
+    dataset = DatasetManifest('frozen', profile.id, id='resume-snapshot', frozen=True,
+                              list_path=str(list_path), wav_dir=str(dataset_folder / 'audio'),
+                              list_relative_path='datasets/resume-snapshot/dataset.list',
+                              list_sha256=sha256_file(list_path))
+    dataset.snapshot_sha256 = dataset_snapshot_sha256(dataset)
+    store.save_dataset_snapshot(project, dataset)
+    workflow = TrainingWorkflow(profile.id, profile.name, stage=WorkflowStage.TRAINING,
+                                status=WorkflowStatus.CANCELLED, dataset_snapshot_id=dataset.id,
+                                snapshot_sha256=dataset.snapshot_sha256,
+                                processing_options={'quality':'quick'})
+    store.save_workflow(project, workflow)
+
+    service.resume(workflow.id)
+
+    current = store.load_workflow(project, workflow.id)
+    assert current.status == WorkflowStatus.RUNNING
+    assert current.attempt == 1
+    assert current.training_run_id
+    assert worker.sent[-1][1] == 'train'
+    assert worker.sent[-1][2]['training_run_id'] == current.training_run_id
+    assert worker.sent[-1][2]['sovits_epochs'] == 4
     service.close()
 
 

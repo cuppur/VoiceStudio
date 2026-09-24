@@ -238,6 +238,11 @@ class TrainingWorkflowController(QObject):
             self._save(workflow)
 
     def resume(self, workflow: TrainingWorkflow) -> None:
+        if workflow.status in {WorkflowStatus.CANCELLED, WorkflowStatus.FAILED, WorkflowStatus.INTERRUPTED}:
+            workflow.status = WorkflowStatus.WAITING
+            workflow.error = ""
+            workflow.waiting_reason = ""
+            workflow.message = "正在恢复上次训练"
         if workflow.stage == WorkflowStage.REVIEW_REQUIRED and workflow.draft_id:
             self.draft_ready.emit(self.store.load_draft(self.project, workflow.draft_id)); self._save(workflow); return
         if workflow.stage in {WorkflowStage.IMPORTING, WorkflowStage.PREPROCESSING}: self.process(workflow); return
