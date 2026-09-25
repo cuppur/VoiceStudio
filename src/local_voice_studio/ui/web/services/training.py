@@ -12,12 +12,23 @@ from typing import Any
 from PySide6.QtCore import QRunnable, QThreadPool, Signal, Slot
 
 from ....audio import copy_original, scan_audio_files
-from ....models import SourceAsset, VoiceProfile, WorkflowStage, WorkflowStatus, utc_now
+from ....models import SourceAsset, VoiceProfile, WorkflowStage, WorkflowStatus, is_hard_quality_flag, utc_now
 from ....runtime import EngineRuntimeResolver
 from ....workflow import TrainingWorkflowController
 from .base import WebService
 
 SINGING_MIN_SECONDS = 180.0
+
+
+def _usable_singing_assets(assets: list[SourceAsset]) -> list[SourceAsset]:
+    """Keep clean assets for singing training while retaining originals in the project."""
+    return [
+        item for item in assets
+        if not any(
+            is_hard_quality_flag(flag) or str(flag).strip().lower() == "clipping_risk"
+            for flag in item.quality_flags
+        )
+    ]
 
 
 class _ScanTask(QRunnable):
@@ -352,16 +363,22 @@ class TrainingService(WebService):
         if self._tasks:
             raise ValueError('已有歌唱训练在运行')
         profile = self._profile(profile_id, name="", consent=False, create=False)
-        assets = [item for item in self.store.list_source_assets(self.project, profile.id) if item.enabled and not item.duplicate_of]
+        all_assets = [item for item in self.store.list_source_assets(self.project, profile.id) if item.enabled and not item.duplicate_of]
+        assets = _usable_singing_assets(all_assets)
+        skipped = len(all_assets) - len(assets)
         total = sum(float(item.duration_seconds or 0) for item in assets)
         if total < SINGING_MIN_SECONDS:
-            raise ValueError(f"歌唱模型训练需要至少 {SINGING_MIN_SECONDS / 60:.0f} 分钟素材，当前 {total:.1f} 秒")
+            note = f"，已自动跳过 {skipped} 个低质量素材" if skipped else ""
+            raise ValueError(f"歌唱模型训练需要至少 {SINGING_MIN_SECONDS / 60:.0f} 分钟合格素材，当前 {total:.1f} 秒{note}")
         payload = {
             "project_path": str(self.project), "profile_id": profile.id,
             "source_asset_ids": [item.id for item in assets], "engine": "rvc_v2",
         }
+        title = f'{profile.name} · 歌唱模型训练'
+        if skipped:
+            title += f'（自动跳过 {skipped} 个低质量素材）'
         return self.start_task('train_singing_model', payload, kind='singing', stage='train',
-                               title=f'{profile.name} · 歌唱模型训练', profile_id=profile.id)
+                               title=title, profile_id=profile.id)
 
     # ---------------------------------------------------------------- events
     def _on_workflow(self, workflow) -> None:
