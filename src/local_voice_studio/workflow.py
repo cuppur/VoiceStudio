@@ -397,10 +397,10 @@ class TrainingWorkflowController(QObject):
         return self._context(workflow, {**dataset.to_dict(), "approved_seconds": dataset.approved_seconds, "project_path": str(self.project), "profile_id": profile.id, "dataset_snapshot_id": dataset.id, "consent_confirmed": profile.consent_confirmed, "consent_record": profile.consent_record, "experiment_name": f"{self.project.name}-{profile.id[:8]}-{dataset.snapshot_sha256[:12]}", "checkpoint_dir": str(self.project / "checkpoints" / profile.id)})
 
     def _matching_feature_manifest(self, payload: dict) -> Path | None:
-        root = self.store.paths.data_root / "training" / str(payload["profile_id"]) / str(payload["snapshot_sha256"]) / "features" / "feature-manifest.json"
+        from .training import TrainingPipeline
+        root = TrainingPipeline.feature_root(self.store.paths.data_root, str(payload["snapshot_sha256"])) / "feature-manifest.json"
         if not root.is_file(): return None
         try:
-            from .training import TrainingPipeline
             TrainingPipeline._validate_feature_manifest(root, payload)
             return root
         except (OSError, ValueError, RuntimeError, TypeError, json.JSONDecodeError): pass

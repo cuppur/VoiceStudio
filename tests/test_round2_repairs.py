@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication
 from local_voice_studio import workflow as workflow_module
 from local_voice_studio.models import DatasetDraft, DatasetDraftSegment, DatasetManifest, TrainingWorkflow, VoiceProfile, WorkflowStage, WorkflowStatus, dataset_snapshot_sha256
 from local_voice_studio.audio import sha256_file
+from local_voice_studio.training import TrainingPipeline
 from local_voice_studio.cover.project import CoverProject
 from local_voice_studio.ui.web.services.training import TrainingService
 from local_voice_studio.infrastructure.process_options import hidden_process_options
@@ -147,7 +148,7 @@ def test_cancelled_training_resume_starts_a_new_worker_attempt(tmp_path):
                               list_sha256=sha256_file(list_path))
     dataset.snapshot_sha256 = dataset_snapshot_sha256(dataset)
     store.save_dataset_snapshot(project, dataset)
-    feature_dir = paths.data_root / 'training' / profile.id / dataset.snapshot_sha256 / 'features'
+    feature_dir = TrainingPipeline.feature_root(paths.data_root, dataset.snapshot_sha256)
     feature_dir.mkdir(parents=True)
     phoneme = feature_dir / '2-name2text.txt'
     semantic = feature_dir / '6-name2semantic.tsv'
@@ -193,7 +194,7 @@ def test_cancelled_training_resume_rebuilds_empty_feature_cache(tmp_path):
                               list_sha256=sha256_file(list_path))
     dataset.snapshot_sha256 = dataset_snapshot_sha256(dataset)
     store.save_dataset_snapshot(project, dataset)
-    feature_dir = paths.data_root / 'training' / profile.id / dataset.snapshot_sha256 / 'features'
+    feature_dir = TrainingPipeline.feature_root(paths.data_root, dataset.snapshot_sha256)
     feature_dir.mkdir(parents=True)
     phoneme = feature_dir / '2-name2text.txt'
     semantic = feature_dir / '6-name2semantic.tsv'

@@ -3,8 +3,8 @@ from __future__ import annotations
 from local_voice_studio.infrastructure.process_options import hidden_process_options
 
 import json
-import re
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -62,6 +62,13 @@ class TrainingPipeline:
         # standard Windows installations.
         validate_id(training_run_id, legacy=True, field="training_run_id")
         return ensure_within(data_root.resolve(), data_root.resolve() / "train-runs" / training_run_id)
+
+    @staticmethod
+    def feature_root(data_root: Path, snapshot_sha256: str) -> Path:
+        """Keep feature artifacts short enough for long generated segment names on Windows."""
+        root = data_root.resolve()
+        digest = validate_sha256(str(snapshot_sha256), field="snapshot_sha256")
+        return ensure_within(root, root / "f" / digest / "features")
 
     def _run(self, command: list[str], env: dict[str, str], log: Callable[[str], None], cancel: threading.Event) -> None:
         process_env = {**os.environ, **env}
@@ -140,7 +147,7 @@ class TrainingPipeline:
             return output_dir
         exp_name = payload["experiment_name"]
         profile_id = validate_id(str(payload["profile_id"]), legacy=True, field="profile_id"); snapshot_id = validate_id(str(payload["dataset_snapshot_id"]), legacy=True, field="dataset_snapshot_id"); snapshot_sha256 = validate_sha256(str(payload["snapshot_sha256"]), field="snapshot_sha256")
-        exp_dir = ensure_within(self.paths.data_root, self.paths.data_root / "training" / profile_id / snapshot_sha256 / "features")
+        exp_dir = self.feature_root(self.paths.data_root, snapshot_sha256)
         existing_manifest = exp_dir / "feature-manifest.json"
         if existing_manifest.is_file():
             try:
@@ -207,7 +214,7 @@ class TrainingPipeline:
         python = self.paths.private_python
         engine = self.paths.engine_root
         exp_name = payload["experiment_name"]; profile_id = validate_id(str(payload["profile_id"]), legacy=True, field="profile_id"); snapshot_id = validate_id(str(payload["dataset_snapshot_id"]), legacy=True, field="dataset_snapshot_id"); snapshot_sha256 = validate_sha256(str(payload["snapshot_sha256"]), field="snapshot_sha256")
-        feature_dir = self.paths.data_root / "training" / profile_id / snapshot_sha256 / "features"
+        feature_dir = self.feature_root(self.paths.data_root, snapshot_sha256)
         feature_manifest_path = feature_dir / "feature-manifest.json"
         self._validate_feature_manifest(feature_manifest_path, payload)
         training_run_id = validate_id(str(payload.get("training_run_id") or uuid4().hex), legacy=True, field="training_run_id")

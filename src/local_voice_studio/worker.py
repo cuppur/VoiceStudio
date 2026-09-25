@@ -5,6 +5,7 @@ import hashlib
 import os
 import sys
 import threading
+import time
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -42,6 +43,7 @@ class WorkerService:
         self.profile: dict[str, Any] | None = None
         self.current_thread: threading.Thread | None = None
         self.current_request_id = ""
+        self._last_progress: dict[str, tuple[float, float]] = {}
         self._request_context: dict[str, Any] = {}
         self.cancel_event = threading.Event()
         self.cancel_token = CancellationToken(self.cancel_event)
@@ -72,6 +74,13 @@ class WorkerService:
         self.singing_engine = singing_engine
 
     def emit(self, request_id: str, event: str, payload: dict[str, Any]) -> None:
+        if event == "progress":
+            progress = float(payload.get("progress", 0) or 0)
+            now = time.monotonic()
+            previous = self._last_progress.get(str(request_id))
+            if previous and abs(progress - previous[1]) < 0.005 and now - previous[0] < 1.0:
+                return
+            self._last_progress[str(request_id)] = (now, progress)
         if request_id == self.current_request_id and self._request_context:
             payload = {**payload, **self._request_context}
         product_job_id = self._request_context.get("product_job_id") if request_id == self.current_request_id else ""
@@ -95,6 +104,8 @@ class WorkerService:
             # Start the next real command only after the terminal event has
             # been written, preserving one-GPU-at-a-time semantics.
             self.handle(next_message)
+        if event in {"result", "error"}:
+            self._last_progress.pop(str(request_id), None)
         # Once a terminal event is visible to the UI, the GPU operation has
         # already returned.  Release the logical slot before the UI queues the
         # next stage (for example train -> load candidate -> verify).

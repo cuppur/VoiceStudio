@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from contextlib import redirect_stdout
 import wave
 import shutil
 from pathlib import Path
@@ -170,6 +173,46 @@ class RuntimeResolverTests(unittest.TestCase):
 
 
 class WorkerIntegrationTests(unittest.TestCase):
+    def test_feature_workspace_stays_below_windows_path_limit(self):
+        data_root = Path("C:/Users/VoiceUser/AppData/Local/LocalVoiceStudio")
+        feature_root = TrainingPipeline.feature_root(data_root, "a" * 64)
+        destination = feature_root / "4-cnhubert" / ("segment_" + "x" * 90 + ".wav.pt")
+        self.assertLess(len(str(destination)), 260)
+
+    def test_worker_coalesces_repeated_progress_events(self):
+        service = WorkerService.__new__(WorkerService)
+        service.current_request_id = "progress-test"
+        service._request_context = {}
+        service._last_progress = {}
+        service.write_lock = threading.Lock()
+        service._queued_messages = []
+        service.shutdown_event = threading.Event()
+        output = io.StringIO()
+        with redirect_stdout(output):
+            service.emit("progress-test", "progress", {"progress": .5, "message": "first"})
+            service.emit("progress-test", "progress", {"progress": .5, "message": "repeat"})
+            service.emit("progress-test", "progress", {"progress": .75, "message": "stage changed"})
+            service.emit("progress-test", "result", {"outputs": []})
+        messages = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual([item["type"] for item in messages], ["progress", "progress", "result"])
+        self.assertFalse(service._last_progress)
+
+    def test_atomic_json_retries_transient_windows_lock(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            original_replace = Path.replace
+            attempts = {"count": 0}
+            def replace_with_one_transient_failure(source, target):
+                attempts["count"] += 1
+                if attempts["count"] == 1:
+                    raise PermissionError("temporary antivirus lock")
+                return original_replace(source, target)
+            with patch.object(Path, "replace", replace_with_one_transient_failure):
+                StudioStore._atomic_json(path, {"ready": True})
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"ready": True})
+            self.assertEqual(attempts["count"], 2)
+
     def test_preparation_runs_have_disjoint_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); first = TrainingPipeline.preparation_paths(root, "voice", "run-a"); second = TrainingPipeline.preparation_paths(root, "voice", "run-b")

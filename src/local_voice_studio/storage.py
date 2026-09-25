@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+import time
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -494,9 +495,22 @@ class StudioStore:
 
     @staticmethod
     def _atomic_json(path: Path, value: dict[str, Any]) -> None:
-        temporary = path.with_suffix(path.suffix + ".tmp")
-        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(path)
+        temporary = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
+        try:
+            temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+            for attempt in range(4):
+                try:
+                    temporary.replace(path)
+                    return
+                except PermissionError:
+                    if attempt == 3:
+                        raise
+                    time.sleep(.05 * (attempt + 1))
+        finally:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
 
 
 
