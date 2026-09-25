@@ -11,6 +11,15 @@ def _wav(path: Path, seconds: float, value: int = 1000, *, rate: int = 16000, ch
         stream.writeframes(frame * int(rate * seconds))
 
 
+def _near_full_scale_square(path: Path, seconds: float = 4.0, *, rate: int = 16000) -> None:
+    high = (31130).to_bytes(2, "little", signed=True)
+    low = (-31130).to_bytes(2, "little", signed=True)
+    sample = high + low
+    with wave.open(str(path), "wb") as stream:
+        stream.setnchannels(1); stream.setsampwidth(2); stream.setframerate(rate)
+        stream.writeframes(sample * int(rate * seconds / 2))
+
+
 def test_real_verification_accepts_decoded_non_silent_output(tmp_path):
     source, output = tmp_path / "source.wav", tmp_path / "output.wav"
     _wav(source, 4.0, 1000); _wav(output, 4.1, 1200)
@@ -45,6 +54,23 @@ def test_quality_gate_rejects_shape_drift_and_hard_clipping(tmp_path):
     assert any("采样率" in error for error in result.errors)
     assert any("声道数" in error for error in result.errors)
     assert any("硬削波" in error for error in result.errors)
+
+
+def test_inference_verification_rejects_sustained_near_full_scale_distortion(tmp_path):
+    source, output = tmp_path / "source.wav", tmp_path / "output.wav"
+    _wav(source, 4.0, 1000); _near_full_scale_square(output)
+    result = verify_inference_output(source, output)
+    assert not result.ok
+    assert any("动态异常" in error for error in result.errors)
+    assert result.details["output_crest_factor_db"] < 0.2
+
+
+def test_quality_gate_rejects_sustained_near_full_scale_distortion(tmp_path):
+    output = tmp_path / "output.wav"
+    _near_full_scale_square(output)
+    result = validate_wav_quality(output)
+    assert not result.ok
+    assert any("动态异常" in error for error in result.errors)
 
 
 class _Engine:

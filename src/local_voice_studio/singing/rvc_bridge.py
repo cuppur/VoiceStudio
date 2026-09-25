@@ -162,7 +162,7 @@ def _light_postprocess(samples, sample_rate: int):
     import numpy as np
     from scipy.signal import butter, sosfilt
 
-    audio = np.asarray(samples, dtype=np.float32)
+    audio = _normalized_audio(samples)
     if audio.ndim == 1:
         channels = audio[:, None]
     elif audio.ndim == 2:
@@ -182,6 +182,31 @@ def _light_postprocess(samples, sample_rate: int):
     polished = np.copysign(compressed, polished)
     polished = np.clip(polished, -0.95, 0.95)
     return polished[:, 0] if audio.ndim == 1 else polished
+
+
+def _normalized_audio(samples):
+    """Convert PCM integer samples to the normalized float range used by DSP."""
+    import numpy as np
+
+    raw = np.asarray(samples)
+    if np.issubdtype(raw.dtype, np.signedinteger):
+        # RVC's upstream ``vc_single`` returns signed PCM (normally int16).
+        # Convert it to the normalized float range before applying DSP.  A
+        # direct cast makes every ordinary PCM sample look thousands of times
+        # louder than full scale and the limiter then hard-clips the whole
+        # vocal to +/-0.95.
+        scale = float(1 << (raw.dtype.itemsize * 8 - 1))
+        audio = raw.astype(np.float32) / scale
+    elif np.issubdtype(raw.dtype, np.unsignedinteger):
+        midpoint = float(1 << (raw.dtype.itemsize * 8 - 1))
+        audio = (raw.astype(np.float32) - midpoint) / midpoint
+    else:
+        audio = raw.astype(np.float32, copy=False)
+    if not np.isfinite(audio).all():
+        raise RuntimeError("RVC 输出包含非有限采样")
+    if audio.ndim not in {1, 2}:
+        raise RuntimeError("RVC 输出声道形状无效")
+    return audio
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import hashlib
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from uuid import uuid4
 
 from ..paths import ensure_within
@@ -20,6 +20,8 @@ from ..paths import ensure_within
 @dataclass(frozen=True)
 class RVCInferenceSettings:
     """Validated, cacheable product settings for one RVC conversion."""
+
+    POSTPROCESS_VERSION: ClassVar[str] = "rvc-light-v2"
 
     transpose: int = 0
     index_rate: float = 0.75
@@ -54,7 +56,8 @@ class RVCInferenceSettings:
     def canonical(self) -> dict[str, Any]:
         return {"transpose": self.transpose, "index_rate": self.index_rate, "protect": self.protect,
                 "filter_radius": self.filter_radius, "f0_method": self.f0_method,
-                "pitch_backend_version": self.pitch_backend_version, "postprocess": self.postprocess, "autotune": self.autotune}
+                "pitch_backend_version": self.pitch_backend_version, "postprocess": self.postprocess, "autotune": self.autotune,
+                "postprocess_version": self.POSTPROCESS_VERSION}
 
     def to_payload(self) -> dict[str, Any]:
         return {"transpose": self.transpose, "pitch_shift": self.transpose, "index_rate": self.index_rate,

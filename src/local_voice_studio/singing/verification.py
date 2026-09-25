@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import audioop
+import math
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -62,6 +63,12 @@ def _wav_info(path: Path) -> tuple[int, int, int, int, bytes]:
         return rate, channels, frames, width, stream.readframes(frames)
 
 
+def _is_sustained_near_saturation(peak: int, rms: int, width: int) -> bool:
+    """Catch limiter-shaped audio that stays just below digital full scale."""
+    full_scale = 1 << (width * 8 - 1)
+    return peak >= full_scale * 0.90 and peak > 0 and rms / peak >= 0.985
+
+
 def validate_wav_quality(
     path: Path,
     *,
@@ -110,7 +117,9 @@ def validate_wav_quality(
                 if not 0.9 <= duration / expected_duration <= 1.1:
                     errors.append("音频时长与源人声偏差超过 ±10%")
 
-            peak = rms = 0
+            peak = 0
+            squared_sum = 0.0
+            sample_count = 0
             while True:
                 if cancel is not None and getattr(cancel, "is_set", lambda: False)():
                     return VerificationResult(False, ["音频质量校验已取消"], details)
@@ -118,7 +127,11 @@ def validate_wav_quality(
                 if not block:
                     break
                 peak = max(peak, audioop.max(block, width))
-                rms = max(rms, audioop.rms(block, width))
+                block_samples = len(block) // width
+                block_rms = audioop.rms(block, width)
+                squared_sum += block_rms * block_rms * block_samples
+                sample_count += block_samples
+            rms = int(round((squared_sum / sample_count) ** 0.5)) if sample_count else 0
             details.update(peak=peak, rms=rms)
             if peak <= 0 or rms <= 0:
                 errors.append("音频为静音")
@@ -126,6 +139,8 @@ def validate_wav_quality(
             details["hard_clipping_threshold"] = full_scale
             if peak >= full_scale:
                 errors.append("音频峰值达到硬削波阈值")
+            if _is_sustained_near_saturation(peak, rms, width):
+                errors.append("音频持续贴近满幅且动态异常，疑似严重失真")
     except (OSError, EOFError, wave.Error, ValueError) as exc:
         details["finite_samples"] = False
         errors.append(f"WAV 无法解码: {exc}")
@@ -156,6 +171,8 @@ def verify_inference_output(test_input: Path, output: Path, *, source_sha256: st
         details.update(output_seconds=output_seconds, output_sha256=_sha256(output))
         output_peak = audioop.max(out_pcm, out_width) if out_pcm else 0; output_rms = audioop.rms(out_pcm, out_width) if out_pcm else 0
         details.update(output_peak=output_peak, output_rms=output_rms)
+        if output_peak > 0:
+            details["output_crest_factor_db"] = 20.0 * math.log10(output_peak / max(output_rms, 1))
         if output_peak <= 0 or output_rms <= 0:
             errors.append("真实推理输出为静音")
         if out_rate != in_rate:
@@ -164,6 +181,8 @@ def verify_inference_output(test_input: Path, output: Path, *, source_sha256: st
             errors.append("真实推理输出声道数与输入不一致")
         if output_peak >= (1 << (out_width * 8 - 1)) - 1:
             errors.append("真实推理输出达到硬削波阈值")
+        if _is_sustained_near_saturation(output_peak, output_rms, out_width):
+            errors.append("真实推理输出持续贴近满幅且动态异常，疑似严重失真")
         if in_frames and in_rate and out_rate:
             ratio = output_seconds / (in_frames / in_rate)
             details["duration_ratio"] = ratio
