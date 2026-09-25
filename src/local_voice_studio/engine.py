@@ -128,6 +128,68 @@ class GptSovitsEngine:
             result["exception"] = type(exc).__name__
             return result
 
+    def training_health(self) -> dict[str, Any]:
+        """Check the prerequisites used by training without importing inference-only packages."""
+        result: dict[str, Any] = {
+            "python_executable": sys.executable,
+            "python_version": platform.python_version(),
+            "torch_version": "",
+            "cuda_available": False,
+            "cuda_version": "",
+            "gpu_name": "",
+            "compute_capability": "",
+            "tensor_test_passed": False,
+            "models_ready": False,
+            "ffmpeg_ready": bool(self.ffmpeg()),
+            "compatible": False,
+            "actionable_errors": [],
+        }
+        try:
+            import torch
+
+            result.update(
+                torch_version=torch.__version__,
+                cuda_version=torch.version.cuda or "",
+                cuda_available=torch.cuda.is_available(),
+            )
+            arch_ok = False
+            if result["cuda_available"]:
+                device = torch.cuda.get_device_properties(0)
+                architectures = torch.cuda.get_arch_list()
+                result.update(
+                    gpu_name=device.name,
+                    compute_capability=f"sm_{device.major}{device.minor}",
+                    memory_bytes=device.total_memory,
+                    architectures=architectures,
+                )
+                tensor = torch.tensor([1.0], device="cuda") * 2
+                torch.cuda.synchronize()
+                result["tensor_test_passed"] = tensor.cpu().item() == 2.0
+                arch_ok = "sm_120" in architectures or device.major < 12
+                if not arch_ok:
+                    result["actionable_errors"].append("当前 PyTorch 不包含 sm_120 内核，需要 PyTorch 2.7.1+cu128。")
+            else:
+                result["actionable_errors"].append("CUDA 不可用；请确认 NVIDIA 驱动正常，并重新安装本地引擎。")
+
+            readiness = self.readiness()
+            result["models_ready"] = readiness["ready"]
+            if not readiness["ready"]:
+                result["actionable_errors"].append("GPT-SoVITS 模型文件不完整，请点击“安装/修复本地引擎”。")
+            if not result["ffmpeg_ready"]:
+                result["actionable_errors"].append("FFmpeg 未安装，本地训练数据处理无法继续。")
+            result["compatible"] = bool(
+                result["cuda_available"] and arch_ok and result["tensor_test_passed"]
+                and result["models_ready"] and result["ffmpeg_ready"]
+            )
+            return result
+        except Exception as exc:
+            if isinstance(exc, ModuleNotFoundError) and getattr(exc, "name", "") == "torch":
+                result["actionable_errors"].append("本地引擎尚未安装 PyTorch，请进入“设置”并点击“安装/修复本地引擎”。")
+            else:
+                result["actionable_errors"].append(f"GPU 检测失败：{exc}")
+            result["exception"] = type(exc).__name__
+            return result
+
     def load(self, profile: dict[str, Any], force_cpu: bool = False) -> None:
         # GPT-SoVITS English references call nltk.pos_tag.  Keep its pinned
         # tagger in the packaged worker so synthesis also works offline.

@@ -473,7 +473,11 @@ class WorkerService:
         self._validate_dataset_snapshot(payload)
         readiness = self.engine.readiness()
         if not readiness.get("ready"): raise RuntimeError("GPT-SoVITS 配置或模型文件不完整，请先修复本地引擎")
-        health = self.engine.gpu_health()
+        # Inference readiness imports PyTorch Lightning, SciPy and the full
+        # TTS stack. Training only needs CUDA, pretrained files and FFmpeg;
+        # importing inference modules here can stall before a training process
+        # is ever launched on Windows.
+        health = self.engine.training_health()
         if not health.get("compatible"): raise RuntimeError("；".join(health.get("actionable_errors") or ["GPU 工作进程不可用"]))
         try:
             outputs = self.training.train(payload, lambda value, message: self.emit(request_id, "progress", {"progress": value, "message": message}), self.cancel_event)
