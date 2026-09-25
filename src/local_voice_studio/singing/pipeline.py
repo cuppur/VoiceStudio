@@ -15,6 +15,7 @@ import time
 import wave
 from pathlib import Path
 from typing import Any, Callable, Mapping
+from uuid import uuid4
 
 from ..cover.project import CoverProject, CoverAsset, RIGHTS_ATTESTATION_TEXT_HASH, content_origin
 from ..paths import AppPaths, ensure_within, validate_id, validate_sha256
@@ -137,7 +138,9 @@ class SingingPipeline:
             raise ValueError("SingingPipeline 必须配置 projects_root")
         self.progress(0.03, "验证授权素材")
         snapshot = SourceAssetDatasetBuilder(self.projects_root).build(project, profile["id"], source_ids, cancel=cancel)
-        run_id = validate_id(str(payload.get("training_run_id", "")), legacy=True, field="training_run_id")
+        # The UI deliberately sends no filesystem/run identity. Generate this
+        # server-side so the user-facing training action is self-contained.
+        run_id = validate_id(str(payload.get("training_run_id") or uuid4().hex), legacy=True, field="training_run_id")
         staging = ensure_within(project, project / "models" / "singing" / profile["id"] / (run_id + ".staging"))
         final = ensure_within(project, project / "models" / "singing" / profile["id"] / run_id)
         if final.exists():

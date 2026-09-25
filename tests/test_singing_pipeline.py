@@ -117,7 +117,7 @@ def _fixture(tmp_path):
 def test_train_and_convert_registers_ai_asset(tmp_path):
     project, cover = _fixture(tmp_path)
     pipeline = SingingPipeline(FakeSingingEngine(), projects_root=tmp_path)
-    model = pipeline.train({"project_path": str(project), "profile_id": "profile", "training_run_id": "run", "source_asset_ids": ["asset"], "engine": "rvc_v2"})
+    model = pipeline.train({"project_path": str(project), "profile_id": "profile", "source_asset_ids": ["asset"], "engine": "rvc_v2"})
     result = pipeline.convert({"project_path": str(project), "profile_id": "profile", "cover_id": cover.id})
     restored = CoverProject.load(project, cover.id)
     asset = restored.get_asset(role="ai_vocal")
