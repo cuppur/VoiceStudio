@@ -133,6 +133,7 @@ class StudioBridge(QObject):
             "training.state": self._training_state,
             "training.import": self._training_import,
             "training.remove_asset": self._training_remove,
+            "training.remove_assets": self._training_remove_many,
             "training.start": self._training_start,
             "training.confirm": self._training_confirm,
             "training.resume": self._training_resume,
@@ -614,8 +615,16 @@ class StudioBridge(QObject):
         return {"ok": True, **result}
 
     def _training_remove(self, data: dict[str, Any]) -> dict[str, Any]:
-        state = self.training.remove_asset(str(data.get("profile_id", "")), str(data.get("asset_id", "")))
-        return {"ok": True, "message": "已移除素材", "data": state}
+        result = self.training.remove_assets(str(data.get("profile_id", "")), [str(data.get("asset_id", ""))])
+        return {"ok": True, "message": "已移除素材", "removed": result["removed"], "data": result["state"]}
+
+    def _training_remove_many(self, data: dict[str, Any]) -> dict[str, Any]:
+        ids = data.get("asset_ids")
+        result = self.training.remove_assets(
+            str(data.get("profile_id", "")),
+            [str(item) for item in ids] if isinstance(ids, list) else [],
+        )
+        return {"ok": True, "message": f"已移除 {result['removed']} 个素材", "removed": result["removed"], "data": result["state"]}
 
     def _training_start(self, data: dict[str, Any]) -> dict[str, Any]:
         asset_ids = data.get("asset_ids")

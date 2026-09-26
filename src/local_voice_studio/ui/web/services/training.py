@@ -107,6 +107,7 @@ class TrainingService(WebService):
                 "flags": [str(flag) for flag in item.quality_flags],
                 "exists": bool(self._asset_path(item)) and Path(self._asset_path(item)).is_file(),
                 "path": str(self._asset_path(item)),
+                "created_at": str(item.created_at or ""),
             } for item in rows]
             workflows = self.store.list_workflows(self.project, profile.id)
             current = next((item for item in workflows if item.id == self._workflow_id), workflows[0] if workflows else None)
@@ -289,11 +290,20 @@ class TrainingService(WebService):
         }
 
     def remove_asset(self, profile_id: str, asset_id: str) -> dict[str, Any]:
+        return self.remove_assets(profile_id, [str(asset_id)])
+
+    def remove_assets(self, profile_id: str, asset_ids: list[str]) -> dict[str, Any]:
+        """Drop imported material in one step. Originals on disk are never touched."""
         if self._scanning or (self.controller and (self.controller.requests or self.controller.background)):
             raise ValueError('素材正在处理，请结束任务后删除')
-        self.store.remove_source_assets(self.project, {str(asset_id)})
+        ids = {str(item).strip() for item in (asset_ids or []) if str(item).strip()}
+        if not ids:
+            raise ValueError('没有要移除的素材')
+        removed = self.store.remove_source_assets(self.project, ids)
+        if not removed:
+            raise ValueError('素材不存在或已被移除')
         self.notify("voices.changed", {"profile_id": str(profile_id)})
-        return self.state(profile_id)
+        return {"removed": len(removed), "state": self.state(str(profile_id))}
 
     def start(self, profile_id: str, *, smart: bool = True, asset_ids: list[str] | None = None,
               manual_review=False, quality='standard', train_tts=True, train_singing=False) -> dict[str, Any]:
