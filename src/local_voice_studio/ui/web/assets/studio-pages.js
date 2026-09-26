@@ -700,12 +700,33 @@ window.VS_PAGES = (function () {
     install() {
       const drop = q('#trainDrop');
       if (drop) { drop.onclick = () => this.importAssets(); }
+      const create = q('#trainNewVoice');
+      if (create) { create.onclick = () => this.importAssets(null, { forceNew: true }); }
       const start = q('#trainStart');
       if (start) { start.onclick = () => this.primary(); }
       const restore = qq('[data-page-view="train"] .page-actions .btn')[0];
       if (restore) { restore.onclick = () => this.resume(); }
+      this.setupVoiceList();
       this.setupTrainingUI();
       this.refresh();
+    },
+
+    setupVoiceList() {
+      let collapsed = true;
+      try { collapsed = localStorage.getItem('vs.train.doneCollapsed') !== '0'; } catch (error) { /* 无痕模式按默认折叠 */ }
+      const done = q('#trainVoiceDone');
+      if (done) { done.classList.toggle('collapsed', collapsed); }
+      qq('[data-page-view="train"] .tv-group-head').forEach((head) => {
+        head.onclick = () => {
+          const group = head.parentElement;
+          if (!group) { return; }
+          const shrink = !group.classList.contains('collapsed');
+          group.classList.toggle('collapsed', shrink);
+          if (group.id === 'trainVoiceDone') {
+            try { localStorage.setItem('vs.train.doneCollapsed', shrink ? '1' : '0'); } catch (error) { /* 无痕模式忽略 */ }
+          }
+        };
+      });
     },
 
     setupTrainingUI() {
@@ -729,6 +750,10 @@ window.VS_PAGES = (function () {
       q('.samples-card .mini', page).classList.add('hidden');
       const caps = qq('.train-settings .toggle-row', page);
       if (caps[1]) q('.toggle-copy span',caps[1]).textContent = '文字模型完成后继续训练 RVC';
+      // 名称框后面会被追加 checkbox，给它固定 id 以免选择器误命中
+      const nameField = qq('.train-settings .field', page).filter(node => ((q('label', node) || {}).textContent || '').trim() === '声音名称')[0];
+      const nameInput = nameField && q('input', nameField);
+      if (nameInput) { nameInput.id = 'trainingVoiceName'; }
     },
 
     refresh(profileId) {
@@ -747,6 +772,7 @@ window.VS_PAGES = (function () {
     paint() {
       const state = this.state;
       if (!state) { return; }
+      this.paintVoiceList();
       const assets = state.assets || [];
       const list = q('#sampleList');
       const assetsKey = JSON.stringify(assets);
@@ -839,8 +865,52 @@ window.VS_PAGES = (function () {
       q('#reviewTraining').disabled = !(state.draft && state.draft.segments && !wf.running);
       q('#trainStatus').textContent = wf.error || wf.waiting_reason && !wf.running && wf.waiting_reason || wf.message || '导入素材后点击一键训练，自动筛选合格片段并训练。';
       if (state.scanning) { start.disabled = true; start.textContent = '正在导入素材…'; } else { start.disabled = false; }
-      const nameInput = q('[data-page-view="train"] .train-settings input');
-      if (nameInput && state.profile && nameInput.dataset.profileId !== state.profile.id) { nameInput.value = state.profile.name; nameInput.dataset.profileId=state.profile.id; nameInput.readOnly=true; nameInput.title='可在我的声音页面修改名称'; }
+      const nameInput = q('#trainingVoiceName');
+      if (nameInput) {
+        if (state.profile) {
+          if (nameInput.dataset.profileId !== state.profile.id) {
+            nameInput.value = state.profile.name;
+            nameInput.dataset.profileId = state.profile.id;
+            nameInput.readOnly = true;
+            nameInput.title = '可在我的声音页面修改名称';
+          }
+        } else {
+          nameInput.readOnly = false;
+          nameInput.title = '';
+          delete nameInput.dataset.profileId;
+        }
+      }
+    },
+
+    paintVoiceList() {
+      const rows = (this.state && this.state.profiles) || [];
+      const activeHolder = q('#trainActiveBody');
+      const doneHolder = q('#trainDoneBody');
+      if (!activeHolder || !doneHolder) { return; }
+      const draw = (holder, list, empty) => {
+        holder.innerHTML = '';
+        if (!list.length) { holder.innerHTML = `<div class="tv-empty">${esc(empty)}</div>`; return; }
+        list.forEach((item) => {
+          const row = document.createElement('div');
+          row.className = 'tv-row' + (item.current ? ' active' : '');
+          row.dataset.profileId = item.id;
+          const badge = item.running ? '<span class="status orange">训练中</span>'
+            : item.ready ? '<span class="status ready">已就绪</span>'
+              : (item.asset_count ? '<span class="status orange">待训练</span>' : '<span class="status">未导入</span>');
+          const seconds = Number(item.seconds) || 0;
+          row.innerHTML = `<div class="tv-name">${esc(item.name)}</div>`
+            + `<div class="tv-meta"><span>${Number(item.asset_count) || 0} 个素材</span>`
+            + `<span>${Math.floor(seconds / 60)}:${String(Math.round(seconds % 60)).padStart(2, '0')}</span>${badge}</div>`;
+          row.onclick = () => this.refresh(item.id);
+          holder.appendChild(row);
+        });
+      };
+      const readyRows = rows.filter((item) => item.ready);
+      const pendingRows = rows.filter((item) => !item.ready);
+      draw(activeHolder, pendingRows, '还没有待训练的声音');
+      draw(doneHolder, readyRows, '还没有已训练完成的声音');
+      S.setText('#trainActiveCount', String(pendingRows.length));
+      S.setText('#trainDoneCount', String(readyRows.length));
     },
 
     paintDraft() {
@@ -864,24 +934,38 @@ window.VS_PAGES = (function () {
       };
     },
 
-    async importAssets(selection) {
-      const consent = this.state && this.state.profile && this.state.profile.consent;
-      if (!consent) {
-        const nameInput = q('[data-page-view="train"] .train-settings input');
-        const value = await openModal({
-          title: '导入声音素材',
-          body: '请先确认这是本人声音，或已经取得明确授权。原始文件不会被修改，会复制到当前工程。',
-          content: `<div class="field"><label>声音名称</label><input id="voiceName" value="${esc((nameInput && nameInput.value) || '我的声音')}"></div>`,
-          actions: [
-            { label: '取消', value: null },
-            { label: '确认并选择文件', kind: 'primary', onClick: (mask) => (q('#voiceName', mask) || {}).value || '我的声音' },
-          ],
-        });
-        if (!value) { return; }
-        S.invoke('training.import', { profile_id: '', name: value, consent: true, selection });
+    async importAssets(selection, options) {
+      const forceNew = !!(options && options.forceNew);
+      const rows = (this.state && this.state.profiles) || [];
+      const currentId = forceNew ? '' : (this.profileId || '');
+      if (currentId) {
+        // 已选中声音时素材只追加到它，并明确告知，绝不悄悄换成新建。
+        const row = rows.filter((item) => item.id === currentId)[0];
+        const name = (row && row.name) || ((this.state && this.state.profile) || {}).name || '当前声音';
+        const ok = await confirmModal(
+          '导入声音素材',
+          `素材将追加到「${esc(name)}」。要训练另一个声音，请先点左上角「＋ 新建声音」。`,
+          '追加到该声音',
+        );
+        if (!ok) { return; }
+        S.invoke('training.import', { profile_id: currentId, selection });
         return;
       }
-      S.invoke('training.import', { profile_id: this.profileId, selection });
+      const used = rows.map((item) => item.name);
+      let index = rows.length + 1;
+      let suggested = '新声音 ' + index;
+      while (used.indexOf(suggested) >= 0) { index += 1; suggested = '新声音 ' + index; }
+      const value = await openModal({
+        title: '新建声音并导入素材',
+        body: '请先确认这是本人声音，或已经取得明确授权。原始文件不会被修改，会复制到当前工程。',
+        content: `<div class="field"><label>声音名称</label><input id="voiceName" value="${esc(suggested)}"></div>`,
+        actions: [
+          { label: '取消', value: null },
+          { label: '确认并选择文件', kind: 'primary', onClick: (mask) => (q('#voiceName', mask) || {}).value || suggested },
+        ],
+      });
+      if (!value) { return; }
+      S.invoke('training.import', { profile_id: '', name: String(value).trim(), consent: true, selection });
     },
 
     async primary() {
