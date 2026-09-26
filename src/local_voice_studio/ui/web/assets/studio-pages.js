@@ -219,7 +219,11 @@ window.VS_PAGES = (function () {
       if (strip) {
         strip.classList.remove('hidden');
         const takes = state.takes || [];
-        strip.innerHTML = '<span class="label">成品版本</span>' + (takes.length ? takes.map((take,index) =>
+        const pipeline = state.pipeline || {};
+        const pipelineLine = (pipeline.current_label && !pipeline.finished)
+          ? `<span class="label">进度</span><span class="pipeline-step">${esc(pipeline.current_label)} · ${pipeline.progress || 0}%</span>`
+          : '';
+        strip.innerHTML = pipelineLine + '<span class="label">成品版本</span>' + (takes.length ? takes.map((take,index) =>
           `<button class="take-chip${take.id===state.active_take_id?' active':''}" data-take="${esc(take.id)}">Take ${index+1}</button>`).join('') : '<span>尚无成品</span>')
           + (takes.length > 1 ? '<button class="mini" id="takeCompare">A/B 同位置试听</button>' : '')
           + '<small id="takeDiff"></small>';
@@ -402,6 +406,11 @@ window.VS_PAGES = (function () {
     },
 
     onEvent(name, data) {
+      if (name === 'cover.pipeline.stage') {
+        const labels = { separation: '一键翻唱：正在分离人声与伴奏', voice_conversion: '一键翻唱：正在生成 AI 人声', mix: '一键翻唱：正在生成最终混音' };
+        toast(labels[data.stage] || ('一键翻唱：' + (data.stage || '正在处理')));
+        return;
+      }
       if (name === 'cover.pipeline.complete') { toast('一键翻唱已完成，可试听并导出'); this.refresh(); S.invoke('app.refresh'); return; }
       if (name === 'cover.pipeline.error') { toast(data.message || '翻唱中断，可从任务中心继续'); S.invoke('app.refresh'); return; }
       if (name === 'job.started' && data.kind && ['separate', 'convert', 'render', 'export', 'cleanup', 'transpose', 'lyrics'].includes(data.kind)) {
@@ -424,7 +433,11 @@ window.VS_PAGES = (function () {
           toast(`RMVPE 建议 ${value > 0 ? '+' : ''}${value} 半音（已填入）`);
         }
         if (data.kind === 'export' && data.data && data.data.outputs) {
-          toast('导出完成：' + data.data.outputs.map((item) => String(item).split(/[\\/]/).pop()).join('、'));
+          const outputs = data.data.outputs.map((item) => String(item));
+          toast('导出完成：' + outputs.map((item) => item.split(/[\\/]/).pop()).join('、'));
+          const first = outputs[0] || '';
+          const folder = first ? first.split(/[\\/]/).slice(0, -1).join('\\') : '';
+          S.invoke('exports.open_folder', folder ? { path: folder } : {});
         }
         S.invoke('app.refresh');
         setTimeout(() => this.refresh(), 300);

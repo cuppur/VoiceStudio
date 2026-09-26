@@ -128,8 +128,22 @@
       row.innerHTML = `<div class="song-cover alt${index % 4}">♪</div>`
         + `<div><div class="song-name">${esc(song.title)}</div>`
         + `<div class="song-meta">${esc(song.duration_text)} · ${esc(song.format)}</div></div>`
-        + `<div class="song-actions"><span class="song-status ${song.status === 'todo' ? '' : song.status === 'done' ? 'done' : 'ready'}">${esc(song.status_text)}</span><button class="song-delete" title="移入工程回收目录">删除</button></div>`;
+        + `<div class="song-actions"><span class="song-status ${song.status === 'todo' ? '' : song.status === 'done' ? 'done' : 'ready'}">${esc(song.status_text)}</span><button class="song-rename" title="重命名歌曲工程">重命名</button><button class="song-delete" title="移入工程回收目录">删除</button></div>`;
       row.onclick = () => selectSong(song);
+      row.querySelector('.song-rename').onclick = async event => {
+        event.stopPropagation();
+        const value = await window.VS_PAGES.openModal({
+          title: '重命名歌曲',
+          body: '只修改显示名称，音频文件与工程音轨不受影响。',
+          content: `<div class="field"><label>新名称</label><input id="songRenameInput" value="${esc(song.title)}" maxlength="120"></div>`,
+          actions: [
+            { label: '取消', value: null },
+            { label: '保存', kind: 'primary', onClick: (mask) => (q('#songRenameInput', mask) || {}).value || '' },
+          ],
+        });
+        if (!value || !value.trim()) { return; }
+        invoke('song.rename', { cover_id: song.id, title: value.trim() });
+      };
       row.querySelector('.song-delete').onclick = async event => {
         event.stopPropagation();
         const confirmed = await window.VS_PAGES.openModal({title:'删除歌曲', body:`将“${esc(song.title)}”及其工程音轨移入回收目录。外部原始文件不会删除。`,actions:[{label:'取消',value:false},{label:'删除',kind:'primary',value:true}]});

@@ -15,6 +15,21 @@ from ...cover_session import probe_audio_metadata, parse_lrc, write_lrc
 AUDIO_SUFFIXES = (".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg")
 SEPARATION_MODES = ("uvr5", "roformer")
 
+# ProductJob stage name -> CoverProject stage field.  The job coordinator and
+# the cover manifest track progress independently; without this bridge the
+# manifest statuses stay wherever they were left and the page can never tell
+# that a stage finished.
+STAGE_FIELD_BY_TASK = {
+    "separation": "separation",
+    "voice_conversion": "ai_vocal",
+    "mix": "mix",
+    "export": "export",
+}
+
+# Music-app downloads are encrypted containers, not decodable audio.  Naming
+# them here is the only way a user understands why import refuses the file.
+ENCRYPTED_SUFFIXES = (".mgg", ".mflac", ".ncm", ".qmc0", ".qmc3", ".qmcflac", ".qmcogg", ".tm0", ".tm2", ".tm3", ".bkp")
+
 
 class CoverService(WebService):
     """Real cover orchestration, free of Qt widgets."""
@@ -35,6 +50,27 @@ class CoverService(WebService):
 
     def _cover(self, cover_id: str) -> CoverProject:
         return CoverProject.load(self.project, str(cover_id))
+
+    # ---------------------------------------------------------- stage status
+    def _mark_stage(self, cover_id: str, stage: str, status: str) -> None:
+        """Mirror a task transition onto the cover manifest's stage status.
+
+        Failures here must never break the task itself: the manifest status is
+        a display/progress concern, while the product job already records the
+        authoritative outcome.
+        """
+        field = STAGE_FIELD_BY_TASK.get(str(stage or ""))
+        if not field or not cover_id:
+            return
+        try:
+            self._cover(str(cover_id)).set_stage_status(field, status)
+        except Exception:
+            return
+
+    def start_task(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        result = super().start_task(*args, **kwargs)
+        self._mark_stage(kwargs.get("cover_id", ""), kwargs.get("stage", ""), "running")
+        return result
 
     def engines(self) -> dict[str, Any]:
         uvr5 = UVR5RuntimeStatus.detect(self.paths, deep=False)
@@ -68,7 +104,46 @@ class CoverService(WebService):
             "active_request": self.active_request(cover.id),
             "takes": [self._take(cover, asset) for asset in cover.assets if asset.role == 'final_mix'],
             "active_take_id": active_mix.id if active_mix else '',
+            "pipeline": self._pipeline_state(cover.id),
         }
+
+    PIPELINE_STAGE_LABELS = {
+        "separation": "分离人声与伴奏",
+        "voice_conversion": "生成 AI 人声",
+        "mix": "生成最终混音",
+    }
+
+    def _pipeline_state(self, cover_id: str) -> dict[str, Any]:
+        """Expose the one-click pipeline's stage progress to the page.
+
+        Previously the button was a black box: the manifest statuses never left
+        "running", so the only way to see progress was to watch files appear.
+        """
+        finished = {ProductJobStatus.SUCCEEDED, ProductJobStatus.FAILED,
+                    ProductJobStatus.CANCELLED, ProductJobStatus.PUBLISHED}
+        for job in self.store.list_product_jobs():
+            if job.kind != 'ai_cover':
+                continue
+            if str(job.payload.get('cover_id', '')) != str(cover_id):
+                continue
+            stages = [{
+                "name": item.name,
+                "label": self.PIPELINE_STAGE_LABELS.get(item.name, item.name),
+                "status": str(item.status.value if hasattr(item.status, 'value') else item.status),
+                "progress": round(float(item.progress or 0) * 100, 1),
+                "error": str(item.error or ''),
+            } for item in job.stages]
+            return {
+                "job_id": job.id,
+                "status": str(job.status.value if hasattr(job.status, 'value') else job.status),
+                "current_stage": str(job.current_stage or ''),
+                "current_label": self.PIPELINE_STAGE_LABELS.get(str(job.current_stage or ''), ''),
+                "progress": round(float(job.progress or 0) * 100, 1),
+                "error": str(job.error or ''),
+                "stages": stages,
+                "finished": job.status in finished,
+            }
+        return {}
 
     @staticmethod
     def _take(cover: CoverProject, asset) -> dict[str, Any]:
@@ -160,7 +235,17 @@ class CoverService(WebService):
 
     def handle_worker_event(self, request_id: str, event: str, payload: dict[str, Any]) -> bool:
         parent_id = self._cover_runs.get(str(request_id))
+        # Base pops the task registration on result/error, so snapshot it first.
+        info = dict(self._tasks.get(str(request_id)) or {})
         handled = super().handle_worker_event(request_id,event,payload)
+        if info and event in {'result', 'error'}:
+            if event == 'result':
+                settled = 'completed'
+            elif payload.get('cancelled') or payload.get('status') == 'cancelled':
+                settled = 'cancelled'
+            else:
+                settled = 'failed'
+            self._mark_stage(info.get('cover_id', ''), info.get('stage', ''), settled)
         if parent_id and event in {'result','error'}:
             self._cover_runs.pop(str(request_id),None)
             job = self.store.load_product_job(parent_id)
@@ -191,10 +276,32 @@ class CoverService(WebService):
         self.notify('songs.changed', {'deleted_id': cover.id})
         return {'cover_id': cover.id, 'message': '歌曲已移入工程回收目录，外部原始文件不受影响'}
 
+    def rename_song(self, cover_id: str, title: str) -> dict[str, Any]:
+        """Rename a song project's display title; audio and files stay put."""
+        label = str(title or "").strip()
+        if not label:
+            raise ValueError("歌曲名称不能为空")
+        if len(label) > 120:
+            raise ValueError("歌曲名称过长（最多 120 个字符）")
+        if any(ch in label for ch in '/\\:*?"<>|'):
+            raise ValueError('歌曲名称不能包含 / \\ : * ? " < > | 这些字符')
+        cover = self._cover(cover_id)
+        if self.active_request(cover.id):
+            raise ValueError('歌曲正在处理，请先取消或等待任务完成')
+        cover.title = label
+        cover.save()
+        self.notify("songs.changed", {"cover_id": cover.id})
+        return {"cover_id": cover.id, "title": cover.title}
+
     def import_song(self, source: Path) -> dict[str, Any]:
         source = Path(source)
         if not source.is_file():
             raise ValueError(f"文件不存在：{source}")
+        if source.suffix.lower() in ENCRYPTED_SUFFIXES:
+            raise ValueError(
+                f"「{source.name}」是音乐播放器下载的加密文件，无法直接导入。"
+                "请先在播放器内导出或转换为 WAV、MP3、FLAC、M4A、AAC 或 OGG 后再试。"
+            )
         if source.suffix.lower() not in AUDIO_SUFFIXES:
             raise ValueError(f"不支持的音频格式：{source.suffix}")
         metadata = probe_audio_metadata(source, paths=self.paths)

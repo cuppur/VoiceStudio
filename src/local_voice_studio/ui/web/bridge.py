@@ -24,7 +24,7 @@ from ...paths import AppPaths, ensure_within
 from ...storage import StudioStore
 from .data import StudioSnapshot
 from .services.base import WebService
-from .services.cover import CoverService
+from .services.cover import ENCRYPTED_SUFFIXES, CoverService
 from .services.engine import EngineService
 from .services.exports import ExportsService
 from .services.training import TrainingService
@@ -33,6 +33,9 @@ from .services.voices import VoicesService
 from .services.media import MediaService
 
 AUDIO_SUFFIXES = (".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg")
+# Listed in the file picker so an encrypted music-app download is selectable and
+# then explained, instead of being silently absent from the dialog.
+PICKER_SUFFIXES = AUDIO_SUFFIXES + ENCRYPTED_SUFFIXES
 NOT_CONNECTED = "该功能尚未接入新界面"
 
 
@@ -89,6 +92,7 @@ class StudioBridge(QObject):
             "project.open": self._project_open,
             "project.reveal": self._project_reveal,
             "song.import": self._song_import,
+            "song.rename": self._song_rename,
             "song.delete": self._song_delete,
             "cover.import_lrc": self._import_lrc,
             "cover.media": lambda data: self.media.analyze(str(data.get('cover_id', ''))),
@@ -159,6 +163,10 @@ class StudioBridge(QObject):
         token = uuid4().hex
         self._native_selections = {token: (time.monotonic(), list(paths))}
         self.notify('files.dropped', {'selection': token})
+
+    def _song_rename(self, data):
+        result = self.cover.rename_song(str(data.get('cover_id', '')), str(data.get('title', '')))
+        return {'ok': True, 'message': '已重命名歌曲', **result, 'data': self.snapshot.state()}
 
     def _song_delete(self, data):
         cover_id = str(data.get('cover_id', ''))
@@ -329,8 +337,9 @@ class StudioBridge(QObject):
         elif raw:
             source = self._resolve_owned(raw, field="音频路径")
         elif self._window is not None:
+            picker = " ".join(f"*{suffix}" for suffix in PICKER_SUFFIXES)
             chosen, _filter = QFileDialog.getOpenFileName(
-                self._window, "导入歌曲到工程", "", "音频文件 (*.wav *.mp3 *.flac *.m4a *.aac *.ogg);;所有文件 (*)"
+                self._window, "导入歌曲到工程", "", f"音频文件 ({picker});;所有文件 (*)"
             )
             if chosen:
                 source = Path(chosen)
