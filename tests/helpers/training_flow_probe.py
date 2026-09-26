@@ -83,7 +83,9 @@ def main() -> int:
     store.save_profile(project, profile)
     asset_file = _wav(root / "material.wav", 12.0)
     asset = SourceAsset(profile.id, str(asset_file), str(asset_file), "b" * 64, duration_seconds=12.0, sample_rate=8000, channels=1, codec="pcm_s16le")
-    store.save_source_assets(project, [asset])
+    extra_file = _wav(root / "material2.wav", 7.0)
+    extra = SourceAsset(profile.id, str(extra_file), str(extra_file), "c" * 64, duration_seconds=7.0, sample_rate=8000, channels=1, codec="pcm_s16le")
+    store.save_source_assets(project, [asset, extra])
     # 第二个声音已训练完成：左栏「已训练完成」分组应当默认折叠
     (root / "gpt.ckpt").write_bytes(b"gpt")
     (root / "sovits.pth").write_bytes(b"sovits")
@@ -113,11 +115,19 @@ def main() -> int:
         QTest.qWait(1200)
         result["page"] = json.loads(evaluate("""JSON.stringify({
             rows: document.querySelectorAll('#sampleList .sample-row').length,
-            firstRow: (document.querySelector('#sampleList .sample-row span')||{}).textContent||'',
+            firstRow: ((document.querySelector('#sampleList .sample-name')||{}).firstChild||{}).textContent||'',
             button: (document.querySelector('#trainStart')||{}).textContent||'',
             hiddenQuality: Array.from(document.querySelectorAll('[data-page-view="train"] .field.hidden'))
                 .filter(n => n.textContent.includes('训练质量')).length,
             steps: document.querySelectorAll('[data-page-view="train"] .step-item').length,
+            sampleTools: {
+                all: !!document.querySelector('#sampleAll'),
+                remove: (document.querySelector('#sampleRemove')||{}).textContent||'',
+                clear: (document.querySelector('#sampleClear')||{}).textContent||'',
+                checks: document.querySelectorAll('#sampleList .sample-check').length,
+                deletes: document.querySelectorAll('#sampleList .sample-delete').length,
+                times: document.querySelectorAll('#sampleList .sample-time').length,
+            },
             voiceList: {
                 newButton: (document.querySelector('#trainNewVoice')||{}).textContent||'',
                 activeCount: (document.querySelector('#trainActiveCount')||{}).textContent||'',
@@ -130,6 +140,19 @@ def main() -> int:
                 activeFirst: (document.querySelector('#trainActiveBody .tv-row .tv-name')||{}).textContent||'',
                 doneFirst: (document.querySelector('#trainDoneBody .tv-row .tv-name')||{}).textContent||'',
             },
+        })"""))
+        evaluate("document.querySelector('#sampleList .sample-check').click(); 1")
+        QTest.qWait(250)
+        result["afterPick"] = json.loads(evaluate("""JSON.stringify({
+            picked: (document.querySelector('#samplePicked')||{}).textContent||'',
+        })"""))
+        evaluate("document.querySelector('#sampleRemove').click(); 1")
+        QTest.qWait(350)
+        evaluate('document.querySelector(\'.modal-mask.show .modal-actions button[data-index="1"]\').click(); 1')
+        QTest.qWait(900)
+        result["afterRemove"] = json.loads(evaluate("""JSON.stringify({
+            rows: document.querySelectorAll('#sampleList .sample-row').length,
+            picked: (document.querySelector('#samplePicked')||{}).textContent||'',
         })"""))
         evaluate("document.querySelector('#trainVoiceDone .tv-group-head').click(); 1")
         QTest.qWait(300)

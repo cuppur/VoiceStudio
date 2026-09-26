@@ -522,3 +522,26 @@ def test_training_start_requires_a_selected_voice(tmp_path: Path):
     with pytest.raises(ValueError) as error:
         training.start("")
     assert "选择" in str(error.value)
+
+
+def test_training_remove_assets_deletes_in_batch(tmp_path: Path):
+    _app()
+    paths, store, project, worker, _service = _fixture(tmp_path)
+    training = TrainingService(paths, store, project, worker)
+    profile_id = _imported(training, "批量删除声音", _wav(tmp_path / "a.wav", 2.0), _wav(tmp_path / "b.wav", 3.0))["profile_id"]
+    rows = store.list_source_assets(project, profile_id)
+    assert len(rows) == 2
+    result = training.remove_assets(profile_id, [rows[0].id, rows[1].id])
+    assert result["removed"] == 2
+    assert result["state"]["assets"] == []
+    assert store.list_source_assets(project, profile_id) == []
+
+
+def test_training_remove_assets_rejects_an_empty_selection(tmp_path: Path):
+    _app()
+    paths, store, project, worker, _service = _fixture(tmp_path)
+    training = TrainingService(paths, store, project, worker)
+    profile_id = _imported(training, "空选择声音", _wav(tmp_path / "a.wav", 2.0))["profile_id"]
+    with pytest.raises(ValueError) as error:
+        training.remove_assets(profile_id, [])
+    assert "没有" in str(error.value)
