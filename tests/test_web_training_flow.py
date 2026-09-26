@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 PROBE = Path(__file__).parent / "helpers" / "training_flow_probe.py"
 
 
@@ -23,8 +25,12 @@ def _run_probe() -> dict:
     return json.loads(line[len("VS_TRAIN "):])
 
 
-def test_training_page_lists_real_material_and_starts_the_workflow():
-    flow = _run_probe()
+@pytest.fixture(scope="module")
+def flow() -> dict:
+    return _run_probe()
+
+
+def test_training_page_lists_real_material_and_starts_the_workflow(flow):
     page = flow["page"]
     assert page["rows"] == 1
     assert page["firstRow"] == "material.wav"
@@ -37,3 +43,27 @@ def test_training_page_lists_real_material_and_starts_the_workflow():
     command, profile_id = after["sent"][0]
     assert command == "prepare_dataset"
     assert profile_id
+
+
+def test_training_page_collapses_completed_voices_in_the_left_list(flow):
+    voices = flow["page"]["voiceList"]
+    assert voices["newButton"].strip() == "＋ 新建声音"
+    assert voices["activeCount"] == "1"
+    assert voices["doneCount"] == "1"
+    assert voices["activeRows"] == 1
+    assert voices["activeFirst"] == "训练声音"
+    assert voices["doneFirst"] == "已训练声音"
+    assert voices["doneCollapsed"] is True
+    assert voices["doneHidden"] is True
+    expanded = flow["afterExpand"]
+    assert expanded["doneCollapsed"] is False
+    assert expanded["doneHidden"] is False
+    assert expanded["doneRows"] == 1
+    assert expanded["doneFirst"] == "已训练声音"
+
+
+def test_training_page_new_voice_button_opens_the_name_dialog(flow):
+    after = flow["afterNew"]
+    assert after["mask"] == 1
+    assert "新建声音" in after["title"]
+    assert after["suggested"]

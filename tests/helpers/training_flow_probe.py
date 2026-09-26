@@ -84,6 +84,15 @@ def main() -> int:
     asset_file = _wav(root / "material.wav", 12.0)
     asset = SourceAsset(profile.id, str(asset_file), str(asset_file), "b" * 64, duration_seconds=12.0, sample_rate=8000, channels=1, codec="pcm_s16le")
     store.save_source_assets(project, [asset])
+    # 第二个声音已训练完成：左栏「已训练完成」分组应当默认折叠
+    (root / "gpt.ckpt").write_bytes(b"gpt")
+    (root / "sovits.pth").write_bytes(b"sovits")
+    trained = VoiceProfile(
+        name="已训练声音", consent_confirmed=True, consent_record="本人确认",
+        consent_confirmed_at="2026-01-01T00:00:00+00:00",
+        active_gpt_checkpoint=str(root / "gpt.ckpt"), active_sovits_checkpoint=str(root / "sovits.pth"),
+    )
+    store.save_profile(project, trained)
 
     client = FakeClient()
     window = WebStudioWindow(paths, store, client=client)
@@ -109,7 +118,36 @@ def main() -> int:
             hiddenQuality: Array.from(document.querySelectorAll('[data-page-view="train"] .field.hidden'))
                 .filter(n => n.textContent.includes('训练质量')).length,
             steps: document.querySelectorAll('[data-page-view="train"] .step-item').length,
+            voiceList: {
+                newButton: (document.querySelector('#trainNewVoice')||{}).textContent||'',
+                activeCount: (document.querySelector('#trainActiveCount')||{}).textContent||'',
+                doneCount: (document.querySelector('#trainDoneCount')||{}).textContent||'',
+                doneCollapsed: !!document.querySelector('#trainVoiceDone')
+                    && document.querySelector('#trainVoiceDone').classList.contains('collapsed'),
+                doneHidden: getComputedStyle(document.querySelector('#trainVoiceDone .tv-body')).display === 'none',
+                activeRows: document.querySelectorAll('#trainActiveBody .tv-row').length,
+                doneRows: document.querySelectorAll('#trainDoneBody .tv-row').length,
+                activeFirst: (document.querySelector('#trainActiveBody .tv-row .tv-name')||{}).textContent||'',
+                doneFirst: (document.querySelector('#trainDoneBody .tv-row .tv-name')||{}).textContent||'',
+            },
         })"""))
+        evaluate("document.querySelector('#trainVoiceDone .tv-group-head').click(); 1")
+        QTest.qWait(300)
+        result["afterExpand"] = json.loads(evaluate("""JSON.stringify({
+            doneCollapsed: document.querySelector('#trainVoiceDone').classList.contains('collapsed'),
+            doneHidden: getComputedStyle(document.querySelector('#trainVoiceDone .tv-body')).display === 'none',
+            doneRows: document.querySelectorAll('#trainDoneBody .tv-row').length,
+            doneFirst: (document.querySelector('#trainDoneBody .tv-row .tv-name')||{}).textContent||'',
+        })"""))
+        evaluate("document.querySelector('#trainNewVoice').click(); 1")
+        QTest.qWait(500)
+        result["afterNew"] = json.loads(evaluate("""JSON.stringify({
+            mask: document.querySelectorAll('.modal-mask.show').length,
+            title: (document.querySelector('.modal-mask.show .modal h3')||{}).textContent||'',
+            suggested: (document.querySelector('.modal-mask.show #voiceName')||{}).value||'',
+        })"""))
+        evaluate("document.querySelector('.modal-mask.show .modal-actions button').click(); 1")
+        QTest.qWait(300)
         evaluate("document.querySelector('#trainStart').click(); 1")
         QTest.qWait(1200)
         result["afterClick"] = json.loads(evaluate("""JSON.stringify({

@@ -438,3 +438,87 @@ def test_training_state_reports_empty_project(tmp_path: Path):
     assert state["assets"] == []
     assert state["workflow"] == {}
     assert state["singing_min_seconds"] == 180.0
+
+
+def _imported(training: TrainingService, name: str, *files: Path) -> dict:
+    """Import material as a new voice and wait for the background scan."""
+    received: dict[str, dict] = {}
+    training.event.connect(lambda event, payload: received.update({event: json.loads(payload)}))
+    training.import_assets("", [str(item) for item in files], name=name, consent=True)
+    deadline = time.time() + 60
+    while time.time() < deadline and "training.scanned" not in received and "training.error" not in received:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    assert "training.scanned" in received, received
+    return received["training.scanned"]
+
+
+def test_training_state_lists_profiles_with_ready_flags(tmp_path: Path):
+    _app()
+    paths, store, project, worker, _service = _fixture(tmp_path)
+    training = TrainingService(paths, store, project, worker)
+    trained = _ready_profile(tmp_path, store, project, name="已训练声音")
+    pending = VoiceProfile(name="待训练声音", consent_confirmed=True, consent_record="本人确认",
+                           consent_confirmed_at="2026-01-01T00:00:00+00:00")
+    store.save_profile(project, pending)
+    state = training.state(pending.id)
+    rows = {item["id"]: item for item in state["profiles"]}
+    assert set(rows) == {trained.id, pending.id}
+    assert rows[trained.id]["ready"] is True
+    assert rows[trained.id]["tts_ready"] is True
+    assert rows[trained.id]["current"] is False
+    assert rows[pending.id]["ready"] is False
+    assert rows[pending.id]["current"] is True
+    assert state["profile"]["id"] == pending.id
+
+
+def test_training_state_does_not_fall_back_to_first_profile(tmp_path: Path):
+    _app()
+    paths, store, project, worker, _service = _fixture(tmp_path)
+    training = TrainingService(paths, store, project, worker)
+    _ready_profile(tmp_path, store, project, name="唯一声音")
+    state = training.state("missing-profile")
+    assert state["profile"] is None
+    assert len(state["profiles"]) == 1
+
+
+def test_training_import_rejects_duplicate_voice_name(tmp_path: Path):
+    _app()
+    paths, store, project, worker, _service = _fixture(tmp_path)
+    training = TrainingService(paths, store, project, worker)
+    _imported(training, "重名声音", _wav(tmp_path / "first.wav", 2.0))
+    before = len(store.list_source_assets(project))
+    with pytest.raises(ValueError) as error:
+        training.import_assets("", [str(_wav(tmp_path / "second.wav", 2.0))], name="重名声音", consent=True)
+    assert "同名" in str(error.value)
+    assert len(store.list_source_assets(project)) == before
+    assert len([item for item in store.list_profiles(project) if not item.archived]) == 1
+
+
+def test_training_import_appends_to_selected_profile(tmp_path: Path):
+    _app()
+    paths, store, project, worker, _service = _fixture(tmp_path)
+    training = TrainingService(paths, store, project, worker)
+    profile_id = _imported(training, "追加声音", _wav(tmp_path / "a.wav", 2.0))["profile_id"]
+    before = len(store.list_profiles(project))
+    received: dict[str, dict] = {}
+    training.event.connect(lambda event, payload: received.update({event: json.loads(payload)}))
+    # 不同时长保证 sha256 不同，否则会被重复文件检测跳过
+    training.import_assets(profile_id, [str(_wav(tmp_path / "b.wav", 3.0))])
+    deadline = time.time() + 60
+    while time.time() < deadline and "training.scanned" not in received and "training.error" not in received:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    assert "training.scanned" in received, received
+    assert len(store.list_profiles(project)) == before
+    assert len(store.list_source_assets(project, profile_id)) == 2
+
+
+def test_training_start_requires_a_selected_voice(tmp_path: Path):
+    _app()
+    paths, store, project, worker, _service = _fixture(tmp_path)
+    training = TrainingService(paths, store, project, worker)
+    _ready_profile(tmp_path, store, project, name="已备好素材")
+    with pytest.raises(ValueError) as error:
+        training.start("")
+    assert "选择" in str(error.value)
