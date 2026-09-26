@@ -952,9 +952,9 @@ window.VS_PAGES = (function () {
         return;
       }
       const used = rows.map((item) => item.name);
-      let index = rows.length + 1;
-      let suggested = '新声音 ' + index;
-      while (used.indexOf(suggested) >= 0) { index += 1; suggested = '新声音 ' + index; }
+      let index = 1;
+      while (used.indexOf('新声音 ' + index) >= 0) { index += 1; }
+      const suggested = '新声音 ' + index;
       const value = await openModal({
         title: '新建声音并导入素材',
         body: '请先确认这是本人声音，或已经取得明确授权。原始文件不会被修改，会复制到当前工程。',
