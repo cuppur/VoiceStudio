@@ -701,7 +701,7 @@ window.VS_PAGES = (function () {
       const drop = q('#trainDrop');
       if (drop) { drop.onclick = () => this.importAssets(); }
       const create = q('#trainNewVoice');
-      if (create) { create.onclick = () => this.importAssets(null, { forceNew: true }); }
+      if (create) { create.onclick = () => this.newVoice(); }
       const start = q('#trainStart');
       if (start) { start.onclick = () => this.primary(); }
       const restore = qq('[data-page-view="train"] .page-actions .btn')[0];
@@ -729,6 +729,71 @@ window.VS_PAGES = (function () {
       });
     },
 
+    setupSampleTools(page) {
+      const head = q('.samples-card .card-head', page);
+      if (!head || q('#sampleAll', page)) { return; }
+      head.insertAdjacentHTML('beforeend',
+        '<div class="sample-tools"><label class="sample-all"><input type="checkbox" id="sampleAll"> 全选</label>'
+        + '<span class="sample-picked" id="samplePicked">已选 0 项</span>'
+        + '<button class="mini" id="sampleRemove">移除所选</button>'
+        + '<button class="mini" id="sampleClear">清空全部</button></div>');
+      const all = q('#sampleAll', page);
+      if (all) {
+        all.onclick = () => {
+          qq('#sampleList .sample-check').forEach((node) => { node.checked = all.checked; });
+          this.updatePicked();
+        };
+      }
+      const remove = q('#sampleRemove', page);
+      if (remove) { remove.onclick = () => this.removeAssets(this.pickedIds()); }
+      const clear = q('#sampleClear', page);
+      if (clear) { clear.onclick = () => this.clearAssets(); }
+    },
+
+    timeText(value) {
+      const date = new Date(String(value || ''));
+      if (isNaN(date.getTime())) { return ''; }
+      const pad = (number) => String(number).padStart(2, '0');
+      return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    },
+
+    pickedIds() {
+      return qq('#sampleList .sample-row').map((row) => {
+        const check = q('.sample-check', row);
+        return (check && check.checked) ? row.dataset.assetId : '';
+      }).filter(Boolean);
+    },
+
+    updatePicked() {
+      S.setText('#samplePicked', '已选 ' + this.pickedIds().length + ' 项');
+    },
+
+    async removeAssets(ids) {
+      const list = (ids || []).filter(Boolean);
+      if (!list.length) { toast('请先勾选要移除的素材'); return; }
+      const ok = await confirmModal(
+        '移除素材',
+        `将从当前声音移除 ${list.length} 个素材。工程内副本会删除，原始文件保留在原位置。`,
+        '移除');
+      if (!ok) { return; }
+      S.invoke('training.remove_assets', { profile_id: this.profileId, asset_ids: list }, (reply) => {
+        if (reply.ok && reply.data) {
+          this.state = reply.data;
+          this.paint();
+          const all = q('#sampleAll');
+          if (all) { all.checked = false; }
+          this.updatePicked();
+        }
+        S.invoke('app.refresh');
+      });
+    },
+
+    clearAssets() {
+      const ids = ((this.state && this.state.assets) || []).map((item) => item.id);
+      if (!ids.length) { toast('当前声音没有素材'); return; }
+      this.removeAssets(ids);
+    },
+
     setupTrainingUI() {
       const page = q('[data-page-view="train"]');
       const actions = q('.page-actions', page);
@@ -748,6 +813,7 @@ window.VS_PAGES = (function () {
       qq('.quality-metric span', page).forEach((n,i) => n.textContent = ['素材数量','导入时长','声音授权','处理阶段'][i]);
       qq('.diagnostic-line > span', page).forEach((n,i) => n.textContent = ['导入音频时长','素材文件数','当前状态'][i]);
       q('.samples-card .mini', page).classList.add('hidden');
+      this.setupSampleTools(page);
       const caps = qq('.train-settings .toggle-row', page);
       if (caps[1]) q('.toggle-copy span',caps[1]).textContent = '文字模型完成后继续训练 RVC';
       // 名称框后面会被追加 checkbox，给它固定 id 以免选择器误命中
@@ -780,23 +846,32 @@ window.VS_PAGES = (function () {
         this.assetsKey = assetsKey;
         list.innerHTML = '';
         if (!assets.length) {
-          list.innerHTML = '<div class="sample-row"><span></span><span>还没有导入素材</span>'
-            + '<div class="quality"><i style="width:0%"></i></div><span class="status">空</span></div>';
+          list.innerHTML = '<div class="sample-row"><span></span><span></span><span>还没有导入素材</span>'
+            + '<div class="quality"><i style="width:0%"></i></div><span class="status">空</span><span></span></div>';
         }
         assets.forEach((asset) => {
           const row = document.createElement('div');
           row.className = 'sample-row';
+          row.dataset.assetId = asset.id;
           const flags = (asset.flags || []).length;
           const ratio = Math.max(0, Math.min(100, asset.seconds ? Math.round((asset.confirmed_seconds / asset.seconds) * 100) : 0));
-          row.innerHTML = `<button class="sample-play">▶</button><span>${esc(asset.name)}</span>`
+          row.innerHTML = `<input type="checkbox" class="sample-check" aria-label="选择素材">`
+            + `<button class="sample-play">▶</button>`
+            + `<span class="sample-name">${esc(asset.name)}<small class="sample-time">${esc(this.timeText(asset.created_at))}</small></span>`
             + `<div class="quality"><i style="width:${ratio}%"></i></div>`
-            + `<span class="status ${flags ? 'orange' : 'ready'}">${flags ? '需检查' : (asset.confirmed_seconds ? '已确认' : '待处理')}</span>`;
+            + `<span class="status ${flags ? 'orange' : 'ready'}">${flags ? '需检查' : (asset.confirmed_seconds ? '已确认' : '待处理')}</span>`
+            + `<button class="sample-delete" title="从当前声音移除">删</button>`;
           const play = q('.sample-play', row);
           if (play) {
             play.onclick = () => (asset.exists ? S.playFile(asset.path, asset.name) : toast('素材文件已不存在'));
           }
+          const drop = q('.sample-delete', row);
+          if (drop) { drop.onclick = () => this.removeAssets([asset.id]); }
+          const check = q('.sample-check', row);
+          if (check) { check.onchange = () => this.updatePicked(); }
           list.appendChild(row);
         });
+        this.updatePicked();
       }
       // 质量诊断卡：显示真实统计
       const score = q('[data-page-view="train"] .score');
@@ -934,38 +1009,50 @@ window.VS_PAGES = (function () {
       };
     },
 
-    async importAssets(selection, options) {
-      const forceNew = !!(options && options.forceNew);
+    async newVoice() {
+      // 先建空声音并切过去：素材列表立刻换到新列表，旧素材不受影响
       const rows = (this.state && this.state.profiles) || [];
-      const currentId = forceNew ? '' : (this.profileId || '');
-      if (currentId) {
-        // 已选中声音时素材只追加到它，并明确告知，绝不悄悄换成新建。
-        const row = rows.filter((item) => item.id === currentId)[0];
-        const name = (row && row.name) || ((this.state && this.state.profile) || {}).name || '当前声音';
-        const ok = await confirmModal(
-          '导入声音素材',
-          `素材将追加到「${esc(name)}」。要训练另一个声音，请先点左上角「＋ 新建声音」。`,
-          '追加到该声音',
-        );
-        if (!ok) { return; }
-        S.invoke('training.import', { profile_id: currentId, selection });
-        return;
-      }
       const used = rows.map((item) => item.name);
       let index = 1;
       while (used.indexOf('新声音 ' + index) >= 0) { index += 1; }
       const suggested = '新声音 ' + index;
       const value = await openModal({
-        title: '新建声音并导入素材',
-        body: '请先确认这是本人声音，或已经取得明确授权。原始文件不会被修改，会复制到当前工程。',
+        title: '训练新声音',
+        body: '请先确认这是本人声音，或已经取得明确授权。创建后素材列表会切换到这个新声音，之前的声音及其素材保持不变。',
         content: `<div class="field"><label>声音名称</label><input id="voiceName" value="${esc(suggested)}"></div>`,
         actions: [
           { label: '取消', value: null },
-          { label: '确认并选择文件', kind: 'primary', onClick: (mask) => (q('#voiceName', mask) || {}).value || suggested },
+          { label: '创建', kind: 'primary', onClick: (mask) => (q('#voiceName', mask) || {}).value || suggested },
         ],
       });
       if (!value) { return; }
-      S.invoke('training.import', { profile_id: '', name: String(value).trim(), consent: true, selection });
+      const name = String(value).trim() || suggested;
+      S.invoke('voices.create', { name: name, consent: true }, (reply) => {
+        if (!reply.ok) { return; }
+        const detail = reply.data || {};
+        if (detail.id) {
+          this.refresh(detail.id);
+          toast(`已创建「${name}」，素材列表已切换到新声音，请导入素材`);
+        }
+      });
+    },
+
+    async importAssets(selection) {
+      const rows = (this.state && this.state.profiles) || [];
+      const currentId = this.profileId || '';
+      if (!currentId) { return this.newVoice(); }
+      const row = rows.filter((item) => item.id === currentId)[0];
+      const name = (row && row.name) || ((this.state && this.state.profile) || {}).name || '当前声音';
+      // 空声音没有可混的旧素材，直接导入；已有素材才需要确认归属
+      if (row && row.asset_count) {
+        const ok = await confirmModal(
+          '导入声音素材',
+          `素材将追加到「${esc(name)}」。要训练另一个声音，请点左上角「＋ 训练新声音」。`,
+          '追加到该声音',
+        );
+        if (!ok) { return; }
+      }
+      S.invoke('training.import', { profile_id: currentId, selection });
     },
 
     async primary() {
@@ -1252,7 +1339,7 @@ window.VS_PAGES = (function () {
     installed = true;
     const style = document.createElement('style');
     style.textContent = `
-      .train-right{min-height:0;overflow:auto;padding-right:4px}.train-right>.card{flex-shrink:0}.train-right .train-settings{order:-1}.recommend-row{font-size:11px;flex-wrap:wrap}.review-modal{width:min(720px,calc(100vw - 40px))}#trainDraftPanel textarea{min-height:56px;border:1px solid #e5dcd4;border-radius:8px;padding:8px;font:inherit;resize:vertical}#trainDraftPanel .sample-row{grid-template-columns:24px minmax(0,1fr) 48px}#trainDraftPanel .sample-row>span:last-child{grid-column:2 / -1}.train-center .drop-card{flex:none;padding:12px}.train-center .dropzone{height:90px}.train-center .drop-icon{display:none}.train-center .samples-card{flex:1}.training-status{flex:none;padding:12px 16px;color:#9d501a;background:#fff7ef;font-size:12px;line-height:1.5}.train-settings .field{margin-top:12px}.train-settings input[type=checkbox]{width:auto;accent-color:#ff781d}.train-settings label{line-height:1.7}.page-actions #trainStart{min-width:150px}.sample-row{font-size:11px;min-height:42px}.sample-row>span{overflow-wrap:anywhere}.song-status{font-size:10px}.song-delete{background:transparent;color:#a37961;font-size:11px;cursor:pointer;padding:6px}.song-row{grid-template-columns:42px minmax(0,1fr) auto}.song-actions{display:flex;flex-direction:column;align-items:flex-end}.song-delete:hover{color:#c44728}.train-right .score{font-size:24px}.train-right .quality-metric b{font-size:13px;overflow-wrap:anywhere}.train-right .quality-alert{line-height:1.6}#advancedPanel input[type=range]{width:100%}#advancedPanel .field{margin-top:12px}#advancedPanel output{float:right}#previewMode{font:inherit;border:1px solid #e5dcd4;border-radius:8px;padding:5px;background:white}
+      .train-right{min-height:0;overflow:auto;padding-right:4px}.train-right>.card{flex-shrink:0}.train-right .train-settings{order:-1}.recommend-row{font-size:11px;flex-wrap:wrap}.review-modal{width:min(720px,calc(100vw - 40px))}#trainDraftPanel textarea{min-height:56px;border:1px solid #e5dcd4;border-radius:8px;padding:8px;font:inherit;resize:vertical}#trainDraftPanel .sample-row{grid-template-columns:24px minmax(0,1fr) 48px}#trainDraftPanel .sample-row>span:last-child{grid-column:2 / -1}.train-center .drop-card{flex:none;padding:12px}.train-center .dropzone{height:90px}.train-center .drop-icon{display:none}.train-center .samples-card{flex:1}.training-status{flex:none;padding:12px 16px;color:#9d501a;background:#fff7ef;font-size:12px;line-height:1.5}.train-settings .field{margin-top:12px}.train-settings input[type=checkbox]{width:auto;accent-color:#ff781d}.train-settings label{line-height:1.7}.page-actions #trainStart{min-width:150px}.sample-row{font-size:11px;min-height:42px}.sample-name{overflow-wrap:anywhere;min-width:0}.sample-row>span{overflow-wrap:anywhere}.song-status{font-size:10px}.song-delete{background:transparent;color:#a37961;font-size:11px;cursor:pointer;padding:6px}.song-row{grid-template-columns:42px minmax(0,1fr) auto}.song-actions{display:flex;flex-direction:column;align-items:flex-end}.song-delete:hover{color:#c44728}.train-right .score{font-size:24px}.train-right .quality-metric b{font-size:13px;overflow-wrap:anywhere}.train-right .quality-alert{line-height:1.6}#advancedPanel input[type=range]{width:100%}#advancedPanel .field{margin-top:12px}#advancedPanel output{float:right}#previewMode{font:inherit;border:1px solid #e5dcd4;border-radius:8px;padding:5px;background:white}
     `;
     document.head.appendChild(style);
     hideUnsupported();
