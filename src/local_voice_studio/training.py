@@ -7,14 +7,19 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import hashlib
+from collections import deque
 from pathlib import Path
 from typing import Callable
 from uuid import uuid4
 
 from .models import utc_now
 from .paths import AppPaths, ensure_within, validate_id, validate_sha256
+
+# How much upstream script output to keep for an actionable failure message.
+_CHILD_TAIL_LINES = 40
 
 # Singing/RVC is deliberately imported lazily: the public desktop process must
 # remain free of torch and other GPU dependencies.
@@ -105,15 +110,25 @@ class TrainingPipeline:
             **hidden_process_options(),
         )
         assert self.process.stdout is not None
+        # Upstream scripts report failures only on stdout/stderr.  Keep a tail so a
+        # non-zero exit can name the real cause instead of just "退出码 1".
+        tail: deque[str] = deque(maxlen=_CHILD_TAIL_LINES)
         for line in self.process.stdout:
-            log(line.rstrip())
+            text = line.rstrip()
+            if text:
+                # tqdm refreshes with \r, so one physical line can hold many updates.
+                tail.extend(chunk.strip() for chunk in text.replace("\r", "\n").split("\n") if chunk.strip())
+            log(text)
             if cancel.is_set():
                 self.cancel()
                 raise RuntimeError("任务已取消")
         code = self.process.wait()
         self.process = None
         if code:
-            raise RuntimeError(f"训练子进程退出码 {code}")
+            detail = "\n".join(tail)
+            if detail:
+                print(f"[child output]\n{detail}", file=sys.stderr, flush=True)
+            raise RuntimeError(f"训练子进程退出码 {code}" + (f"\n{detail}" if detail else ""))
 
     def prepare(self, payload: dict, progress: Callable[[float, str], None], cancel: threading.Event) -> Path:
         engine = self.paths.engine_root

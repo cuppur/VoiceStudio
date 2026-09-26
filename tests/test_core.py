@@ -220,6 +220,50 @@ class WorkerIntegrationTests(unittest.TestCase):
             first["normalized"].mkdir(parents=True); (first["normalized"] / "old.wav").write_bytes(b"old")
             second["normalized"].mkdir(parents=True); self.assertFalse((second["normalized"] / "old.wav").exists())
 
+    def test_child_failure_reports_the_real_cause(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = AppPaths(
+                data_root=root / "data", projects_root=root / "projects", runtime_root=root / "data" / "runtime",
+                engine_root=root / "engine", models_root=root / "models", logs_root=root / "logs",
+                database=root / "data" / "studio.sqlite3", cache_directory=root / "data" / "cache",
+            )
+            paths.ensure()
+            paths.engine_root.mkdir(parents=True, exist_ok=True)
+            script = root / "boom.py"
+            script.write_text(
+                "import sys\n"
+                "print('正在切片')\n"
+                "print('10%\\r90%\\r系统找不到指定的文件。')\n"
+                "sys.exit(3)\n",
+                encoding="utf-8",
+            )
+            pipeline = TrainingPipeline(paths)
+            with self.assertRaises(RuntimeError) as caught:
+                # -S: skip the host site-packages (a GBK .pth there breaks under PYTHONUTF8=1).
+                pipeline._run([sys.executable, "-S", str(script)], {}, lambda line: None, threading.Event())
+            message = str(caught.exception)
+            self.assertIn("退出码 3", message)
+            self.assertIn("系统找不到指定的文件。", message)
+            self.assertIn("正在切片", message)
+            self.assertNotIn("\r", message)
+
+    def test_child_success_keeps_quiet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = AppPaths(
+                data_root=root / "data", projects_root=root / "projects", runtime_root=root / "data" / "runtime",
+                engine_root=root / "engine", models_root=root / "models", logs_root=root / "logs",
+                database=root / "data" / "studio.sqlite3", cache_directory=root / "data" / "cache",
+            )
+            paths.ensure()
+            paths.engine_root.mkdir(parents=True, exist_ok=True)
+            script = root / "fine.py"
+            script.write_text("print('执行完毕，请检查输出文件')\n", encoding="utf-8")
+            seen: list[str] = []
+            TrainingPipeline(paths)._run([sys.executable, "-S", str(script)], {}, seen.append, threading.Event())
+            self.assertTrue(any("执行完毕" in line for line in seen))
+
     def test_feature_manifest_is_bound_to_exact_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); phoneme = root / "2-name2text.txt"; semantic = root / "6-name2semantic.tsv"; phoneme.write_text("voice.wav\tAA B\t[1, 1]\thello\n", encoding="utf-8"); semantic.write_text("voice.wav\t1 2 3\n", encoding="utf-8")
