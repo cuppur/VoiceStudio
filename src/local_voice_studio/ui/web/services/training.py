@@ -13,6 +13,7 @@ from PySide6.QtCore import QRunnable, QThreadPool, Signal, Slot
 
 from ....audio import copy_original, scan_audio_files
 from ....models import SourceAsset, VoiceProfile, WorkflowStage, WorkflowStatus, is_hard_quality_flag, utc_now
+from ....product_models import voice_capabilities
 from ....runtime import EngineRuntimeResolver
 from ....workflow import TrainingWorkflowController
 from .base import WebService
@@ -81,13 +82,21 @@ class TrainingService(WebService):
     # ------------------------------------------------------------------ state
     def state(self, profile_id: str = "") -> dict[str, Any]:
         profiles = [item for item in self.store.list_profiles(self.project) if not item.archived]
-        profile = next((item for item in profiles if item.id == str(profile_id)), None)
-        profile = profile or (profiles[0] if profiles else None)
+        requested = str(profile_id or "").strip()
+        if requested:
+            # 明确指定了声音就只认它；找不到时不静默回落到第一个声音。
+            profile = next((item for item in profiles if item.id == requested), None)
+        else:
+            profile = profiles[0] if profiles else None
+        rows_by_profile = {
+            item.id: [row for row in self.store.list_source_assets(self.project, item.id) if not row.duplicate_of]
+            for item in profiles
+        }
         assets: list[dict[str, Any]] = []
         workflow: dict[str, Any] = {}
         draft: dict[str, Any] = {}
         if profile is not None:
-            rows = [item for item in self.store.list_source_assets(self.project, profile.id) if not item.duplicate_of]
+            rows = rows_by_profile.get(profile.id, [])
             assets = [{
                 "id": item.id, "name": Path(item.original_path or item.project_path).name,
                 "seconds": round(float(item.duration_seconds or 0), 1),
@@ -111,7 +120,7 @@ class TrainingService(WebService):
         total = sum(item["seconds"] for item in assets if item["enabled"])
         return {
             "profile": {"id": profile.id, "name": profile.name, "consent": bool(profile.consent_confirmed)} if profile else None,
-            "profiles": [{"id": item.id, "name": item.name} for item in profiles],
+            "profiles": [self._profile_row(item, rows_by_profile.get(item.id, []), profile) for item in profiles],
             "assets": assets,
             "total_seconds": round(total, 1),
             "total_text": f"{int(total // 60)}:{int(total % 60):02d}",
@@ -122,6 +131,27 @@ class TrainingService(WebService):
             "scanning": self._scanning,
             "singing_request": self.active_request(kind='singing'),
             "result": self._result(profile),
+        }
+
+    def _profile_row(self, profile: VoiceProfile, rows: list[SourceAsset], current) -> dict[str, Any]:
+        """Compact row for the training page's left-hand voice list."""
+        capabilities = voice_capabilities(profile)
+        seconds = sum(float(item.duration_seconds or 0) for item in rows if item.enabled)
+        workflows = self.store.list_workflows(self.project, profile.id)
+        latest = next((item for item in workflows if item.status == WorkflowStatus.RUNNING), None) or (
+            workflows[0] if workflows else None)
+        return {
+            "id": profile.id,
+            "name": profile.name,
+            "current": current is not None and profile.id == current.id,
+            "tts_ready": capabilities.tts == "ready",
+            "singing_ready": capabilities.singing_conversion == "ready",
+            "ready": capabilities.tts == "ready" or capabilities.singing_conversion == "ready",
+            "asset_count": len(rows),
+            "seconds": round(seconds, 1),
+            "stage": str(latest.stage.value) if latest else "",
+            "status": str(latest.status.value) if latest else "",
+            "running": bool(latest and latest.status == WorkflowStatus.RUNNING),
         }
 
     @staticmethod
@@ -218,16 +248,16 @@ class TrainingService(WebService):
             if profile is None:
                 raise ValueError("声音配置不存在或已归档")
             return profile
+        if not create:
+            raise ValueError("请先选择一个声音")
         label = str(name or "").strip() or "我的声音"
         if not consent:
             raise ValueError("请先确认这是本人声音，或已经取得明确授权")
-        profile = next((item for item in self.store.list_profiles(self.project) if not item.archived and item.name == label), None)
-        if profile is None:
-            profile = VoiceProfile(label, True, consent_record="训练页确认：本人声音或已取得明确授权", consent_confirmed_at=utc_now())
-        else:
-            profile.consent_confirmed = True
-            profile.consent_record = "训练页再次确认：本人声音或已取得明确授权"
-            profile.consent_confirmed_at = utc_now()
+        clash = next((item for item in self.store.list_profiles(self.project) if not item.archived and item.name == label), None)
+        if clash is not None:
+            # 绝不静默把新素材并进旧声音：重名必须由用户改名，或显式选中旧声音再追加。
+            raise ValueError(f"已存在同名声音「{label}」，请换一个名称")
+        profile = VoiceProfile(label, True, consent_record="训练页确认：本人声音或已取得明确授权", consent_confirmed_at=utc_now())
         self.store.save_profile(self.project, profile)
         return profile
 
