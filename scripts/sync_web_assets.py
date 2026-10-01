@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "src" / "local_voice_studio" / "ui" / "web" / "assets"
 DEFAULT_PROTOTYPE = ROOT / "VoiceStudio_Full_UI_Prototype_v4.html"
 NEEDLE = "</script>\n</body></html>"
-ADAPTER = '<script src="studio-bridge.js"></script>\n<script src="studio-media.js"></script>\n<script src="studio-pages.js"></script>'
+ADAPTER = '<script src="studio-bridge.js"></script>\n<script src="studio-media.js"></script>\n<script src="studio-workstation.js"></script>\n<script src="studio-lyrics.js"></script>\n<script src="studio-pages.js"></script>'
 
 
 def sync(prototype: Path, target: Path) -> tuple[int, int]:

@@ -49,7 +49,7 @@ def test_cover_page_flow_reaches_the_real_service():
     # prototype controls without backend support are hidden
     hidden = flow["hidden"]
     assert hidden["presets"] == 0 and hidden["advanced"] == 0 and hidden["takes"] == 0
-    assert hidden["ab"] == 0 and hidden["preview"] == 0  # toolbar replaced with real preview mode selector
+    assert hidden["ab"] == 1 and hidden["preview"] == 0  # comparison lives in sidebar; obsolete hero button is hidden
     assert hidden["strength"] == 2 and hidden["toggles"] == 3
     # the primary button reflects the real next step
     assert flow["renderLabel"].endswith("一键翻唱")

@@ -41,6 +41,7 @@
     voice: null,
     songQuery: '',
     songFilter: 'all',
+    libraryView: 'song',
     voiceQuery: '',
     ttsQuery: '',
     ttsVoiceId: '',
@@ -62,6 +63,8 @@
   S.setText = setText;
   S.state = S;
   S.selectSong = selectSong;
+  S.renderSongs = renderSongs;
+  S.selectTake = selectTake;
   let refreshTimer = null;
   S.refresh = () => {
     if (refreshTimer) return;
@@ -102,55 +105,88 @@
   }
 
   // ----------------------------------------------------------------- songs
+  function takeLabel(take) {
+    return (take.voice_name || '未登记声音') + ' · ' + (take.version_label || '版本')
+      + (take.model_name ? ' · ' + take.model_name : '');
+  }
+
+  function selectTake(song, take) {
+    if (!take.exists) { toast('版本音频文件不存在'); return; }
+    if (!S.song || S.song.id !== song.id) selectSong(song);
+    const version = S.selectionVersion;
+    invoke('cover.select_take', {cover_id: song.id, take_id: take.id}, reply => {
+      if (!reply.ok || version !== S.selectionVersion || !S.song || S.song.id !== song.id) return;
+      if (window.VS_PAGES) { window.VS_PAGES.cover.state = reply.data; window.VS_PAGES.cover.paint(); }
+      S.refresh();
+    });
+  }
+
   function renderSongs() {
     const list = $('#songList');
-    if (!list) { return; }
+    if (!list) return;
     const query = S.songQuery.toLowerCase();
-    const rows = S.songs.filter((song) => {
-      const byQuery = !query || String(song.title).toLowerCase().includes(query);
-      if (!byQuery) { return false; }
-      if (S.songFilter === 'todo') { return song.status === 'todo'; }
-      if (S.songFilter === 'ready') { return song.status !== 'todo'; }
+    const rows = S.songs.filter(song => {
+      const searchable = [song.title, ...(song.takes || []).map(t => t.voice_name)].join(' ').toLowerCase();
+      if (query && !searchable.includes(query)) return false;
+      if (S.songFilter === 'todo') return song.status !== 'done';
+      if (S.songFilter === 'ready') return song.status === 'done';
       return true;
     });
     list.innerHTML = '';
-    if (!rows.length) {
-      const empty = document.createElement('div');
-      empty.className = 'library-foot';
-      empty.textContent = S.songs.length ? '没有匹配的歌曲工程。' : '还没有歌曲工程；点击上方“导入歌曲到工程”开始。';
-      list.appendChild(empty);
-    }
-    rows.forEach((song, index) => {
-      const row = document.createElement('div');
-      const active = S.song && S.song.id === song.id;
-      row.className = 'song-row' + (active ? ' active' : '');
-      row.dataset.coverId = song.id;
-      row.innerHTML = `<div class="song-cover alt${index % 4}">♪</div>`
-        + `<div><div class="song-name">${esc(song.title)}</div>`
-        + `<div class="song-meta">${esc(song.duration_text)} · ${esc(song.format)}</div></div>`
-        + `<div class="song-actions"><span class="song-status ${song.status === 'todo' ? '' : song.status === 'done' ? 'done' : 'ready'}">${esc(song.status_text)}</span><button class="song-rename" title="重命名歌曲工程">重命名</button><button class="song-delete" title="移入工程回收目录">删除</button></div>`;
-      row.onclick = () => selectSong(song);
-      row.querySelector('.song-rename').onclick = async event => {
-        event.stopPropagation();
-        const value = await window.VS_PAGES.openModal({
-          title: '重命名歌曲',
-          body: '只修改显示名称，音频文件与工程音轨不受影响。',
-          content: `<div class="field"><label>新名称</label><input id="songRenameInput" value="${esc(song.title)}" maxlength="120"></div>`,
-          actions: [
-            { label: '取消', value: null },
-            { label: '保存', kind: 'primary', onClick: (mask) => (q('#songRenameInput', mask) || {}).value || '' },
-          ],
-        });
-        if (!value || !value.trim()) { return; }
-        invoke('song.rename', { cover_id: song.id, title: value.trim() });
-      };
-      row.querySelector('.song-delete').onclick = async event => {
-        event.stopPropagation();
-        const confirmed = await window.VS_PAGES.openModal({title:'删除歌曲', body:`将“${esc(song.title)}”及其工程音轨移入回收目录。外部原始文件不会删除。`,actions:[{label:'取消',value:false},{label:'删除',kind:'primary',value:true}]});
-        if (confirmed) invoke('song.delete',{cover_id:song.id});
-      };
-      list.appendChild(row);
+    $$('[data-library-view]').forEach(button => {
+      button.classList.toggle('active', button.dataset.libraryView === S.libraryView);
+      button.setAttribute('aria-pressed', String(button.dataset.libraryView === S.libraryView));
     });
+    function appendSong(song, index, voiceId) {
+      const row = document.createElement('div'), active = S.song && S.song.id === song.id;
+      const allTakes = song.takes || [], takes = voiceId === undefined ? allTakes : allTakes.filter(t => t.voice_id === voiceId);
+      const voiceCount = new Set(allTakes.map(t => t.voice_id)).size;
+      row.className = 'song-row' + (active ? ' active' : ''); row.dataset.coverId = song.id;
+      row.innerHTML = `<div class="song-cover alt${index % 4}">♪</div><div><div class="song-name">${esc(song.title)}</div>`
+        + `<div class="song-meta">${esc(song.duration_text)} · ${esc(song.format)}</div>`
+        + `<div class="song-meta rendition-count">${allTakes.length ? voiceCount + ' 个声音 · ' + allTakes.length + ' 个版本' : '还没有翻唱版本'}</div></div>`
+        + `<div class="song-actions"><span class="song-status ${song.status === 'done' ? 'done' : ''}">${esc(song.status_text)}</span>`
+        + '<button class="song-overflow" aria-label="歌曲操作">⋯</button></div>';
+      row.onclick = () => selectSong(song);
+      row.querySelector('.song-overflow').onclick = event => { event.stopPropagation(); if (window.VS_PAGES) window.VS_PAGES.songMenu(song); };
+      row.oncontextmenu = event => { event.preventDefault(); if (window.VS_PAGES) window.VS_PAGES.songMenu(song); };
+      list.appendChild(row);
+      if (!active && S.libraryView !== 'voice') return;
+      const versions = document.createElement('div'); versions.className = 'library-versions';
+      versions.innerHTML = takes.length ? takes.map(take => `<div class="library-version${take.id === song.active_take_id ? ' selected' : ''}">`
+        + `<button data-library-version="${esc(take.id)}" ${take.exists ? '' : 'disabled'} title="${esc(takeLabel(take))}">`
+        + `<b>${esc(take.voice_name || '未登记声音')} <span>${esc(take.version_label || '版本')}</span></b>`
+        + `<small>${esc(take.model_name || '模型未登记')} · ${take.pitch_shift == null ? '移调未知' : (take.pitch_shift > 0 ? '+' : '') + take.pitch_shift + ' 半音'}${take.exists ? '' : ' · 文件缺失'}</small></button>`
+        + `<button class="version-star" data-library-main="${esc(take.id)}" aria-label="设为当前导出版本" title="${take.id === song.active_take_id ? '当前导出版本' : '设为当前导出版本'}" ${take.exists ? '' : 'disabled'}>${take.id === song.active_take_id ? '★' : '☆'}</button></div>`).join('')
+        : '<div class="library-version-empty">选择右侧声音，生成第一个翻唱版本。</div>';
+      versions.onclick = event => {
+        const button = event.target.closest('[data-library-version],[data-library-main]');
+        if (!button || button.disabled) return;
+        const take = takes.find(t => t.id === (button.dataset.libraryVersion || button.dataset.libraryMain));
+        if (take) selectTake(song, take);
+      };
+      list.appendChild(versions);
+    }
+    if (S.libraryView === 'voice') {
+      const groups = new Map();
+      rows.forEach(song => {
+        const takes = song.takes || [];
+        if (!takes.length) { if (!groups.has('__pending')) groups.set('__pending', {name:'待制作', rows:[]}); groups.get('__pending').rows.push(song); }
+        new Set(takes.map(t => t.voice_id || '')).forEach(id => {
+          if (!groups.has(id)) groups.set(id, {name: takes.find(t => (t.voice_id || '') === id).voice_name || '未登记声音', rows:[]});
+          groups.get(id).rows.push(song);
+        });
+      });
+      groups.forEach((group, id) => {
+        const heading = document.createElement('div'); heading.className = 'library-voice-heading';
+        heading.innerHTML = `<span class="voice-pip"></span><b>${esc(group.name)}</b><small>${group.rows.length} 首歌曲</small>`;
+        list.appendChild(heading); group.rows.forEach((song, i) => appendSong(song, i, id === '__pending' ? undefined : id));
+      });
+    } else rows.forEach((song, i) => appendSong(song, i));
+    if (!rows.length) {
+      const empty = document.createElement('div'); empty.className = 'library-foot';
+      empty.textContent = S.songs.length ? '没有匹配的歌曲工程。' : '还没有歌曲工程；点击上方“导入歌曲到工程”开始。'; list.appendChild(empty);
+    }
     setText('#songCount', `${S.songs.length} 首`);
   }
 
@@ -163,6 +199,8 @@
     renderLyrics();
     loadAudio();
     if (window.VS_PAGES && S.pagesReady) { window.VS_PAGES.cover.syncFromLibrary(); }
+    if (window.VS_WORKSTATION && S.pagesReady) window.VS_WORKSTATION.onState();
+    if (window.VS_LYRICS && S.pagesReady) window.VS_LYRICS.onState();
   }
 
   function renderHero() {
@@ -179,7 +217,10 @@
     setText('#heroTitle', song.title);
     setText('#heroDur', song.duration_text);
     setText('#heroFmt', song.format);
-    setText('#nowTitle', `${song.title} · 本地工程`);
+    if (!(S.playbackKind === 'file' && S.audio && !S.audio.paused)) {
+      const take = (song.takes || []).find(t => t.id === song.active_take_id);
+      setText('#nowTitle', take ? `${song.title} · ${take.voice_name} · ${take.version_label}` : `${song.title} · 本地工程`);
+    }
     setText('#totalTime', song.duration_text);
     const status = $('#heroStatus');
     if (status) {
@@ -235,6 +276,7 @@
   }
 
   function renderLyrics() {
+    if (window.VS_LYRICS && window.VS_LYRICS.ready) { window.VS_LYRICS.render(); return; }
     const holder = $('#lyrics');
     if (!holder) { return; }
     const song = S.song;
@@ -247,9 +289,12 @@
     lines.forEach((line) => {
       const item = document.createElement('div');
       item.className = 'lyric';
-      item.dataset.time = String(line.seconds);
+      const timed = line.seconds !== null && line.seconds !== '' && Number.isFinite(Number(line.seconds));
+      item.dataset.sync = String(timed);
+      if (timed) item.dataset.time = String(line.seconds);
       item.innerHTML = `<time>${esc(line.time)}</time><span>${esc(line.text)}</span>`;
-      item.onclick = () => seekSeconds(Number(line.seconds) || 0);
+      if (timed) item.onclick = () => seekSeconds(Number(line.seconds));
+      else item.setAttribute('aria-disabled', 'true');
       holder.appendChild(item);
     });
   }
@@ -707,6 +752,7 @@
     paintPercent(percent);
     setText('#curTime', clock(audio.currentTime));
     setText('#totalTime', clock(audio.duration));
+    if (window.VS_LYRICS && window.VS_LYRICS.ready) { window.VS_LYRICS.updatePosition(audio.currentTime * 1000); return; }
     const lines = $$('.lyric');
     let active = lines[0];
     lines.forEach((line) => { if (Number(line.dataset.time) <= audio.currentTime) { active = line; } });
@@ -730,24 +776,24 @@
     if (!path) { toast('素材路径不可用'); return; }
     if (S.pagesReady) { window.VS_MEDIA.pause(); }
     S.playbackKind = 'file';
-    const audio = ensureAudio();
-    audio.dataset.source = path;
+    const audio = ensureAudio(), token = (S.filePlaybackToken || 0) + 1;
+    S.filePlaybackToken = token;
+    audio.pause(); audio.dataset.source = path;
+    if (S.pendingFileSeek) audio.removeEventListener('loadedmetadata', S.pendingFileSeek);
     const seekToRequestedPosition = () => {
-      if (!Number.isFinite(Number(atSeconds)) || !audio.duration) { return; }
+      if (token !== S.filePlaybackToken || !Number.isFinite(Number(atSeconds)) || !audio.duration) return;
       audio.currentTime = Math.max(0, Math.min(audio.duration - 0.1, Number(atSeconds)));
       paintPlayhead();
     };
-    if (Number.isFinite(Number(atSeconds))) {
-      audio.addEventListener('loadedmetadata', seekToRequestedPosition, { once: true });
-    }
+    S.pendingFileSeek = seekToRequestedPosition;
+    if (Number.isFinite(Number(atSeconds))) audio.addEventListener('loadedmetadata', seekToRequestedPosition, {once:true});
     audio.src = fileUrl(path);
-    if (audio.readyState >= 1) { seekToRequestedPosition(); }
     audio.play().then(() => {
-      S.playing = true;
-      setText('#playBtn', 'Ⅱ');
+      if (token !== S.filePlaybackToken) return;
+      S.playing = true; setText('#playBtn', 'Ⅱ');
       setText('#nowTitle', label || path.split(/[\\/]/).pop());
       toast('正在试听：' + (label || path.split(/[\\/]/).pop()));
-    }).catch(() => toast('无法播放该文件'));
+    }).catch(() => { if(token === S.filePlaybackToken) toast('无法播放该文件'); });
   }
 
   function togglePlay() {
@@ -801,6 +847,7 @@
       $$('[data-page-view]').forEach(node => node.classList.toggle('hidden', node.dataset.pageView !== name));
       $$('.nav-item').forEach(node => node.classList.toggle('active', node.dataset.page === name));
       if (S.pagesReady && window.VS_PAGES.media) { window.VS_PAGES.media.draw(); }
+      if (window.VS_WORKSTATION) window.VS_WORKSTATION.onPage(name);
     };
     S.showPage = showPage;
     $$('[data-page]').forEach(node => node.addEventListener('click', () => showPage(node.dataset.page)));
@@ -835,6 +882,8 @@
         renderSongs();
       };
     });
+
+    $$('[data-library-view]').forEach(node => { node.onclick = () => { S.libraryView = node.dataset.libraryView; renderSongs(); }; });
 
     const ttsSearch = $('#ttsVoiceSearch');
     if (ttsSearch) { ttsSearch.oninput = () => { S.ttsQuery = ttsSearch.value; renderTtsVoices(); }; }

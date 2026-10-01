@@ -31,6 +31,7 @@ from .services.training import TrainingService
 from .services.tts import TtsService
 from .services.voices import VoicesService
 from .services.media import MediaService
+from .services.lyrics_online import OnlineLyricsService
 
 AUDIO_SUFFIXES = (".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg")
 # Listed in the file picker so an encrypted music-app download is selectable and
@@ -84,6 +85,8 @@ class StudioBridge(QObject):
         self.engine.event.connect(self.event)
         self.media = MediaService(paths, store, self.project, client, self)
         self.media.event.connect(self.event)
+        self.online_lyrics = OnlineLyricsService(paths, store, self.project, None, self)
+        self.online_lyrics.event.connect(self.event)
         self._handlers: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
             "app.refresh": self._refresh,
             "engine.verify": self._engine_verify,
@@ -119,6 +122,9 @@ class StudioBridge(QObject):
             "cover.render": self._cover_render,
             "cover.export": self._cover_export,
             "cover.lyrics": self._cover_lyrics,
+            "cover.lyrics.search": self._lyrics_search,
+            "cover.lyrics.download": self._lyrics_download,
+            "cover.lyrics.offset": self._lyrics_offset,
             "cover.cancel": self._cover_cancel,
             "separator.import": self._separator_import,
             "tts.generate": self._tts_generate,
@@ -152,7 +158,7 @@ class StudioBridge(QObject):
             raise ValueError('请等待当前任务结束或取消后再切换工程')
         self.project = Path(project)
         self.snapshot = StudioSnapshot(self.paths, self.store, self.project)
-        for service in (self.cover, self.tts, self.voices, self.training, self.exports, self.engine, self.media):
+        for service in (self.cover, self.tts, self.voices, self.training, self.exports, self.engine, self.media, self.online_lyrics):
             service.set_project(self.project)
         self.store.set_setting('ui.last_project', str(self.project))
         if self._window is not None and hasattr(self._window, 'session'):
@@ -556,6 +562,18 @@ class StudioBridge(QObject):
     def _cover(self, cover_id: str):
         return CoverProject.load(self.project, str(cover_id))
 
+    def _lyrics_search(self, data):
+        return {"ok": True, **self.online_lyrics.search(data)}
+
+    def _lyrics_download(self, data):
+        if self.cover.active_request(str(data.get('cover_id', '')), kind='lyrics'):
+            raise ValueError('本地歌词识别正在运行，请等待或取消后再下载歌词')
+        return {"ok": True, **self.online_lyrics.download(data)}
+
+    def _lyrics_offset(self, data):
+        result = self.online_lyrics.set_offset(data)
+        return {"ok": True, **result, "data": self.snapshot.state()}
+
     def _cover_lyrics(self, data: dict[str, Any]) -> dict[str, Any]:
         task = self._cover_service().transcribe_lyrics(str(data.get("cover_id", "")), str(data.get("language", "zh")))
         return {"ok": True, "message": "已开始本地歌词识别", **task}
@@ -728,6 +746,6 @@ class StudioBridge(QObject):
     # ------------------------------------------------------------------
     def cleanup(self) -> None:
         self._closing = True
-        for service in (self.cover, self.tts, self.voices, self.training, self.exports, self.engine, self.media):
+        for service in (self.cover, self.tts, self.voices, self.training, self.exports, self.engine, self.media, self.online_lyrics):
             service.close()
         self._handlers.clear()

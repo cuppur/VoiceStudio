@@ -68,7 +68,8 @@ PROBE_SCRIPT = """(() => {
     result.drawerOpen = q('#taskDrawer').classList.contains('show');
     q('#closeTaskDrawer').click();
     result.drawerClosed = !q('#taskDrawer').classList.contains('show');
-    result.unsupportedHidden = q('#previewRender')===null && q('.take-strip').classList.contains('hidden');
+    result.toolbarComparison = !!q('.timeline .card-head #versionCompareToggle') && !!q('.timeline #compareA') && !!q('.timeline #abSeg') && !q('.library #versionComparePanel');
+    result.globalImportRemoved = !q('#quickImportBtn');
     result.importDemoRemoved = !q('#importModal');
     return JSON.stringify(result);
 })()"""

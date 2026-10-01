@@ -111,7 +111,7 @@ def main() -> int:
         return box.get("value")
 
     def flow() -> None:
-        evaluate("document.querySelector('[data-page=\"train\"]').click(); 1")
+        evaluate("document.querySelector('.nav-item[data-page=\"voices\"]').click(); document.querySelector('[data-page-view=\"voices\"] .page-actions .btn').click(); 1")
         QTest.qWait(1200)
         result["page"] = json.loads(evaluate("""JSON.stringify({
             rows: document.querySelectorAll('#sampleList .sample-row').length,

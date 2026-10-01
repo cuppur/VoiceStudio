@@ -36,7 +36,7 @@ def test_training_page_lists_real_material_and_starts_the_workflow(flow):
     assert page["firstRow"] == "material.wav"
     assert page["button"] == "一键训练"
     assert page["hiddenQuality"] == 0
-    assert page["steps"] == 5
+    assert page["steps"] == 6
     after = flow["afterClick"]
     assert after["toast"] == "已开始自动处理素材"
     assert after["sent"], "no worker command was sent"

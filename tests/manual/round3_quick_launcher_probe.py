@@ -58,13 +58,22 @@ def main() -> None:
                 time.sleep(0.02)
             raise TimeoutError("一键启动程序未在时限内启动并连接到界面")
 
+        identifier = 0
         def command(method, params=None):
-            key = len(replies) + 1
+            nonlocal identifier
+            identifier += 1
+            key = identifier
             ws.sendTextMessage(json.dumps({"id": key, "method": method, "params": params or {}}))
             until(lambda: key in replies)
             reply = replies.pop(key)
             if "error" in reply: raise RuntimeError(reply["error"])
             return reply["result"]
+
+        def evaluate(expression):
+            reply = command("Runtime.evaluate", {"expression": expression, "returnByValue": True})
+            if "exceptionDetails" in reply:
+                raise RuntimeError(reply["exceptionDetails"])
+            return reply["result"].get("value")
 
         try:
             launcher_code = launcher_process.wait(timeout=10)
@@ -80,13 +89,51 @@ def main() -> None:
             if not targets: raise RuntimeError("一键启动器未能启动带调试接口的打包页面")
             ws.open(QUrl(targets[0]["webSocketDebuggerUrl"]))
             until(lambda: ws.isValid())
-            until(lambda: command("Runtime.evaluate", {"expression": "!!window.__vsBridge", "returnByValue": True})["result"].get("value"))
-            state = command("Runtime.evaluate", {"expression": "({bridge:!!__vsBridge.bridge, page:location.href, pageReady:!!window.VS_PAGES})", "returnByValue": True})["result"]["value"]
+            until(lambda: evaluate("!!(window.__vsBridge && __vsBridge.pagesReady && window.VS_PAGES)"))
+            state = evaluate("({bridge:!!__vsBridge.bridge, page:location.href, pageReady:!!__vsBridge.pagesReady})")
+            ui = evaluate("""(() => {
+                const q = selector => document.querySelector(selector);
+                const panel = q('#versionComparePanel');
+                return {
+                    fiveNavigation: document.querySelectorAll('.nav-item').length === 5,
+                    noTrainingNavigation: !q('.nav-item[data-page="train"]'),
+                    noGlobalImport: !q('#quickImportBtn'),
+                    timelineComparison: !!(panel && panel.closest('.timeline') &&
+                        q('.timeline .card-head #versionCompareToggle') &&
+                        q('#compareA') && q('#compareB') && q('#comparePair') && q('#abSeg')),
+                    comparisonInitiallyCollapsed: !!(panel && panel.classList.contains('hidden')),
+                    onlineLyricsEntry: !!q('#findOnlineLyrics'),
+                    demoGuard: Array.from(document.scripts).some(s => !s.src &&
+                        s.textContent.includes('if (!window.qt || window.__VS_STATIC__)')),
+                    noDemoSongs: __vsBridge.songs.length === 0,
+                    noDemoProduction: !q('#productionModal'),
+                    bridgeHealthy: !__vsBridge.error,
+                };
+            })()""")
+            if not all(ui.values()):
+                raise RuntimeError(f"一键入口 UI 契约检查失败：{ui}")
+            evaluate("document.querySelector('#versionCompareToggle').click()")
+            ui['comparisonExpands'] = evaluate("!document.querySelector('#versionComparePanel').classList.contains('hidden')")
+            evaluate("document.querySelector('#versionCompareToggle').click()")
+            ui['comparisonCollapses'] = evaluate("document.querySelector('#versionComparePanel').classList.contains('hidden')")
+            if not ui['comparisonExpands'] or not ui['comparisonCollapses']:
+                raise RuntimeError(f"时间线版本对比开关无效：{ui}")
+            evaluate("document.querySelector('.nav-item[data-page=\"voices\"]').click()")
+            entry = evaluate("Array.from(document.querySelectorAll('[data-page-view=\"voices\"] .page-actions button')).some(b=>b.textContent.trim()==='训练新声音')")
+            if not entry: raise RuntimeError("我的声音中缺少训练新声音入口")
+            evaluate("Array.from(document.querySelectorAll('[data-page-view=\"voices\"] .page-actions button')).find(b=>b.textContent.trim()==='训练新声音').click()")
+            until(lambda: evaluate("!document.querySelector('[data-page-view=\"train\"]').classList.contains('hidden')"))
+            ui['nestedTraining'] = True
+            evaluate("document.querySelector('#backToVoices').click()")
+            until(lambda: evaluate("!document.querySelector('[data-page-view=\"voices\"]').classList.contains('hidden')"))
+            ui['backToVoices'] = True
+            evaluate("document.querySelector('.nav-item[data-page=\"cover\"]').click()")
             screenshot = command("Page.captureScreenshot", {"format": "png"})
             screenshot_path = output_root / "quick-launcher.png"
             screenshot_path.write_bytes(base64.b64decode(screenshot["data"]))
             evidence = {"launcher_exit_code": launcher_code, "bridge": state["bridge"],
                         "page_ready": state["pageReady"], "page_url": state["page"],
+                        "ui_contract": ui,
                         "screenshot": str(screenshot_path)}
             (output_root / "quick-launcher-evidence.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             if not evidence["bridge"] or not evidence["page_ready"]: raise RuntimeError("打包页面未完成桥接")

@@ -13,11 +13,13 @@ from pathlib import Path
 from typing import Any
 
 from ...cover.project import CoverProject
+from ...cover.online_lyrics import parse_synced
 from ...models import JobStatus
 from ...paths import AppPaths
 from ...product_models import voice_capabilities
 from ...runtime import EngineRuntimeError, EngineRuntimeResolver
 from ...storage import StudioStore
+from .takes import take_rows
 
 APP_TITLE = "VoiceStudio"
 APP_SUBTITLE = "LOCAL AI AUDIO"
@@ -124,12 +126,13 @@ class StudioSnapshot:
 
     # ------------------------------------------------------------------
     def state(self) -> dict[str, Any]:
+        profiles = self._profiles()
         return {
             "app": self.app(),
             "project": self.project_state(),
             "projects": self.projects(),
-            "songs": self.songs(),
-            "voices": self.voices(),
+            "songs": self.songs(profiles),
+            "voices": self.voices(profiles),
             "tasks": self.tasks(),
             "exports": self.exports(),
             "generations": self.generations(),
@@ -160,34 +163,45 @@ class StudioSnapshot:
 
     # ------------------------------------------------------------------
     @staticmethod
-    def _lyrics(cover: CoverProject, limit: int = 200) -> list[dict[str, Any]]:
-        """Parse the project's real LRC file, never inventing lyric lines."""
+    def _lyrics(cover: CoverProject, limit: int = 3000) -> list[dict[str, Any]]:
+        """Read real lines. Only LRC timestamps permit synchronization or seeking."""
         if not cover.lyrics_path:
             return []
         path = (cover.root / cover.lyrics_path).resolve()
-        if not path.is_file():
+        if not path.is_file() or path.stat().st_size > 2 * 1024 * 1024:
             return []
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            text = path.read_text(encoding="utf-8-sig", errors="replace")
         except OSError:
             return []
-        lines: list[dict[str, Any]] = []
-        for raw in text.splitlines():
-            match = _LRC_RE.match(raw.strip())
-            if not match:
-                continue
-            minutes, seconds, content = match.group(1), match.group(2), match.group(3).strip()
+        clean = lambda value: re.sub(r"<\|[^>]*\|>", "", value).strip()
+        if path.suffix.lower() == '.txt':
+            return [{"seconds": None, "time": "文本", "text": content}
+                    for raw in text.splitlines() if (content := clean(raw))][:limit]
+        try:
+            parsed = parse_synced(text)
+        except ValueError:
+            return []
+        result = []
+        for seconds, content in parsed[:limit]:
+            content = clean(content)
             if not content:
                 continue
-            total = int(minutes) * 60 + float(seconds)
-            lines.append({"seconds": round(total, 2), "time": duration_text(total * 1000), "text": content})
-            if len(lines) >= limit:
-                break
-        return lines
+            effective = round(max(0, seconds + cover.lyrics_offset_ms / 1000), 3)
+            result.append({"seconds": effective, "time": duration_text(effective * 1000), "text": content})
+        return result
 
     # ------------------------------------------------------------------
-    def songs(self) -> list[dict[str, Any]]:
+    def _profiles(self) -> list[Any]:
+        try:
+            return self.store.list_profiles(self.project)
+        except (OSError, ValueError):
+            return []
+
+    def songs(self, profiles: list[Any] | None = None) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
+        if profiles is None:
+            profiles = self._profiles()
         try:
             covers = CoverProject.list(self.project)
         except (OSError, ValueError):
@@ -221,6 +235,7 @@ class StudioSnapshot:
             else:
                 status, status_text = "todo", "未分离"
             source = (cover.root / cover.source_relative_path) if cover.source_relative_path else None
+            lyric_lines = self._lyrics(cover)
             result.append({
                 "id": cover.id,
                 "title": cover.title or "未命名翻唱",
@@ -234,8 +249,12 @@ class StudioSnapshot:
                 "ai_vocal_status": str(cover.ai_vocal_status),
                 "mix_status": str(cover.mix_status),
                 "stems": stems,
-                "lyrics": self._lyrics(cover),
+                "lyrics": lyric_lines,
                 "has_lyrics": bool(cover.lyrics_path),
+                "lyrics_source": dict(cover.lyrics_source) or {"kind": cover.lyrics_origin},
+                "lyrics_origin": cover.lyrics_origin,
+                "lyrics_offset_ms": cover.lyrics_offset_ms,
+                "lyrics_synced": any(line["seconds"] is not None for line in lyric_lines),
                 "created_at": str(cover.created_at),
                 "updated_at": str(cover.updated_at),
                 "updated_text": clock_text(str(cover.updated_at)),
@@ -243,17 +262,17 @@ class StudioSnapshot:
                 "source_path": str(source) if source else "",
                 "source_exists": bool(source and source.is_file()),
                 "root": str(cover.root),
+                "takes": take_rows(cover, profiles),
+                "active_take_id": active_mix.id if active_mix else "",
             })
         result.sort(key=lambda item: str(item.get("updated_at", "")), reverse=True)
         return result
 
     # ------------------------------------------------------------------
-    def voices(self) -> list[dict[str, Any]]:
+    def voices(self, profiles: list[Any] | None = None) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
-        try:
-            profiles = self.store.list_profiles(self.project)
-        except (OSError, ValueError):
-            profiles = []
+        if profiles is None:
+            profiles = self._profiles()
         for profile in profiles:
             capabilities = voice_capabilities(profile)
             try:

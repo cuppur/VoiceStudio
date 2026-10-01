@@ -8,8 +8,10 @@ from ....application.jobs import JobStage, ProductJobStatus
 from ....cover.application.service import CoverApplicationService
 from ....cover.mixing.models import CoverMixSettings, GainScale
 from ....cover.project import RIGHTS_ATTESTATION_TEXT, CoverProject
+from ....cover.online_lyrics import parse_synced, format_lrc
 from ....cover.separation import RoFormerRuntimeStatus, UVR5RuntimeStatus
 from .base import WebService
+from ..takes import take_rows
 from ...cover_session import probe_audio_metadata, parse_lrc, write_lrc
 
 AUDIO_SUFFIXES = (".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg")
@@ -82,6 +84,10 @@ class CoverService(WebService):
 
     def state(self, cover_id: str) -> dict[str, Any]:
         cover = self._cover(cover_id)
+        try:
+            profiles = self.store.list_profiles(self.project)
+        except (OSError, ValueError):
+            profiles = []
         assets = {str(asset.role): asset for asset in cover.assets}
         active_mix = cover.get_asset(role='final_mix')
         if active_mix:
@@ -102,7 +108,7 @@ class CoverService(WebService):
             "final_asset_id": assets["final_mix"].id if "final_mix" in assets else "",
             "engines": self.engines(),
             "active_request": self.active_request(cover.id),
-            "takes": [self._take(cover, asset) for asset in cover.assets if asset.role == 'final_mix'],
+            "takes": take_rows(cover, profiles),
             "active_take_id": active_mix.id if active_mix else '',
             "pipeline": self._pipeline_state(cover.id),
         }
@@ -144,14 +150,6 @@ class CoverService(WebService):
                 "finished": job.status in finished,
             }
         return {}
-
-    @staticmethod
-    def _take(cover: CoverProject, asset) -> dict[str, Any]:
-        return {"id": asset.id, "path": str(cover.root / asset.relative_path),
-                "created_at": asset.created_at, "sha256": asset.sha256,
-                "settings": dict(asset.metadata.get('settings') or {}),
-                "model_id": asset.model_id,
-                "source_asset_ids": list(asset.source_asset_ids)}
 
     def select_take(self, cover_id: str, take_id: str) -> dict[str, Any]:
         from ....audio import sha256_file
@@ -330,12 +328,15 @@ class CoverService(WebService):
             text = source.read_text(encoding='utf-8-sig')
         except UnicodeDecodeError:
             text = source.read_text(encoding='gb18030')
-        lines = parse_lrc(text)
+        lines = parse_synced(text)
         if not lines: raise ValueError('LRC 中没有有效的时间标签和歌词')
         target = cover.root / 'lyrics' / 'manual.lrc'
-        write_lrc(target, lines)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(format_lrc(lines), encoding="utf-8", newline="")
         cover.lyrics_path = target.relative_to(cover.root).as_posix()
         cover.lyrics_origin = 'manual'
+        cover.lyrics_source = {'kind':'manual'}
+        cover.lyrics_offset_ms = 0
         cover.save()
         self.notify('songs.changed', {'cover_id': cover.id})
         return {'line_count': len(lines)}

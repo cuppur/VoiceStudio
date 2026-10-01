@@ -61,7 +61,7 @@ def test_shell_preserves_reference_markup_but_guards_demo_script():
     asset = (web_shell.ASSETS / "index.html").read_text(encoding="utf-8")
     expected = source.replace(
         "</script>\n</body></html>",
-        "}\n</script>\n<script src=\"studio-bridge.js\"></script>\n<script src=\"studio-media.js\"></script>\n<script src=\"studio-pages.js\"></script>\n</body></html>",
+        "}\n</script>\n<script src=\"studio-bridge.js\"></script>\n<script src=\"studio-media.js\"></script>\n<script src=\"studio-workstation.js\"></script>\n<script src=\"studio-lyrics.js\"></script>\n<script src=\"studio-pages.js\"></script>\n</body></html>",
         1,
     )
     expected = expected.replace('<script>\n', '<script>\nif (!window.qt || window.__VS_STATIC__) {\n', 1)
@@ -91,14 +91,14 @@ def test_shell_renders_prototype_pages_with_real_data():
     probe = json.loads(payload["probe"])
     # prototype structure
     assert probe["pages"] == 8
-    assert probe["nav"] == 6
+    assert probe["nav"] == 5
     assert probe["brand"] == "VoiceStudio"
     # the engine viewport must match the 1440x900 window the baseline uses
     assert probe["viewport"] == [1440, 900]
     assert probe["topbarRect"] == 1440
     # prototype layout metrics
     assert probe["topbar"] == 78
-    assert probe["transport"] == 68
+    assert probe["transport"] == 0  # no audio has been played
     assert probe["columns"] == 3
     assert probe["radius"] == "17px"
     assert probe["background"] == "rgb(246, 243, 239)"
@@ -106,7 +106,7 @@ def test_shell_renders_prototype_pages_with_real_data():
     assert probe["titleWeight"] == "820"
     # library column keeps the prototype's 242px / 320px side columns
     assert probe["coverRect"][2] == 1404  # 1440 - 2 * 18px page padding
-    assert probe["cardRect"][2] == 242
+    assert probe["cardRect"][2] == 230
     # real local data through the bridge
     assert probe["adapter"] is True
     assert probe["error"] == ""
@@ -125,7 +125,8 @@ def test_shell_renders_prototype_pages_with_real_data():
     assert probe["ttsVisible"] is True and probe["coverHidden"] is True
     assert probe["coverVisible"] is True
     assert probe["drawerOpen"] is True and probe["drawerClosed"] is True
-    assert probe["unsupportedHidden"] is False  # Take 版本条现在接入真实成品
+    assert probe["toolbarComparison"] is True
+    assert probe["globalImportRemoved"] is True
     assert probe["importDemoRemoved"] is True
 
 

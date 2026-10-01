@@ -215,39 +215,7 @@ window.VS_PAGES = (function () {
     paint() {
       const state = this.state;
       if (!state) { return; }
-      const strip = q('[data-page-view="cover"] .take-strip');
-      if (strip) {
-        strip.classList.remove('hidden');
-        const takes = state.takes || [];
-        const pipeline = state.pipeline || {};
-        const pipelineLine = (pipeline.current_label && !pipeline.finished)
-          ? `<span class="label">进度</span><span class="pipeline-step">${esc(pipeline.current_label)} · ${pipeline.progress || 0}%</span>`
-          : '';
-        strip.innerHTML = pipelineLine + '<span class="label">成品版本</span>' + (takes.length ? takes.map((take,index) =>
-          `<button class="take-chip${take.id===state.active_take_id?' active':''}" data-take="${esc(take.id)}">Take ${index+1}</button>`).join('') : '<span>尚无成品</span>')
-          + (takes.length > 1 ? '<button class="mini" id="takeCompare">A/B 同位置试听</button>' : '')
-          + '<small id="takeDiff"></small>';
-        strip.onclick = event => {
-          const takeId = event.target.dataset.take;
-          if (takeId) { S.invoke('cover.select_take',{cover_id:this.songId,take_id:takeId},reply=>{if(reply.ok){this.state=reply.data;this.paint();S.invoke('app.refresh');}}); return; }
-          if (event.target.id==='takeCompare') {
-            const active = takes.find(t=>t.id===state.active_take_id) || takes[takes.length-1];
-            const other = takes.find(t=>t.id!==active.id);
-            if (!other) return;
-            const audio = S.audio, seconds = audio && Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
-            const next = this.comparingTake===other.id ? active : other;
-            this.comparingTake=next.id;
-            S.playFile(next.path,'Take '+(takes.indexOf(next)+1),seconds);
-            q('#takeDiff').textContent = '正在试听 Take '+(takes.indexOf(next)+1)+'；相同时间 '+Math.floor(seconds)+' 秒';
-          }
-        };
-        const active = takes.find(t=>t.id===state.active_take_id);
-        const previous = takes.length>1 && takes[takes.length-2];
-        if (active && previous) {
-          const changes=Object.keys(active.settings).filter(key=>active.settings[key]!==previous.settings[key]);
-          q('#takeDiff').textContent=changes.length ? '较上一版：'+changes.map(key=>key+' '+previous.settings[key]+'→'+active.settings[key]).join('，') : '混音参数与上一版相同';
-        }
-      }
+      this.paintVersions();
       const rights = q('.rights-state') || q('#heroStatus');
       const render = q('#coverRender');
       const hints = [];
@@ -261,6 +229,95 @@ window.VS_PAGES = (function () {
       if (rights && rights.classList.contains('rights-state')) {
         rights.textContent = state.rights_confirmed ? '歌曲权利：已确认' : '歌曲权利：未确认';
       }
+    },
+
+    installVersions() {
+      const panel = q('#versionComparePanel'), seg = q('#abSeg');
+      if (!panel) return;
+      const timeline = q('.timeline'), head = q('.timeline .card-head'), toolbar = q('.preview-toolbar');
+      panel.className = 'timeline-compare hidden';
+      if (timeline && head) head.after(panel);
+      let toggle = q('#versionCompareToggle');
+      if (!toggle && head && toolbar) {
+        toggle = document.createElement('button'); toggle.id = 'versionCompareToggle'; toggle.className = 'mini version-compare-toggle'; toggle.textContent = '版本对比'; head.insertBefore(toggle, toolbar);
+      }
+      if (toggle) {
+        toggle.setAttribute('aria-controls', 'versionComparePanel'); toggle.setAttribute('aria-expanded', 'false');
+        toggle.onclick = () => {
+          const open = panel.classList.toggle('hidden') === false;
+          toggle.classList.toggle('active', open); toggle.setAttribute('aria-expanded', String(open));
+          requestAnimationFrame(() => { if (window.VS_WORKSTATION) window.VS_WORKSTATION.paintTimeline(); else media.draw(); });
+        };
+      }
+      if (seg) q('.compare-row', panel).prepend(seg);
+      if (q('#abCompare')) q('#abCompare').classList.add('hidden');
+      ['A', 'B'].forEach(slot => {
+        q('#compare' + slot).onchange = event => { this.comparePair[slot] = event.target.value; this.compareOn = false; this.paintVersions(); };
+        const button = q('#abSeg [data-ab="' + slot + '"]'); button.textContent = slot; button.removeAttribute('data-role'); button.onclick = () => this.playComparison(slot);
+      });
+      q('#comparePair').onclick = () => {
+        if (this.compareOn) { this.compareOn = false; if (S.audio) S.audio.pause(); this.paintVersions(); return; }
+        if (this.comparePair.A === this.comparePair.B) { toast('请选择两个不同的版本'); return; }
+        this.compareOn = true; this.playComparison('A');
+      };
+      q('#reuseVersion').onclick = () => this.reuseVersion();
+      this.paintVersions();
+    },
+
+    comparePair: {A: '', B: ''},
+    compareOn: false,
+    compareSongId: '',
+    paintVersions() {
+      const song = S.song;
+      const state = this.state && this.state.cover_id === (song && song.id) ? this.state : song;
+      const takes = (state && state.takes) || [];
+      const ready = takes.filter(t => t.exists);
+      if (this.compareSongId !== (song && song.id)) {
+        this.comparePair = {A: '', B: ''}; this.compareOn = false; this.compareSongId = song && song.id;
+      }
+      if (song && this.state && this.state.cover_id === song.id) { song.takes = takes; song.active_take_id = state.active_take_id; S.renderSongs(); }
+      const label = take => `${take.voice_name || '未登记声音'} · ${take.version_label || '版本'} · ${take.model_name || '模型未登记'}`;
+      ['A', 'B'].forEach((slot, i) => {
+        if (!ready.some(t => t.id === this.comparePair[slot])) this.comparePair[slot] = (ready[i] || ready[0] || {}).id || '';
+        const select = q('#compare' + slot); if (!select) return;
+        select.innerHTML = ready.length ? ready.map(t => `<option value="${esc(t.id)}">${esc(label(t))}</option>`).join('') : '<option value="">暂无已完成版本</option>';
+        select.value = this.comparePair[slot]; select.disabled = !ready.length;
+      });
+      const active = takes.find(t => t.id === (state && state.active_take_id));
+      S.setText('#activeRendition', active ? label(active) : '尚无翻唱版本');
+      S.setText('#renditionFilename', active ? '当前导出：' + label(active) : '生成版本后，可在这里跨声音对比。');
+      const canCompare = ready.length >= 2 && this.comparePair.A !== this.comparePair.B;
+      if (!canCompare) this.compareOn = false;
+      const button = q('#comparePair'); if (button) { button.disabled = !canCompare; button.textContent = this.compareOn ? '结束对比' : '开始对比'; }
+      qq('#abSeg button').forEach(button => { button.disabled = !canCompare; });
+      S.setText('#compareNote', this.compareOn ? '对比中：切换 A / B 保持播放位置，导出版本不受影响。' : ready.length < 2 ? '至少需要两个可播放版本。' : canCompare ? '选择任意两个声音或版本，保持同一位置试听。' : 'A、B 请选不同版本。');
+      const reuse = q('#reuseVersion'); if (reuse) reuse.disabled = !active;
+    },
+
+    playComparison(slot) {
+      const takes = (this.state && this.state.takes) || (S.song && S.song.takes) || [];
+      const take = takes.find(t => t.id === this.comparePair[slot]);
+      if (!take || !take.exists) { toast('版本文件不存在'); return; }
+      const seconds = S.playbackKind === 'file' && S.audio ? S.audio.currentTime : media.state.position / 1000;
+      this.compareOn = true;
+      S.playFile(take.path, `${S.song.title} · ${take.voice_name} · ${take.version_label}`, seconds);
+      S.setText('#nowSub', take.model_name || '模型未登记'); S.setText('#playerMode', '版本对比 · ' + slot);
+      this.paintVersions();
+      qq('#abSeg button').forEach(button => button.classList.toggle('active', button.dataset.ab === slot));
+    },
+
+    reuseVersion() {
+      const takes = (this.state && this.state.takes) || (S.song && S.song.takes) || [];
+      const take = takes.find(t => t.id === ((this.state || S.song || {}).active_take_id));
+      if (!take) return;
+      const voice = (S.voices || []).find(v => v.id === take.voice_id && v.cover_ready);
+      if (!voice) { toast('此版本的声音模型当前不可用'); return; }
+      this.voiceId = voice.id; S.setText('.voice-card .voice-name', voice.name); S.setText('.voice-card .voice-meta', voice.subtitle);
+      const inference = take.inference_settings || {};
+      const values = {coverPitch: take.pitch_shift, rvcIndex: inference.index_rate, rvcProtect: inference.protect, rvcSmoothing: inference.pitch_smoothing};
+      Object.entries(values).forEach(([id, value]) => { const node = q('#' + id); if (node && value != null) { node.value = value; node.dispatchEvent(new Event('input', {bubbles:true})); } });
+      this.paint();
+      toast('已复用声音与可用转换参数；下次生成使用该声音的当前模型。');
     },
 
     async ensureRights() {
@@ -1327,6 +1384,65 @@ window.VS_PAGES = (function () {
     });
   }
 
+  // Advanced actions stay close to the audio. Comparison remains in the sidebar.
+  async function songMenu(song) {
+    const choice = await openModal({title: song.title, body: '歌曲工程操作', actions: [
+      {label:'关闭',value:null}, {label:'重命名',value:'rename'}, {label:'删除歌曲',value:'delete'}, {label:'打开导出',value:'export'},
+    ]});
+    if (choice === 'rename') {
+      const name = await openModal({title:'重命名歌曲', content:`<div class="field"><label>歌曲名称</label><input id="songRenameInput" maxlength="120" value="${esc(song.title)}"></div>`, actions:[{label:'取消',value:null},{label:'保存',kind:'primary',onClick: mask => q('#songRenameInput',mask).value.trim()}]});
+      if (name) S.invoke('song.rename',{cover_id:song.id,title:name});
+    } else if (choice === 'delete') {
+      const ok = await openModal({title:'删除歌曲',body:`将“${esc(song.title)}”及工程音轨移入回收目录，外部原始文件保留。`,actions:[{label:'取消',value:false},{label:'删除',kind:'primary',value:true}]});
+      if (ok) S.invoke('song.delete',{cover_id:song.id});
+    } else if (choice === 'export') { S.selectSong(song); S.showPage('exports'); }
+  }
+
+  function installContextMenus() {
+    qq('.hero-actions .demo').forEach(node => node.remove());
+    const renderBox = q('.render-box');
+    if (renderBox && !q('#coverExport')) {
+      renderBox.insertAdjacentHTML('beforeend','<div class="render-secondary"><button class="mini" id="coverQuality">成品质检</button><button class="mini" id="coverExport">导出</button></div>');
+      q('#coverExport').onclick=()=>cover.exportFinal();
+      q('#coverQuality').title='该功能尚未接入新界面';q('#coverQuality').onclick=()=>toast('该功能尚未接入新界面');
+    }
+    const menu = document.createElement('div'); menu.className = 'studio-context'; menu.id = 'studioContextMenu'; menu.setAttribute('role','menu');
+    document.body.appendChild(menu);
+    const close = () => { menu.classList.remove('show'); };
+    const unsupported = () => toast('该功能尚未接入新界面');
+    function open(event) {
+      event.preventDefault(); close();
+      const groups = [
+        ['选区与试听', [
+          ['试听选区', () => q('#previewRangeBtn').click()],
+          ['循环选区', () => q('#loopRegion').click()],
+          ['局部生成', unsupported],
+        ]],
+        ['声音与精修', [
+          ['RVC 高级参数', () => { q('#advancedPanel').classList.add('show'); q('#advancedPanel').scrollIntoView({block:'nearest'}); }],
+          ['分析移调建议', () => cover.transpose()],
+          ['用当前参数重新混音', () => cover.render()],
+          ['成品质检', unsupported],
+        ]],
+        ['素材与交付', [
+          ['重新分离', () => cover.pickSeparation()],
+          ['导出当前版本', () => cover.exportFinal()],
+          ['后台任务中心', () => q('#gpuBtn').click()],
+        ]],
+      ];
+      menu.innerHTML = '<div class="context-title">音轨高级操作</div>' + groups.map((group,i) => `<div class="context-group"><button class="context-parent" role="menuitem" aria-haspopup="menu" aria-expanded="false" data-group="${i}">${group[0]}<span>›</span></button><div class="context-submenu" role="menu">${group[1].map((item,j) => `<button role="menuitem" data-action="${i}-${j}">${item[0]}</button>`).join('')}</div></div>`).join('');
+      menu.style.left = Math.max(8,Math.min(innerWidth-205,event.clientX || 200)) + 'px';
+      menu.style.top = Math.max(8,Math.min(innerHeight-190,event.clientY || 180)) + 'px';
+      menu.classList.toggle('open-left', (event.clientX || 200) + 450 > innerWidth);
+      qq('.context-parent',menu).forEach(button => { const expand = () => { qq('.context-group',menu).forEach(node => node.classList.toggle('expanded',node === button.parentElement)); qq('.context-parent',menu).forEach(node => node.setAttribute('aria-expanded',String(node === button))); }; button.onmouseenter=expand; button.onclick=expand; button.onfocus=expand; });
+      qq('[data-action]',menu).forEach(button => { button.onclick=() => { const [i,j]=button.dataset.action.split('-').map(Number); close(); groups[i][1][j][1](); }; });
+      menu.classList.add('show'); q('.context-parent',menu).focus();
+    }
+    qq('.wave-wrap,.mixer').forEach(node => { node.tabIndex=0; node.addEventListener('contextmenu',open); node.addEventListener('keydown',event => { if(event.key==='ContextMenu'||event.shiftKey&&event.key==='F10') open(event); }); });
+    document.addEventListener('pointerdown',event => { if(!menu.contains(event.target))close(); });
+    document.addEventListener('keydown',event => { if(event.key==='Escape')close(); });
+  }
+
   // ------------------------------------------------------------------- public
   function install(state) {
     S = state;
@@ -1351,6 +1467,10 @@ window.VS_PAGES = (function () {
     exportsPage.install();
     enginePage.install();
     media.install(S);
+    cover.installVersions();
+    if (window.VS_WORKSTATION) window.VS_WORKSTATION.install(S);
+    if (window.VS_LYRICS) window.VS_LYRICS.install(S);
+    installContextMenus();
     // No demonstration handler is allowed to claim a successful operation.
     qq('.demo').forEach(node => {
       node.removeAttribute('data-msg');
@@ -1366,9 +1486,13 @@ window.VS_PAGES = (function () {
     }
     cover.syncFromLibrary();
     if (projectChanged) { training.refresh(); tts.refreshHistory(); }
+    if (window.VS_WORKSTATION) window.VS_WORKSTATION.onState();
+    if (window.VS_LYRICS) window.VS_LYRICS.onState();
   }
 
   function onEvent(name, data) {
+    if (window.VS_WORKSTATION) window.VS_WORKSTATION.onEvent(name, data || {});
+    if (window.VS_LYRICS) window.VS_LYRICS.onEvent(name, data || {});
     const event = String(name);
     const payload = data || {};
     if (event === 'files.dropped') {
@@ -1391,5 +1515,5 @@ window.VS_PAGES = (function () {
     if (event.indexOf('engine.') === 0) { enginePage.onEvent(event, payload); }
   }
 
-  return { install, onState, onEvent, cover, tts, voices, training, separator, exportsPage, enginePage, openModal, media };
+  return { install, onState, onEvent, songMenu, cover, tts, voices, training, separator, exportsPage, enginePage, openModal, media };
 })();

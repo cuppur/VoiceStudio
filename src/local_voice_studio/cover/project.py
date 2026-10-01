@@ -129,6 +129,8 @@ class CoverProject:
     export_status: str = "pending"
     lyrics_path: str = ""
     lyrics_origin: str = "manual"
+    lyrics_source: dict[str, Any] = field(default_factory=dict)
+    lyrics_offset_ms: int = 0
     waveform_path: str = ""
     waveform_paths: dict[str, str] = field(default_factory=dict)
     rights_attestation_version: int = 1
@@ -154,6 +156,10 @@ class CoverProject:
         self.content_origin = content_origin(self.content_origin)
         if self.lyrics_origin not in {"manual", "auto"}:
             raise CoverProjectError("lyrics_origin 必须是 manual 或 auto")
+        if not isinstance(self.lyrics_source, dict):
+            raise CoverProjectError("lyrics_source 必须是字典")
+        if isinstance(self.lyrics_offset_ms, bool) or not isinstance(self.lyrics_offset_ms, int) or abs(self.lyrics_offset_ms) > 600000:
+            raise CoverProjectError("歌词偏移必须是 ±600000 毫秒范围内的整数")
         if self.rights_attestation_version < 1:
             raise CoverProjectError("rights_attestation_version 必须为正整数")
         if self.rights_attestation_text_hash:
@@ -338,6 +344,8 @@ class CoverProject:
             "export_status": self.export_status,
             "lyrics_path": self.lyrics_path,
             "lyrics_origin": self.lyrics_origin,
+            "lyrics_source": dict(self.lyrics_source),
+            "lyrics_offset_ms": self.lyrics_offset_ms,
             "waveform_path": self.waveform_path,
             "waveform_paths": dict(self.waveform_paths),
             "source_audio": self.source_relative_path,
@@ -465,6 +473,8 @@ class CoverProject:
             raise CoverProjectError("lyrics_origin 必须是 manual 或 auto")
         self.lyrics_path = self._relative_owned(path)
         self.lyrics_origin = origin
+        self.lyrics_source = {'kind': origin}
+        self.lyrics_offset_ms = 0
         self.save()
 
     def set_waveform(self, path: Path, track: str = "mix") -> None:

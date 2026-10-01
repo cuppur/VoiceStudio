@@ -22,8 +22,13 @@ window.VS_MEDIA = (() => {
     });
     S.invoke('preview.configure', {cover_id: S.song.id, role: M.role, mode: M.mode, muted, solo, mix: mix()}, done);
   }
-  function control(operation, value) { S.invoke('preview.control', {operation, value}); }
+  function control(operation, value, done) { S.invoke('preview.control', {operation, value}, done); }
+  let previewRange = null, rangeTransition = false;
+  const notifyPlayback = () => {
+    if (window.VS_WORKSTATION) window.VS_WORKSTATION.onPlayback('cover', {playing: M.playing});
+  };
   function seek(ms) {
+    previewRange = null;
     if (S.playbackKind === 'file' && S.audio) { S.audio.currentTime = Math.max(0, ms / 1000); return; }
     configure(reply => { if (reply.ok) control('seek', Math.min(M.duration, Math.max(0, ms))); });
   }
@@ -34,6 +39,7 @@ window.VS_MEDIA = (() => {
     const changed = !song || M.coverId !== song.id;
     M.key = key; M.coverId = song ? song.id : ''; M.tracks = [];
     if (changed) {
+      previewRange = null;
       M.position = 0; M.playing = false; M.role = 'original'; M.mode = 'solo_track';
       all('.track-btn').forEach(b => b.classList.remove('active'));
       q('#previewMode').value = M.mode;
@@ -69,7 +75,7 @@ window.VS_MEDIA = (() => {
     });
     q('#ruler').innerHTML = Array.from({length: 7}, (_, i) => `<span class="tick" style="left:${i / 6 * 100}%">${clock(M.duration * i / 6)}</span>`).join('');
     const original = M.tracks.find(t => t.role === 'original');
-    q('.hero-meta span:last-child').textContent = original && original.metadata
+    q('.hero-meta span:nth-child(3)').textContent = original && original.metadata
       ? `${original.metadata.sample_rate / 1000} kHz / ${original.metadata.channels} 声道` : '等待音频分析';
   }
   function paintPosition() {
@@ -79,7 +85,8 @@ window.VS_MEDIA = (() => {
     q('#progress i').style.width = percent + '%';
     S.setText('#curTime', clock(M.position)); S.setText('#totalTime', clock(M.duration));
     S.setText('#playBtn', M.playing ? 'Ⅱ' : '▶');
-    const lines = all('#lyrics .lyric');
+    if (window.VS_LYRICS && window.VS_LYRICS.ready) { window.VS_LYRICS.updatePosition(M.position); return; }
+    const lines = all('#lyrics .lyric').filter(node => node.dataset.time != null && node.dataset.time !== '' && Number.isFinite(Number(node.dataset.time)));
     let active;
     lines.forEach(n => { if (Number(n.dataset.time) * 1000 <= M.position) active = n; });
     lines.forEach(n => n.classList.toggle('active', n === active));
@@ -126,6 +133,8 @@ window.VS_MEDIA = (() => {
       }
       if (!S.song) { S.toast('请先导入歌曲'); return; }
       if (S.audio) S.audio.pause();
+      previewRange = null;
+      S.playbackKind = 'cover';
       configure(reply => { if (reply.ok) control(M.playing ? 'pause' : 'play'); });
     };
     q('#back').onclick = () => seek((S.playbackKind === 'file' && S.audio ? S.audio.currentTime * 1000 : M.position) - 10000);
@@ -163,8 +172,47 @@ window.VS_MEDIA = (() => {
     }
     if (name === 'preview.state' && S.playbackKind !== 'file' && S.song && data.cover_id === S.song.id) {
       M.playing = data.playing; M.position = data.position; M.duration = data.duration || M.duration; paintPosition();
+      notifyPlayback();
+      // Qt sends real positions every 100 ms. Limit only the selected playback
+      // region; this does not generate or alter audio files.
+      if (previewRange && !rangeTransition && M.position >= previewRange.end - 20) {
+        rangeTransition = true;
+        const range = previewRange;
+        control('pause', undefined, reply => {
+          if (!reply.ok) { rangeTransition = false; previewRange = null; return; }
+          if (!range.loop || previewRange !== range) {
+            previewRange = null; rangeTransition = false; return;
+          }
+          control('seek', range.start, seekReply => {
+            if (!seekReply.ok || previewRange !== range) { rangeTransition = false; return; }
+            control('play', undefined, () => { rangeTransition = false; });
+          });
+        });
+      }
     }
     if (name === 'preview.error') S.toast(data.message);
   }
-  return {install, load, draw, seek, onEvent, pause: () => control('pause'), state: M};
+  function playRange(start, end, loop) {
+    if (!S.song) { S.toast('请先选择一首歌'); return; }
+    start = Math.max(0, Math.min(M.duration, Number(start) || 0));
+    end = Math.max(start, Math.min(M.duration, Number(end) || 0));
+    if (end - start < 100) { S.toast('请先框选试听区域'); return; }
+    const range = {start, end, loop: !!loop};
+    previewRange = range; rangeTransition = false;
+    S.playbackKind = 'cover'; if (S.audio) S.audio.pause();
+    configure(reply => {
+      if (!reply.ok || previewRange !== range) return;
+      control('seek', start, seekReply => {
+        if (seekReply.ok && previewRange === range) control('play');
+      });
+    });
+  }
+  function selectRole(role) {
+    if (!roles.includes(role)) return;
+    M.role = role; M.mode = 'solo_track'; S.playbackKind = 'cover';
+    if (q('#previewMode')) q('#previewMode').value = M.mode;
+  }
+  return {install, load, draw, seek, onEvent, playRange, selectRole,
+    setLoop: loop => { if (previewRange) previewRange.loop = !!loop; },
+    pause: () => { previewRange = null; control('pause'); }, state: M};
 })();
